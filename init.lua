@@ -238,11 +238,19 @@ local Interaction = require("src.frogui.interaction")
 ---@field dismiss? FrogUIModalDismiss Defaults to `back`.
 ---@field onDismiss? fun() Required unless dismiss is `none`.
 ---@field dismissSound? FrogUISoundCue Dismiss cue; defaults to theme `dismiss`.
+---@field allowChrome? boolean Paint and route the one root Chrome above this Modal while it is topmost. Defaults to false.
 ---@field padding? FrogUIPadding
 ---@field background? FrogUIColor Root-plane background/scrim.
 ---@field align? FrogUIAlign Horizontal placement of the modal child.
 ---@field justify? FrogUIBoxJustify Vertical placement of the modal child.
 ---@field [integer] FrogUIElementDescription Exactly one child.
+
+---@class FrogChromeProps:FrogUIBaseProps
+---@field padding? FrogUIPadding
+---@field background? FrogUIColor Root-plane background; usually omitted.
+---@field align? FrogUIAlign Horizontal placement of the chrome child.
+---@field justify? FrogUIBoxJustify Vertical placement of the chrome child.
+---@field [integer] FrogUIElementDescription Exactly one persistent chrome child.
 
 ---@class FrogDragPayload
 ---@field kind string Required non-empty type matched by DropTarget.accepts.
@@ -343,12 +351,21 @@ Frog.Pressable = Element.primitive("Pressable")
 ---@type fun(input:FrogScrollProps):FrogUIElementDescription
 Frog.Scroll = Element.primitive("Scroll")
 
+--- Root-hosts the application's one persistent navigation/chrome surface.
+---
+--- Chrome paints above the base tree and below isolated Modals. A top Modal
+--- may set `allowChrome = true` to keep this same surface visible and usable;
+--- a later ordinary Modal covers and isolates it again.
+---@type fun(input:FrogChromeProps):FrogUIElementDescription
+Frog.Chrome = Element.primitive("Chrome")
+
 --- Root-hosts one focus/input-isolated surface above the application tree.
 ---
 --- `dismiss` is `back`, `outside`, `both`, or `none`; `dismissSound` overrides
 --- the semantic theme cue for either keyboard or pointer dismissal. Multiple
 --- Modals paint in source order; only the last receives input, and closing it
---- restores focus to the previous layer.
+--- restores focus to the previous layer. `allowChrome` opts only the current
+--- top Modal into sharing input with the one root Frog.Chrome portal.
 ---@type fun(input:FrogModalProps):FrogUIElementDescription
 Frog.Modal = Element.primitive("Modal")
 

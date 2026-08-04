@@ -176,10 +176,35 @@ local function activeRoot(host)
     return host._modal or host._tree
 end
 
+-- Returns input planes from highest to lowest. Chrome participates beside the
+-- base tree, or above only a top Modal that explicitly opts into it.
+local function inputRoots(host)
+    local modal = host._modal
+    local chrome = host._chrome
+    if modal then
+        if chrome and modal.props.allowChrome == true then
+            return { chrome, modal }
+        end
+        return { modal }
+    end
+    if chrome then return { chrome, host._tree } end
+    return host._tree and { host._tree } or {}
+end
+
+local function findActiveIdentity(host, identity)
+    if not identity then return nil end
+    for _, root in ipairs(inputRoots(host)) do
+        local found = findIdentity(root, identity)
+        if found then return found end
+    end
+end
+
 local function pointerPath(host, x, y)
-    local root = activeRoot(host)
-    return root and hitPath(root, x, y,
-        function(node) return POINTER_TYPES[node.type] == true end) or nil
+    for _, root in ipairs(inputRoots(host)) do
+        local path = hitPath(root, x, y,
+            function(node) return POINTER_TYPES[node.type] == true end)
+        if path then return path, root end
+    end
 end
 
 local function deepestOf(path, kind, predicate)
@@ -229,7 +254,7 @@ local function setHover(host, nextNode, pointerId)
     local previousIdentity = host._hoveredIdentity
     local nextIdentity = nextNode and nextNode.identity or nil
     if previousIdentity == nextIdentity then return end
-    local previous = findIdentity(activeRoot(host), previousIdentity)
+    local previous = findActiveIdentity(host, previousIdentity)
     local previousCallback = previous
         and (previous.type == "Pressable" or previous.type == "Button")
         and previous.props.onHoverChange or nil
@@ -325,7 +350,7 @@ end
 local function beginDrag(host, session)
     host:_runCallback(function()
         session.claimed = "drag"
-        session.source = findIdentity(activeRoot(host), session.sourceIdentity)
+        session.source = findActiveIdentity(host, session.sourceIdentity)
             or session.source
         host._pressedIdentity = nil
         stageSound(host, session.source.props.grabSound, "dragGrab")
@@ -375,7 +400,8 @@ function interaction.pointerDown(host, x, y, pointerId, button)
     host._pointerX, host._pointerY = x, y
     if host._interactionSession then return true end
     local modal = host._modal
-    if modal then
+    local path, pathRoot = pointerPath(host, x, y)
+    if modal and (not host._chrome or pathRoot ~= host._chrome) then
         local child = modal.children[1]
         if not child or not localInside(child, x, y) then
             host._interactionSession = {
@@ -385,7 +411,6 @@ function interaction.pointerDown(host, x, y, pointerId, button)
             return true
         end
     end
-    local path = pointerPath(host, x, y)
     if not path then return modal ~= nil end
     local press = deepestOf(path, "Pressable")
         or deepestOf(path, "Button", function(node)
@@ -418,19 +443,22 @@ function interaction.pointerDown(host, x, y, pointerId, button)
 end
 
 local function acceptedTarget(host, x, y, kind)
-    local root = activeRoot(host)
-    local path = root and hitPath(root, x, y, function(node)
-        return node.type == "DropTarget" and node.props.accepts == kind
-    end) or nil
-    local node = deepestOf(path, "DropTarget",
-        function(candidate) return candidate.props.accepts == kind end)
-    if not node then return nil end
-    return {
-        identity = node.identity,
-        key = node.key,
-        address = snapshotPlain(node.props.address, "DropTarget address"),
-        node = node,
-    }
+    for _, root in ipairs(inputRoots(host)) do
+        local path = hitPath(root, x, y, function(node)
+            return node.type == "DropTarget" and node.props.accepts == kind
+        end)
+        local node = deepestOf(path, "DropTarget",
+            function(candidate) return candidate.props.accepts == kind end)
+        if node then
+            return {
+                identity = node.identity,
+                key = node.key,
+                address = snapshotPlain(node.props.address,
+                    "DropTarget address"),
+                node = node,
+            }
+        end
+    end
 end
 
 function interaction.pointerMove(host, x, y, pointerId)
@@ -507,7 +535,7 @@ function interaction.pointerUp(host, x, y, pointerId, button)
         local pressed
         if not session.claimed and session.distance < interaction.CLAIM_DISTANCE
                 and session.pressIdentity then
-            pressed = findIdentity(activeRoot(host), session.pressIdentity)
+            pressed = findActiveIdentity(host, session.pressIdentity)
             if pressed and (not localInside(pressed, x, y)
                     or pressed.props.disabled
                     or host._spentAuthorities[pressed.identity]) then
@@ -545,7 +573,7 @@ function interaction.update(host, dt)
     if session and session.kind == "pointer" and not session.claimed then
         session.elapsed = session.elapsed + dt
         if session.elapsed >= interaction.HOLD_SECONDS and session.pressIdentity then
-            local pressed = findIdentity(activeRoot(host), session.pressIdentity)
+            local pressed = findActiveIdentity(host, session.pressIdentity)
             if pressed and pressed.props.onLongPress then
                 host:_runCallback(function()
                     session.claimed = "hold"
@@ -596,7 +624,11 @@ end
 
 -- Keeps keyboard focus visible without exposing Scroll offsets to components.
 function interaction.revealFocus(host, identity)
-    local path = identityPath(activeRoot(host), identity)
+    local path
+    for _, root in ipairs(inputRoots(host)) do
+        path = identityPath(root, identity)
+        if path then break end
+    end
     local focused = path and path[#path]
     if not focused then return end
     for _, node in ipairs(path) do
@@ -647,11 +679,12 @@ function interaction.rebind(host)
         if not scroll then interaction.cancel(host, "navigation") return end
     end
     if session.sourceIdentity then
-        local source = findIdentity(activeRoot(host), session.sourceIdentity)
+        local source = findActiveIdentity(host, session.sourceIdentity)
         if not source then interaction.cancel(host, "navigation") return end
         session.source = source
     end
-    if session.pressIdentity and not findIdentity(activeRoot(host), session.pressIdentity) then
+    if session.pressIdentity and not findActiveIdentity(host,
+            session.pressIdentity) then
         interaction.cancel(host, "navigation")
     end
 end
@@ -669,9 +702,10 @@ function interaction.afterCommit(host, previous)
 
     local hoveredIdentity = previous.hoveredIdentity
     if hoveredIdentity
-            and not findIdentity(activeRoot(host), hoveredIdentity) then
+            and not findActiveIdentity(host, hoveredIdentity) then
         local previousRoot = previous.modal or previous.tree
-        local oldNode = findIdentity(previousRoot, hoveredIdentity)
+        local oldNode = findIdentity(previous.chrome, hoveredIdentity)
+            or findIdentity(previousRoot, hoveredIdentity)
         local callback = oldNode
             and (oldNode.type == "Pressable" or oldNode.type == "Button")
             and oldNode.props.onHoverChange or nil
@@ -691,17 +725,38 @@ function interaction.activeRoot(host)
     return activeRoot(host)
 end
 
--- Collects root portals in authored source order; the last one is interactive.
-function interaction.modalsFromTree(root)
-    local found = {}
-    local function walk(node)
-        if node.type == "Modal" then
-            found[#found + 1] = node
+-- Exposes the current top-to-bottom input planes to Host keyboard/inspection.
+function interaction.inputRoots(host)
+    return inputRoots(host)
+end
+
+function interaction.findActiveIdentity(host, identity)
+    return findActiveIdentity(host, identity)
+end
+
+-- Collects root portals once, rejects ambiguous portal nesting, and preserves
+-- authored Modal order. Components may wrap a portal; a portal may not own
+-- another root plane that paints and routes outside its visible parent.
+function interaction.planesFromTree(root)
+    local modals, chrome = {}, nil
+    local function walk(node, portalAncestor)
+        local isPortal = node.type == "Modal" or node.type == "Chrome"
+        if isPortal and portalAncestor then
+            error("FrogUI root portals cannot be nested ("
+                .. portalAncestor.type .. " contains " .. node.type .. ")")
         end
-        for _, child in ipairs(node.children or {}) do walk(child) end
+        if node.type == "Modal" then
+            modals[#modals + 1] = node
+        elseif node.type == "Chrome" then
+            assert(chrome == nil,
+                "FrogUI permits only one Frog.Chrome portal")
+            chrome = node
+        end
+        local ancestor = isPortal and node or portalAncestor
+        for _, child in ipairs(node.children or {}) do walk(child, ancestor) end
     end
-    if root then walk(root) end
-    return found
+    if root then walk(root, nil) end
+    return modals, chrome
 end
 
 function interaction.inspect(host)
@@ -732,6 +787,9 @@ function interaction.inspect(host)
         } or nil,
         scrolls = scrolls,
         modal = host._modal and host._modal.identity or nil,
+        chrome = host._chrome and host._chrome.identity or nil,
+        chromeActive = host._chrome ~= nil and (host._modal == nil
+            or host._modal.props.allowChrome == true),
         modals = (function()
             local out = {}
             for index, modal in ipairs(host._modals or {}) do

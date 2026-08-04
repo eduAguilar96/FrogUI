@@ -130,7 +130,8 @@ local function measure(node, maxWidth, maxHeight, host)
     local innerMaxHeight = math.max(0, (height or maxHeight) - pad.top - pad.bottom)
     local naturalWidth, naturalHeight = 0, 0
 
-    if node.type == "Modal" and not node._portalLayout then
+    if (node.type == "Modal" or node.type == "Chrome")
+            and not node._portalLayout then
         naturalWidth, naturalHeight = 0, 0
     elseif node.type == "Text" then
         naturalWidth, naturalHeight = textSize(node, innerMaxWidth, innerMaxHeight, host)
@@ -375,7 +376,8 @@ function layout.arrange(node, x, y, width, height, host)
     node.contentWidth = math.max(0, width - pad.left - pad.right)
     node.contentHeight = math.max(0, height - pad.top - pad.bottom)
 
-    if node.type == "Modal" and not node._portalLayout then return end
+    if (node.type == "Modal" or node.type == "Chrome")
+            and not node._portalLayout then return end
 
     if node.type == "Row" and node.props.wrap then
         arrangeWrappedRow(node, host)
@@ -412,7 +414,9 @@ local function prepareDetached(node, maxWidth, maxHeight, host)
 end
 
 local function preparePlanes(node, width, height, host)
-    if node.type == "Modal" then arrangePortal(node, width, height, host) end
+    if node.type == "Modal" or node.type == "Chrome" then
+        arrangePortal(node, width, height, host)
+    end
     if node._dragPreview then
         prepareDetached(node._dragPreview, width, height, host)
     end

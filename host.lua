@@ -19,7 +19,7 @@ local renderingHost = nil
 local PRIMITIVES = {
     Box = true, Row = true, Column = true, Overlay = true,
     Text = true, Image = true, Icon = true, Button = true, Motion = true,
-    Pressable = true, Scroll = true, Modal = true,
+    Pressable = true, Scroll = true, Modal = true, Chrome = true,
     DragSource = true, DropTarget = true,
 }
 
@@ -84,6 +84,11 @@ local TYPE_PROPS = {
     Modal = {
         dismiss = true, onDismiss = true,
         dismissSound = true,
+        allowChrome = true,
+        padding = true, background = true,
+        align = true, justify = true,
+    },
+    Chrome = {
         padding = true, background = true,
         align = true, justify = true,
     },
@@ -183,6 +188,7 @@ local function validatePrimitive(name, children)
     if name == "Box" or name == "Button" or name == "Motion" then
         assert(#children <= 1, "Frog." .. name .. " accepts at most one child")
     elseif name == "Pressable" or name == "Scroll" or name == "Modal"
+            or name == "Chrome"
             or name == "DragSource" or name == "DropTarget" then
         assert(#children == 1, "Frog." .. name .. " accepts exactly one child")
     elseif name == "Text" or name == "Image" or name == "Icon" then
@@ -550,6 +556,15 @@ local function validatePrimitiveProps(self, name, props)
             "Modal align")
         oneOf(props.justify, { "start", "center", "end", "stretch" },
             "Modal justify")
+        assert(props.allowChrome == nil or type(props.allowChrome) == "boolean",
+            "Modal allowChrome must be a boolean")
+    elseif name == "Chrome" then
+        assert(props.offset == nil,
+            "Chrome is a root portal and does not accept offset")
+        oneOf(props.align, { "start", "center", "end", "stretch" },
+            "Chrome align")
+        oneOf(props.justify, { "start", "center", "end", "stretch" },
+            "Chrome justify")
     elseif name == "DragSource" then
         local payload = Interaction.snapshotPlain(props.payload,
             "DragSource payload")
@@ -659,7 +674,8 @@ local function intersection(left, right)
     return { x = x, y = y, width = farX - x, height = farY - y }
 end
 
-local function flatten(node, depth, output, inheritedClip)
+local function flatten(node, depth, output, inheritedClip, portalRoot)
+    if node._portal and node ~= portalRoot then return end
     local bounds = node._visualBounds
         or { x = node.x, y = node.y, width = node.width, height = node.height }
     local visible = intersection(bounds, inheritedClip)
@@ -674,11 +690,12 @@ local function flatten(node, depth, output, inheritedClip)
         if not childClip then return end
     end
     for _, child in ipairs(node.children) do
-        flatten(child, depth + 1, output, childClip)
+        flatten(child, depth + 1, output, childClip, portalRoot)
     end
 end
 
-local function deepest(node, x, y, predicate)
+local function deepest(node, x, y, predicate, portalRoot)
+    if node._portal and node ~= portalRoot then return nil end
     local contained = inside(node, x, y)
     if node.type == "Scroll" or node.props.clip
             or node.props.overflow == "clip" then
@@ -691,11 +708,24 @@ local function deepest(node, x, y, predicate)
         end
     end
     for index = #node.children, 1, -1 do
-        local found = deepest(node.children[index], x, y, predicate)
+        local found = deepest(node.children[index], x, y, predicate, portalRoot)
         if found then return found end
     end
     if contained and predicate(node) then return node end
     return nil
+end
+
+-- Distinguishes a painted or input-owning inspection hit from a transparent
+-- layout wrapper. Top-plane concrete hits preserve z-order; transparent
+-- wrappers may fall through so the developer can reach visible content below.
+local function concreteInspectionHit(node)
+    if node.type == "Text" or node.type == "Image" or node.type == "Icon"
+            or node.type == "Button" or node.type == "Pressable"
+            or node.type == "Scroll" or node.type == "DragSource"
+            or node.type == "DropTarget" then
+        return true
+    end
+    return node.props.background ~= nil or node.props.border ~= nil
 end
 
 local function findIdentity(node, identity)
@@ -751,11 +781,17 @@ local function reconcileModalFocus(self, oldModals, oldFocusedIdentity)
     end
 
     self._modalFocusStack = frames
-    local inputRoot = self._modal or self._tree
     local top = newModals[#newModals]
     local focus = baseFocus
-    if top then focus = layerFocus[top.identity] end
-    self._focusedIdentity = focus and findIdentity(inputRoot, focus)
+    if top then
+        focus = layerFocus[top.identity]
+        if not focus and top.props.allowChrome == true
+                and self._chrome and oldFocusedIdentity
+                and findIdentity(self._chrome, oldFocusedIdentity) then
+            focus = oldFocusedIdentity
+        end
+    end
+    self._focusedIdentity = focus and Interaction.findActiveIdentity(self, focus)
         and focus or nil
 end
 
@@ -772,6 +808,7 @@ local function snapshotHost(self)
         motions = Motion.snapshot(self._motions),
         modals = self._modals,
         modal = self._modal,
+        chrome = self._chrome,
         modalFocusStack = deepCopy(self._modalFocusStack),
         focusedIdentity = self._focusedIdentity,
         selectedIdentity = self._selectedIdentity,
@@ -812,6 +849,7 @@ local function restoreHost(self, snapshot)
     self._motions = snapshot.motions
     self._modals = snapshot.modals
     self._modal = snapshot.modal
+    self._chrome = snapshot.chrome
     self._modalFocusStack = snapshot.modalFocusStack
     self._focusedIdentity = snapshot.focusedIdentity
     self._selectedIdentity = snapshot.selectedIdentity
@@ -897,6 +935,7 @@ function host.new(options)
     self._interactionSession = nil
     self._modals = {}
     self._modal = nil
+    self._chrome = nil
     self._modalFocusStack = {}
     self._pointerX, self._pointerY = 0, 0
     self._motionStartSequence = 0
@@ -957,6 +996,7 @@ function host:mount(root)
     self._scrolls = context.scrolls
     self._modals = context.modals
     self._modal = context.modal
+    self._chrome = context.chrome
     reconcileModalFocus(self, {}, nil)
     self._generation = self._generation + 1
     self:_commitFeedback()
@@ -1174,7 +1214,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     validatePrimitiveProps(self, token.name, descriptor.props)
     if (context.previewDepth or 0) > 0 then
         assert(token.name ~= "Pressable" and token.name ~= "Scroll"
-                and token.name ~= "Modal" and token.name ~= "DragSource"
+                and token.name ~= "Modal" and token.name ~= "Chrome"
+                and token.name ~= "DragSource"
                 and token.name ~= "DropTarget" and token.name ~= "Button",
             "DragSource preview must be static presentation")
         assert(token.name ~= "Motion" and descriptor.props.juice == nil
@@ -1285,7 +1326,7 @@ function host:_build(root)
     candidate = Layout.run(candidate,
         self._viewport.width, self._viewport.height, self)
     Motion.transformTree(candidate)
-    context.modals = Interaction.modalsFromTree(candidate)
+    context.modals, context.chrome = Interaction.planesFromTree(candidate)
     context.modal = context.modals[#context.modals]
     return candidate, context
 end
@@ -1307,6 +1348,7 @@ function host:render(root)
         modalIdentity = checkpoint.modal and checkpoint.modal.identity or nil,
         tree = checkpoint.tree,
         modal = checkpoint.modal,
+        chrome = checkpoint.chrome,
         focusedIdentity = checkpoint.focusedIdentity,
         hoveredIdentity = checkpoint.interaction.hoveredIdentity,
     }
@@ -1322,6 +1364,7 @@ function host:render(root)
         self._scrolls = context.scrolls
         self._modals = context.modals
         self._modal = context.modal
+        self._chrome = context.chrome
         self._generation = self._generation + 1
         for identity in pairs(self._spentAuthorities) do
             if not findIdentity(self._tree, identity) then
@@ -1330,7 +1373,7 @@ function host:render(root)
         end
         reconcileModalFocus(self, previous.modals, previous.focusedIdentity)
         if self._selectedIdentity
-                and not findIdentity(Interaction.activeRoot(self),
+                and not Interaction.findActiveIdentity(self,
                     self._selectedIdentity) then
             self._selectedIdentity = nil
         end
@@ -1930,6 +1973,7 @@ function host:resize(width, height)
         modalIdentity = checkpoint.modal and checkpoint.modal.identity or nil,
         tree = checkpoint.tree,
         modal = checkpoint.modal,
+        chrome = checkpoint.chrome,
         focusedIdentity = checkpoint.focusedIdentity,
         hoveredIdentity = checkpoint.interaction.hoveredIdentity,
     }
@@ -1944,10 +1988,11 @@ function host:resize(width, height)
         self._scrolls = context.scrolls
         self._modals = context.modals
         self._modal = context.modal
+        self._chrome = context.chrome
         self._generation = self._generation + 1
         reconcileModalFocus(self, previous.modals, previous.focusedIdentity)
         if self._selectedIdentity
-                and not findIdentity(Interaction.activeRoot(self),
+                and not Interaction.findActiveIdentity(self,
                     self._selectedIdentity) then
             self._selectedIdentity = nil
         end
@@ -2022,10 +2067,16 @@ function host:keyDown(key, scancode, isrepeat)
     end
     if isrepeat then return self._modal ~= nil end
     if key == "escape" and Interaction.keyBack(self) then return true end
-    local buttons = {}
-    local inputRoot = self._modal or self._tree
-    if inputRoot then
-        collectButtons(inputRoot, buttons, self._spentAuthorities)
+    local buttons, seen = {}, {}
+    for _, inputRoot in ipairs(Interaction.inputRoots(self)) do
+        local found = {}
+        collectButtons(inputRoot, found, self._spentAuthorities)
+        for _, button in ipairs(found) do
+            if not seen[button.identity] then
+                seen[button.identity] = true
+                buttons[#buttons + 1] = button
+            end
+        end
     end
     if key == "tab" then
         if #buttons == 0 then return self._modal ~= nil end
@@ -2044,7 +2095,8 @@ function host:keyDown(key, scancode, isrepeat)
     local activationKey = key == "return" or key == "space"
         or key == "kpenter"
     if activationKey then
-        local focused = findIdentity(inputRoot, self._focusedIdentity)
+        local focused = Interaction.findActiveIdentity(
+            self, self._focusedIdentity)
         if focused and focused.type == "Button" and not focused.props.disabled
                 and not self._spentAuthorities[focused.identity]
                 and (focused.props.onPress or focused.props.onCommit) then
@@ -2106,13 +2158,30 @@ function host:inspect(x, y)
     assert(self._mounted, "Host is not mounted")
     assertPresentationAllowed(self, "change inspection selection in")
     local virtualX, virtualY = self:_virtual(x, y)
-    local root = Interaction.activeRoot(self)
-    local selected = root and deepest(root, virtualX, virtualY,
-        function() return true end)
+    local roots = Interaction.inputRoots(self)
+    local selected, root, selectedArea
+    for _, candidate in ipairs(roots) do
+        local portalRoot = candidate._portal and candidate or nil
+        local concrete = deepest(candidate, virtualX, virtualY,
+            concreteInspectionHit, portalRoot)
+        if concrete then
+            selected, root = concrete, candidate
+            break
+        end
+        local fallback = deepest(candidate, virtualX, virtualY,
+            function() return true end, portalRoot)
+        if fallback then
+            local bounds = fallback._visualBounds or fallback
+            local area = bounds.width * bounds.height
+            if selectedArea == nil or area < selectedArea then
+                selected, root, selectedArea = fallback, candidate, area
+            end
+        end
+    end
     self._selectedIdentity = selected and selected.identity or nil
     if not selected then return nil end
     local nodes = {}
-    flatten(root, 0, nodes)
+    flatten(root, 0, nodes, nil, root._portal and root or nil)
     for _, entry in ipairs(nodes) do
         if entry.identity == selected.identity then return entry end
     end
@@ -2121,8 +2190,13 @@ end
 function host:inspectionTree()
     assert(self._mounted, "Host is not mounted")
     local nodes = {}
-    local root = Interaction.activeRoot(self)
-    if root then flatten(root, 0, nodes) end
+    local roots = Interaction.inputRoots(self)
+    for index = #roots, 1, -1 do
+        local root = roots[index]
+        if root then
+            flatten(root, 0, nodes, nil, root._portal and root or nil)
+        end
+    end
     local selected
     for _, entry in ipairs(nodes) do
         if entry.identity == self._selectedIdentity then selected = entry break end
@@ -2174,6 +2248,7 @@ function host:unmount()
     self._scrolls = {}
     self._modals = {}
     self._modal = nil
+    self._chrome = nil
     self._modalFocusStack = {}
     self._feedbackQueue = {}
     self._rawClock:reset()

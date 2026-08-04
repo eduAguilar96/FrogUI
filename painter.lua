@@ -606,11 +606,19 @@ function painter.draw(host, custom)
         g.translate(host._viewport.x, host._viewport.y)
         g.scale(host._viewport.scale)
     end
-    drawNode(host, host._tree, custom, nil, nil,
-        not custom and { depth = 0 } or nil)
+    local clipState = not custom and { depth = 0 } or nil
+    drawNode(host, host._tree, custom, nil, nil, clipState)
+    local chrome = host._chrome
+    local chromeAboveModal = chrome and host._modal
+        and host._modal.props.allowChrome == true
+    if chrome and not chromeAboveModal then
+        drawNode(host, chrome, custom, nil, nil, clipState, chrome)
+    end
     for _, modal in ipairs(host._modals or {}) do
-        drawNode(host, modal, custom, nil, nil,
-            not custom and { depth = 0 } or nil, modal)
+        drawNode(host, modal, custom, nil, nil, clipState, modal)
+    end
+    if chromeAboveModal then
+        drawNode(host, chrome, custom, nil, nil, clipState, chrome)
     end
     local session = host._interactionSession
     local preview = session and session.claimed == "drag"

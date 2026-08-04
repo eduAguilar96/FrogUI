@@ -86,6 +86,7 @@ the Host, so unknown props fail loudly.
 | `Frog.Motion` | Animate one child's paint/input presentation without changing layout | zero or one |
 | `Frog.Pressable` | Add pointer tap, hold, and mouse-hover to one child | exactly one |
 | `Frog.Scroll` | Retain clipped wheel/touch scrolling on one axis | exactly one |
+| `Frog.Chrome` | Root-host the one persistent application navigation surface | exactly one |
 | `Frog.Modal` | Root-host one focus/input-isolated surface | exactly one |
 | `Frog.DragSource` | Own a plain payload, preview, and domain drop callback | exactly one |
 | `Frog.DropTarget` | Advertise one typed address to the deepest matching source | exactly one |
@@ -218,6 +219,69 @@ The current public vocabulary is:
 The actor/message guide and production examples start at
 [`design/reference/frog-ui.md` section 3](../../design/reference/frog-ui.md#3-state-belongs-to-the-component).
 
+## Persistent application chrome
+
+`src/presentation/hud/connected.lua` is the application-facing bottom
+navigation layer. Its sibling `hud.lua` owns placement and `button.lua` owns
+the icon face. Mount the connected component once after the current screen so
+Book and Settings occupy the same place on every route:
+
+```lua
+Frog.Overlay {
+    CurrentScreen { run = run },
+    Spellbook {
+        address = Spellbook.Run,
+        initial = "closed",
+        run = run,
+        -- screen-specific drawer and transaction callbacks stay here
+    },
+    Settings { address = Settings.App },
+    ConnectedHud {
+        run = run,
+        bookDisabled = false,
+        settingsDisabled = false,
+    },
+}
+```
+
+`ConnectedHud` is stateless. It places the shared HUD inside the application's
+one `Frog.Chrome` portal. Its Book view observes the screen-owned Spellbook
+actor, so
+the root never receives or mirrors `bookOpen`. If that actor is absent, the
+Book icon stays in place but is disabled. Passing `run` lets the closed Book
+control request attention when the bag contains spells; `bookAttention`
+overrides that derived value. `bookDisabled`, `settingsDisabled`, `bookHidden`,
+and `settingsHidden` express route context without inventing another actor.
+The application root mounts exactly one `Settings.App` actor beside the HUD;
+the HUD's Settings view observes it directly. Each current screen mounts its
+own Spellbook actor because its Run, presentation, and transaction callbacks
+belong to that screen.
+
+`Frog.Chrome` normally paints above the screen and below every Modal. An
+ordinary modal Spellbook sets `allowChrome = true`, so that exact same root HUD
+remains visible and usable: Book stays selected and closes the Spellbook, while
+Settings opens its own isolated Modal above both. Inspection and liquidation
+keep the default and therefore cover/block the HUD. This is generic portal
+behavior; the Spellbook never receives or constructs a second HUD.
+
+Scene actions remain separate. Room commerce contains Sell Spell, Sell Health,
+and the shared `ExitButton`; it sits above the HUD and disappears behind an
+open drawer. `hud.lua` exports `actionY` and `drawerInset` so screens share
+those two clearances instead of copying coordinates. Use `CancelButton` for
+every temporary-surface close control. It uses the authored cancel icon and
+rejects hit targets smaller than 44px:
+
+```lua
+CancelButton {
+    testId = "spellbook-close",
+    onPress = closeSpellbook,
+}
+```
+
+Book, cog, cancel, and exit image paths are semantic assets in
+`src/presentation/theme.lua`. Application components refer to those tokens
+through `Frog.Icon`; they do not load image files themselves.
+
 ## Interaction stays small
 
 `Button` owns keyboard focus, shortcuts, disabled state, and activation. It
@@ -253,6 +317,9 @@ and Scroll do not move or clip it, and covered input is consumed. Several
 independent Modals may compose in one tree. They paint in source order; only
 the last portal receives pointer, wheel, keyboard, or text input. Closing it
 restores the previous layer's keyboard focus before the base tree is exposed.
+The sole `Chrome` portal is also Host-owned. It joins the top input plane only
+when that Modal explicitly sets `allowChrome = true`; any later ordinary Modal
+isolates it again.
 
 An ordinary `Button.onPress` is reversible UI work. Use the explicit
 `onCommit`/`onResult` pair only when one press crosses an irreversible domain
