@@ -153,11 +153,15 @@ local Interaction = require("src.frogui.interaction")
 ---@field hoverBorder? FrogUIColor
 ---@field pressedBackground? FrogUIColor
 ---@field pressedBorder? FrogUIColor
+---@field focusedBackground? FrogUIColor
+---@field focusedBorder? FrogUIColor
 ---@field selectedBackground? FrogUIColor
 ---@field selectedBorder? FrogUIColor
 ---@field align? FrogUIAlign Horizontal placement of the child.
 ---@field justify? FrogUIBoxJustify Vertical placement of the child.
 ---@field onPress? fun() Reversible UI callback.
+---@field onLongPress? fun() Pointer hold callback after the Host threshold.
+---@field onHoverChange? fun(hovered:boolean) Mouse enter/leave callback.
 ---@field onCommit? fun():boolean, any One irreversible domain call.
 ---@field onResult? fun(status:FrogUIButtonResultStatus, detail:any)
 ---@field disabled? boolean Disable focus and activation.
@@ -277,9 +281,10 @@ Frog.Image = Element.primitive("Image")
 ---@type fun(input:FrogIconProps):FrogUIElementDescription
 Frog.Icon = Element.primitive("Icon")
 
---- Owns focus, shortcuts, disabled/selected state, and activation paint.
+--- Owns focus, shortcuts, tap/hold, disabled/selected state, and interaction paint.
 ---
---- `align` moves its child horizontally; `justify` moves it vertically.
+--- `align` moves its child horizontally; `justify` moves it vertically. Mouse
+--- hover, pointer press, and keyboard focus each have explicit paint tokens.
 ---@type fun(input?: FrogButtonProps):FrogUIElementDescription
 Frog.Button = Element.primitive("Button")
 

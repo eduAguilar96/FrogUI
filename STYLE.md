@@ -184,9 +184,11 @@ projections, companion style files, or geometry files.
 - A stateful screen keeps its small typed actions, reducers, and concrete render
   with that actor. Do not extract a `state.lua`, action table, or generic
   render-callback projection to make a line budget appear smaller.
-- Use `Button` for keyboard-visible actions and `Pressable` for pointer-only
-  inspection/hold surfaces. Do not hide a keyboard shortcut in raw screen key
-  handling.
+- Use `Button` for every keyboard-visible action or inspection surface. Its
+  optional hold and hover callbacks preserve the same semantic control across
+  touch, mouse, and keyboard while focus paint remains visible. Use
+  `Pressable` only when the surface is deliberately pointer-only. Do not hide
+  a keyboard shortcut in raw screen key handling.
 - A `DragSource` owns the domain callback; a `DropTarget` exposes only a typed
   plain-data address and stable key. Never put Run/room policy into a target or
   the FrogUI interaction runtime.

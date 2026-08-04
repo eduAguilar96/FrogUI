@@ -218,9 +218,11 @@ local function setHover(host, nextNode, pointerId)
     local nextIdentity = nextNode and nextNode.identity or nil
     if previousIdentity == nextIdentity then return end
     local previous = findIdentity(activeRoot(host), previousIdentity)
-    local previousCallback = previous and previous.type == "Pressable"
+    local previousCallback = previous
+        and (previous.type == "Pressable" or previous.type == "Button")
         and previous.props.onHoverChange or nil
-    local nextCallback = nextNode and nextNode.type == "Pressable"
+    local nextCallback = nextNode
+        and (nextNode.type == "Pressable" or nextNode.type == "Button")
         and nextNode.props.onHoverChange or nil
     if previousCallback or nextCallback then
         host:_runCallback(function()
@@ -521,12 +523,12 @@ function interaction.update(host, dt)
         session.elapsed = session.elapsed + dt
         if session.elapsed >= interaction.HOLD_SECONDS and session.pressIdentity then
             local pressed = findIdentity(activeRoot(host), session.pressIdentity)
-            if pressed and pressed.type == "Pressable" and pressed.props.onLongPress then
+            if pressed and pressed.props.onLongPress then
                 host:_runCallback(function()
                     session.claimed = "hold"
                     host._pressedIdentity = nil
                     pressed.props.onLongPress()
-                end, "Pressable:hold", pressed.source)
+                end, pressed.type .. ":hold", pressed.source)
             end
         end
     end
@@ -643,7 +645,8 @@ function interaction.afterCommit(host, previous)
             and not findIdentity(activeRoot(host), hoveredIdentity) then
         local previousRoot = previous.modal or previous.tree
         local oldNode = findIdentity(previousRoot, hoveredIdentity)
-        local callback = oldNode and oldNode.type == "Pressable"
+        local callback = oldNode
+            and (oldNode.type == "Pressable" or oldNode.type == "Button")
             and oldNode.props.onHoverChange or nil
         if callback then
             host:_runCallback(function()
@@ -691,6 +694,7 @@ function interaction.inspect(host)
         pointer = { x = host._pointerX, y = host._pointerY },
         hovered = host._hoveredIdentity,
         pressed = host._pressedIdentity,
+        focused = host._focusedIdentity,
         session = session and {
             pointerId = session.pointerId, claimed = session.claimed,
             distance = session.distance, elapsed = session.elapsed,

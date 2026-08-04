@@ -63,9 +63,11 @@ local TYPE_PROPS = {
         padding = true, background = true, border = true, borderWidth = true,
         hoverBackground = true, hoverBorder = true,
         pressedBackground = true, pressedBorder = true,
+        focusedBackground = true, focusedBorder = true,
         selectedBackground = true, selectedBorder = true,
         radius = true,
-        onPress = true, onCommit = true, onResult = true,
+        onPress = true, onLongPress = true, onHoverChange = true,
+        onCommit = true, onResult = true,
         disabled = true, selected = true, shortcut = true,
         align = true, justify = true,
     },
@@ -228,8 +230,9 @@ local function validateTheme(theme)
     end
     local button = ((theme.controls or {}).button or {})
     local colorKeys = {
-        background = true, hover = true, pressed = true, selected = true,
-        disabled = true, border = true,
+        background = true, hover = true, pressed = true, focused = true,
+        selected = true, disabled = true, border = true,
+        focusedBorder = true,
     }
     for key, value in pairs(button) do
         assert(colorKeys[key] or key == "radius",
@@ -342,6 +345,7 @@ local function validatePrimitiveProps(self, name, props)
         "background", "border", "color", "tint", "outlineColor",
         "hoverBackground", "hoverBorder",
         "pressedBackground", "pressedBorder",
+        "focusedBackground", "focusedBorder",
         "selectedBackground", "selectedBorder",
     }) do
         local color = props[colorProp]
@@ -370,12 +374,18 @@ local function validatePrimitiveProps(self, name, props)
     if name == "Button" then
         assert(props.onPress == nil or type(props.onPress) == "function",
             "Button onPress must be a function")
+        assert(props.onLongPress == nil or type(props.onLongPress) == "function",
+            "Button onLongPress must be a function")
+        assert(props.onHoverChange == nil or type(props.onHoverChange) == "function",
+            "Button onHoverChange must be a function")
         assert(props.onCommit == nil or type(props.onCommit) == "function",
             "Button onCommit must be a function")
         assert(props.onResult == nil or type(props.onResult) == "function",
             "Button onResult must be a function")
         assert(not props.onCommit or (not props.onPress and props.onResult),
             "Button onCommit requires onResult and cannot use onPress")
+        assert(not props.onCommit or not props.onLongPress,
+            "Button onCommit cannot also use onLongPress")
         assert(not props.onResult or props.onCommit,
             "Button onResult requires onCommit")
         assert(props.disabled == nil or type(props.disabled) == "boolean",
@@ -1845,19 +1855,27 @@ function host:keyDown(key, scancode, isrepeat)
         return true
     end
     local activated
-    for _, button in ipairs(buttons) do
-        local shortcut = button.props.shortcut
-        local matches = shortcut == key
-        if type(shortcut) == "table" then
-            for _, accepted in ipairs(shortcut) do
-                if accepted == key then matches = true break end
-            end
+    local activationKey = key == "return" or key == "space"
+        or key == "kpenter"
+    if activationKey then
+        local focused = findIdentity(inputRoot, self._focusedIdentity)
+        if focused and focused.type == "Button" and not focused.props.disabled
+                and not self._spentAuthorities[focused.identity]
+                and (focused.props.onPress or focused.props.onCommit) then
+            activated = focused
         end
-        if matches then activated = button break end
     end
-    if not activated and (key == "return" or key == "space" or key == "kpenter") then
-        activated = findIdentity(inputRoot, self._focusedIdentity)
-        if activated and (activated.type ~= "Button" or activated.props.disabled) then activated = nil end
+    if not activated then
+        for _, button in ipairs(buttons) do
+            local shortcut = button.props.shortcut
+            local matches = shortcut == key
+            if type(shortcut) == "table" then
+                for _, accepted in ipairs(shortcut) do
+                    if accepted == key then matches = true break end
+                end
+            end
+            if matches then activated = button break end
+        end
     end
     if activated and (activated.props.onPress or activated.props.onCommit) then
         self:_activateButton(activated)

@@ -121,6 +121,13 @@ local function styleFor(host, node, inheritedOpacity, inheritedTint)
             border = props.pressedBorder or props.border or button.border
             style.background = host:_color(background,
                 "buttonPressed")
+        elseif host._focusedIdentity == node.identity then
+            background = props.focusedBackground or props.background
+                or button.focused or button.hover
+            border = props.focusedBorder or button.focusedBorder
+                or props.hoverBorder or props.border or button.border
+            style.background = host:_color(background,
+                "buttonFocused")
         elseif props.selected then
             background = props.selectedBackground or button.selected
                 or props.background

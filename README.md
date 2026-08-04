@@ -82,7 +82,7 @@ the Host, so unknown props fail loudly.
 | `Frog.Text` | Draw text using a theme font/color role | none |
 | `Frog.Image` | Draw an authored image while preserving its RGB | none |
 | `Frog.Icon` | Draw and recolor an alpha silhouette | none |
-| `Frog.Button` | One-child pressable box with theme states | zero or one |
+| `Frog.Button` | Keyboard-focusable tap/hold box with visible theme states | zero or one |
 | `Frog.Motion` | Animate one child's paint/input presentation without changing layout | zero or one |
 | `Frog.Pressable` | Add pointer tap, hold, and mouse-hover to one child | exactly one |
 | `Frog.Scroll` | Retain clipped wheel/touch scrolling on one axis | exactly one |
@@ -207,16 +207,24 @@ The actor/message guide and production examples start at
 
 ## Interaction stays small
 
-`Button` owns keyboard focus, shortcuts, disabled state, and activation.
-It may locally override `background`/`border` plus
-`hoverBackground`/`hoverBorder` and `pressedBackground`/`pressedBorder`; this
-`selectedBackground`/`selectedBorder` keeps an owned open/toggled state
-distinct. Precedence is disabled, pressed, selected, hover, then base. This is
-generic state paint, not an application painter hook.
-`Pressable` is pointer-only. `Scroll`, `Modal`, `DragSource`, and `DropTarget`
-own generic mechanics; they never import Run, Reward, Spellbook, or another
-game concept. A drag source alone calls the domain operation after FrogUI
-supplies the deepest matching `{ address, key }` target.
+`Button` owns keyboard focus, shortcuts, disabled state, and activation. It
+also accepts `onLongPress` and `onHoverChange` when the same accessible control
+needs touch-hold or transient mouse inspection. Local
+`hoverBackground`/`hoverBorder`, `pressedBackground`/`pressedBorder`,
+`focusedBackground`/`focusedBorder`, and
+`selectedBackground`/`selectedBorder` keep every interaction state visible.
+Precedence is disabled, pressed, keyboard focus, selected, mouse hover, then
+base. This is generic state paint, not an application painter hook.
+Return, Space, and keypad Enter activate the focused Button before consulting
+another control's shortcut; shortcuts are the fallback when no actionable
+Button is focused. This prevents a screen-level default from stealing an
+accessible component's activation.
+
+`Pressable` remains pointer-only for a surface that deliberately must not enter
+keyboard focus order. `Scroll`, `Modal`, `DragSource`, and `DropTarget` own
+generic mechanics; they never import Run, Reward, Spellbook, or another game
+concept. A drag source alone calls the domain operation after FrogUI supplies
+the deepest matching `{ address, key }` target.
 
 Inside a Scroll, movement along its axis scrolls while cross-axis movement
 drags. The fixed 8px/1.25-bias rule is Host-owned, so components never assemble
