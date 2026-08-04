@@ -223,15 +223,23 @@ projections, companion style files, or geometry files.
 - A `DragSource` owns the domain callback; a `DropTarget` exposes only a typed
   plain-data address and stable key. Never put Run/room policy into a target or
   the FrogUI interaction runtime.
-- Keep `onDrop` to one atomic domain call and `return` its result directly. It
-  must not send/emit or mutate the Host; UI state reacts in `onDragEnd` or to
-  the typed `DragEnded` fact after the captured session is terminal.
+- Keep `onDrop` to one atomic domain call. Return its boolean/detail result
+  directly when the domain already follows that contract. When a read-only
+  quote API returns `value, error`, adapt it once in the mounting screen's
+  explicit capability to `true, value` or `false, error`; do not add a generic
+  adapter or teach `DragSource` the domain's vocabulary. `onDrop` must not
+  send/emit or mutate the Host; UI state reacts in `onDragEnd` or to the typed
+  `DragEnded` fact after the captured session is terminal.
 - Use `Button.onCommit`/`onResult` only for one irreversible authoritative
   method call. Keep messages/navigation in `onResult`; a successful commit
   spends that exact control even if the follow-up fails. Ordinary Buttons use
   `onPress`.
 - Compose drag and Scroll directly. Gesture thresholds and arbitration are
   framework constants, not component props or per-screen recognizer tables.
+- When one actor replaces a visible region, mount that actor at the region and
+  pass the ordinary child directly. Closed state returns the child; open state
+  returns the replacement. Do not mount a hidden owner elsewhere and project
+  its state back through an addressed gate or generic slot component.
 
 ## 9. Updating this guide
 

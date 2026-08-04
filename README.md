@@ -319,6 +319,13 @@ Frog.Button {
     Frog.Text "Spellbook",
 }
 
+Frog.Button {
+    sound = "shop.sell",
+    onCommit = props.commitExactSaleQuote,
+    onResult = props.onSaleResult,
+    Frog.Text "Confirm Sale",
+}
+
 Frog.DragSource {
     grabSound = "drag.grab",       -- optional; already the default
     dropSound = "shop.purchase",  -- only after onDrop commits
