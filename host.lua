@@ -54,9 +54,9 @@ local TYPE_PROPS = {
         align = true, fitDown = true,
         outlineWidth = true, outlineColor = true,
     },
-    Image = { source = true, fit = true, tint = true },
+    Image = { source = true, sourceRect = true, fit = true, tint = true },
     Icon = {
-        source = true, fit = true, tint = true,
+        source = true, sourceRect = true, fit = true, tint = true,
         mirror = true, outline = true,
     },
     Button = {
@@ -455,6 +455,31 @@ local function validatePrimitiveProps(self, name, props)
         assert(props.fit == nil or props.fit == "contain" or props.fit == "cover"
             or props.fit == "stretch",
             name .. " fit must be contain, cover, or stretch")
+        local rect = props.sourceRect
+        if rect ~= nil then
+            assert(type(rect) == "table" and getmetatable(rect) == nil,
+                name .. " sourceRect must be a plain pixel rectangle")
+            for key in pairs(rect) do
+                assert(key == "x" or key == "y"
+                        or key == "width" or key == "height",
+                    name .. " sourceRect has unknown field " .. tostring(key))
+            end
+            validateNumber(rect.x, name .. " sourceRect x", 0)
+            validateNumber(rect.y, name .. " sourceRect y", 0)
+            validateNumber(rect.width, name .. " sourceRect width")
+            validateNumber(rect.height, name .. " sourceRect height")
+            assert(rect.x ~= nil and rect.y ~= nil,
+                name .. " sourceRect needs x and y")
+            assert(rect.width and rect.width > 0
+                    and rect.height and rect.height > 0,
+                name .. " sourceRect width and height must be positive")
+            local asset = self:_asset(props.source)
+            if asset then
+                assert(rect.x + rect.width <= asset:getWidth()
+                        and rect.y + rect.height <= asset:getHeight(),
+                    name .. " sourceRect must stay inside its source asset")
+            end
+        end
         if name == "Icon" then
             assert(props.mirror == nil or type(props.mirror) == "boolean",
                 "Icon mirror must be a boolean")
@@ -761,6 +786,9 @@ local function snapshotHost(self)
         trace = deepCopy(self._messageTrace),
         messageSequence = self._messageSequence,
         spentAuthorities = deepCopy(self._spentAuthorities),
+        pendingActorUnmounts = shallowCopy(self._pendingActorUnmounts),
+        pendingActorUnmountLifetimes = shallowCopy(
+            self._pendingActorUnmountLifetimes),
         physicalWidth = self._viewport.physicalWidth,
         physicalHeight = self._viewport.physicalHeight,
     }
@@ -802,6 +830,8 @@ local function restoreHost(self, snapshot)
     self._messageTrace = snapshot.trace
     self._messageSequence = snapshot.messageSequence
     self._spentAuthorities = snapshot.spentAuthorities
+    self._pendingActorUnmounts = snapshot.pendingActorUnmounts
+    self._pendingActorUnmountLifetimes = snapshot.pendingActorUnmountLifetimes
 end
 
 local function assertPresentationAllowed(self, operation)
@@ -871,6 +901,8 @@ function host.new(options)
     self._pointerX, self._pointerY = 0, 0
     self._motionStartSequence = 0
     self._feedbackQueue = {}
+    self._pendingActorUnmounts = {}
+    self._pendingActorUnmountLifetimes = {}
     return self
 end
 
@@ -1270,6 +1302,7 @@ function host:render(root)
         error(candidate, 0)
     end
     local previous = {
+        actors = checkpoint.actors,
         modals = checkpoint.modals or {},
         modalIdentity = checkpoint.modal and checkpoint.modal.identity or nil,
         tree = checkpoint.tree,
@@ -1277,7 +1310,9 @@ function host:render(root)
         focusedIdentity = checkpoint.focusedIdentity,
         hoveredIdentity = checkpoint.interaction.hoveredIdentity,
     }
+    local commitFinished = false
     local function commit()
+        self:_stageActorUnmounts(previous.actors, context.actors)
         self._rootDescriptor = requested
         self._tree = candidate
         self._actors = context.actors
@@ -1300,6 +1335,7 @@ function host:render(root)
             self._selectedIdentity = nil
         end
         Interaction.afterCommit(self, previous)
+        commitFinished = true
     end
     local committed, commitError
     if self._callbackDepth == 0 then
@@ -1309,7 +1345,7 @@ function host:render(root)
         committed, commitError = pcall(commit)
     end
     if not committed then
-        restoreHost(self, checkpoint)
+        if not commitFinished then restoreHost(self, checkpoint) end
         error(commitError, 0)
     end
     if self._callbackDepth == 0 then self:_commitFeedback() end
@@ -1441,6 +1477,58 @@ local function orderedActors(actors)
     for _, instance in pairs(actors) do output[#output + 1] = instance end
     table.sort(output, function(left, right) return left.order < right.order end)
     return output
+end
+
+-- Defers actor cleanup until the surrounding render/message transaction has
+-- committed. Failed candidate trees therefore never dispose the live actor.
+function host:_stageActorUnmounts(previousActors, nextActors)
+    local retained = {}
+    for _, instance in pairs(nextActors or {}) do
+        retained[instance.lifetime] = true
+    end
+    for _, instance in ipairs(orderedActors(previousActors or {})) do
+        local cleanup = instance.token.definition.unmount
+        if cleanup and not retained[instance.lifetime]
+                and not self._pendingActorUnmountLifetimes[instance.lifetime] then
+            self._pendingActorUnmountLifetimes[instance.lifetime] = true
+            self._pendingActorUnmounts[#self._pendingActorUnmounts + 1] = {
+                callback = cleanup,
+                props = instance.props,
+                state = deepCopy(instance.state),
+                lifetime = instance.lifetime,
+                source = instance.source,
+                label = instance.token.name,
+            }
+        end
+    end
+end
+
+-- Runs every committed actor cleanup exactly once as a terminal authority
+-- boundary. All callbacks run even when one fails; the first error is surfaced.
+function host:_commitActorUnmounts()
+    if #self._pendingActorUnmounts == 0 then return nil end
+    local pending = self._pendingActorUnmounts
+    self._pendingActorUnmounts = {}
+    self._pendingActorUnmountLifetimes = {}
+    local previousDepth = self._callbackDepth
+    local previousOrigin = self._currentOrigin
+    local previousSource = self._currentOriginSource
+    self._callbackDepth = previousDepth + 1
+    self._authorityCallbackActive = true
+    self._authorityLabel = "Actor unmount"
+    local firstError
+    for _, entry in ipairs(pending) do
+        self._currentOrigin = entry.label .. ":unmount"
+        self._currentOriginSource = entry.source
+        local ok, err = pcall(entry.callback, entry.props, entry.state)
+        if not ok and not firstError then firstError = err end
+    end
+    self._authorityCallbackActive = nil
+    self._authorityLabel = nil
+    self._callbackDepth = previousDepth
+    self._currentOrigin = previousOrigin
+    self._currentOriginSource = previousSource
+    return firstError
 end
 
 local function orderedEventReceivers(actors, motions)
@@ -1681,7 +1769,11 @@ function host:_runCallback(callback, origin, originSource, ...)
         error(results[2], 0)
     end
     self._messageQueue = snapshot.queue
-    self:_commitFeedback()
+    local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
+    local cleanupError = self:_commitActorUnmounts()
+    if not feedbackOk or cleanupError then
+        error(not feedbackOk and feedbackError or cleanupError, 0)
+    end
     table.remove(results, 1)
     return unpack(results)
 end
@@ -1717,11 +1809,12 @@ function host:_runTerminalCallback(callback, origin, originSource, ...)
     self._currentOrigin = nil
     self._currentOriginSource = nil
     self._messageQueue = {}
-    if failure then
-        pcall(self.render, self)
-        error(failure, 0)
-    end
-    self:_commitFeedback()
+    if failure then pcall(self.render, self) end
+    local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
+    local cleanupError = self:_commitActorUnmounts()
+    failure = failure or (not feedbackOk and feedbackError or nil)
+        or cleanupError
+    if failure then error(failure, 0) end
     table.remove(results, 1)
     return unpack(results)
 end
@@ -1785,10 +1878,11 @@ function host:update(dt)
     local instances = Motion.snapshot(self._motions)
     local interactionState = Interaction.snapshot(self)
     local feedback = deepCopy(self._feedbackQueue)
+    local completions
     local ok, err = pcall(function()
         self._rawClock:advance(dt)
         Interaction.update(self, dt)
-        Motion.updateAll(self._motions, self)
+        _, completions = Motion.updateAll(self._motions, self)
         Motion.transformTree(self._tree)
     end)
     if not ok then
@@ -1800,7 +1894,19 @@ function host:update(dt)
         Motion.transformTree(self._tree)
         error(err, 0)
     end
-    self:_commitFeedback()
+    local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
+    local firstError = not feedbackOk and feedbackError or nil
+    for _, completion in ipairs(completions or {}) do
+        if self._mounted
+                and Motion.completionIsMounted(self._motions, completion) then
+            local delivered, deliveryError = pcall(
+                self._runTerminalCallback, self, completion.callback,
+                "juice:" .. completion.identity .. ":" .. completion.name,
+                completion.source)
+            if not delivered and not firstError then firstError = deliveryError end
+        end
+    end
+    if firstError then error(firstError, 0) end
 end
 
 function host:draw(customPainter)
@@ -1819,6 +1925,7 @@ function host:resize(width, height)
         error(candidate, 0)
     end
     local previous = {
+        actors = checkpoint.actors,
         modals = checkpoint.modals or {},
         modalIdentity = checkpoint.modal and checkpoint.modal.identity or nil,
         tree = checkpoint.tree,
@@ -1826,7 +1933,9 @@ function host:resize(width, height)
         focusedIdentity = checkpoint.focusedIdentity,
         hoveredIdentity = checkpoint.interaction.hoveredIdentity,
     }
+    local commitFinished = false
     local function commit()
+        self:_stageActorUnmounts(previous.actors, context.actors)
         self._tree = candidate
         self._actors = context.actors
         self._addresses = context.addresses
@@ -1844,6 +1953,7 @@ function host:resize(width, height)
         end
         Interaction.cancel(self, "resize")
         Interaction.afterCommit(self, previous)
+        commitFinished = true
     end
     local committed, commitError
     if self._callbackDepth == 0 then
@@ -1853,7 +1963,7 @@ function host:resize(width, height)
         committed, commitError = pcall(commit)
     end
     if not committed then
-        restoreHost(self, checkpoint)
+        if not commitFinished then restoreHost(self, checkpoint) end
         error(commitError, 0)
     end
     if self._callbackDepth == 0 then self:_commitFeedback() end
@@ -2049,6 +2159,7 @@ function host:unmount()
     assert(self._mounted, "Host is not mounted")
     assertPresentationAllowed(self, "unmount")
     Interaction.cancel(self, "unmount")
+    self:_stageActorUnmounts(self._actors, {})
     self._captures = {}
     self._pressedIdentity = nil
     self._hoveredIdentity = nil
@@ -2069,6 +2180,8 @@ function host:unmount()
     self._messageQueue = {}
     self._mounted = false
     if activeHost == self then activeHost = nil end
+    local cleanupError = self:_commitActorUnmounts()
+    if cleanupError then error(cleanupError, 0) end
 end
 
 function host:_fontSize(role)

@@ -171,6 +171,11 @@ projections, companion style files, or geometry files.
   they do not add per-frame update/draw functions for micro-interactions.
 - Use a typed element event reaction with `do_ = Frog.play("name")` for facts
   and `{ recipe = Recipe, key = semanticKey }` for prop-driven one-shots.
+- Use a named binding's `onComplete` only when the next semantic action must
+  wait for that recipe. Completion is terminal and one-shot; it is not a
+  substitute for ordinary actor actions, route state, or per-frame updates.
+  Infinite recipes cannot complete; binding restart, key replacement, and
+  unmount cancel the older completion generation.
 - Give commonly reused pulse, flash, shake, and entrance compositions a
   PascalCase recipe name near their visual owner. Do not add a framework tag
   for a composition that is already readable as `Frog.sequence`.
@@ -213,6 +218,10 @@ projections, companion style files, or geometry files.
   `modifiers`, and `requirements`; it must not mutate game state, draw RNG,
   advance simulation, or import Battle/Run command owners.
 - Application state belongs to its actor, not App/root props.
+- Declare actor `unmount(props, state)` only when that exact actor mount owns
+  an external capability that must be released. Cleanup validates its captured
+  identity, performs no FrogUI messaging/presentation, and remains safe after
+  the capability was already consumed normally.
 - Immutable route-issued catalogs/capabilities stay as screen props. Actor
   state stores semantic deltas such as consumed offer ids, exact receipts,
   feedback, and mode, then derives the remaining visible rows. Do not copy a

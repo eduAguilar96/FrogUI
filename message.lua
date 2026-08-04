@@ -264,8 +264,13 @@ function message.actor(name, definition)
     assert(definition.reactions == nil or type(definition.reactions) == "table",
         name .. " reactions must be an array")
     if definition.reactions then denseArray(definition.reactions, name .. " reactions") end
+    assert(definition.unmount == nil or type(definition.unmount) == "function",
+        name .. " unmount must be a function")
     assert(type(definition.render) == "function", name .. " render must be a function")
-    local allowed = { initial = true, actions = true, reactions = true, render = true }
+    local allowed = {
+        initial = true, actions = true, reactions = true,
+        unmount = true, render = true,
+    }
     for key in pairs(definition) do
         assert(allowed[key], "unknown " .. name .. " actor definition field " .. tostring(key))
     end

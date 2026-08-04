@@ -90,6 +90,8 @@ local function textSize(node, maxWidth, maxHeight, host)
 end
 
 local function imageSize(node, host)
+    local rect = node.props.sourceRect
+    if rect then return rect.width, rect.height end
     local image = host:_asset(node.props.source)
     if image and image.getWidth and image.getHeight then
         return image:getWidth(), image:getHeight()

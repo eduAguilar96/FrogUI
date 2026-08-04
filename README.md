@@ -90,6 +90,11 @@ the Host, so unknown props fail loudly.
 | `Frog.DragSource` | Own a plain payload, preview, and domain drop callback | exactly one |
 | `Frog.DropTarget` | Advertise one typed address to the deepest matching source | exactly one |
 
+`Image` and `Icon` accept an optional source-pixel
+`sourceRect = { x, y, width, height }`. The crop controls intrinsic size and
+`fit`, stays deterministic when an asset is unavailable, and must remain
+inside a loaded asset. This keeps sprite-sheet/cropped-art math declarative.
+
 `Overlay` is the important SpellCard primitive. Its first child is painted
 first (behind); later children paint on top. It is used for visual layers, not
 for application reuse or state.
@@ -179,9 +184,17 @@ like tags without adding a template language or compiler.
 ## State is a separate concept
 
 `Frog.component` is stateless. `Frog.actor` defines a stateful component with
-its initial state, accepted actions, reactions, and render function together.
+its initial state, accepted actions, reactions, render function, and optional
+mount cleanup together.
 Do not put menu state into a root component merely because the root can see the
 menu.
+
+An actor may declare `unmount(props, state)` when the actor itself owns an
+external capability that must be released if its exact mount leaves the
+committed tree. Cleanup runs once after a successful removal or Host teardown,
+never for a failed render, same-key rerender, or resize. It is a terminal
+domain boundary: use the actor's captured token and validate that it is still
+current; do not send FrogUI messages or change presentation from cleanup.
 
 The current public vocabulary is:
 
@@ -481,6 +494,15 @@ including its first mount; an ordinary rerender with the same key does not
 restart it. Recipes with the same name replace each other. Simultaneous names
 compose in stable start order: shake contributes x, y, and rotation additively;
 the later recipe owns a shared non-additive property.
+
+A binding may add `onComplete = function() ... end` for one terminal follow-up
+that inherently waits for the recipe, such as leaving a recovery screen after
+its heal beat. FrogUI spends the completion before invoking it, after the Host
+update commits. Replacing/restarting the binding or unmounting cancels the old
+generation—even if an earlier completion rerenders during the same update.
+Infinite recipes reject `onComplete`. Reduced motion settles immediately but
+defers completion until the next update so render remains pure. A failed
+callback is surfaced and never retried.
 
 Host raw time drives unbound recipes. `Frog.withClock(clock, recipe)` must wrap
 the entire named recipe and selects an explicit clock whose complete API is

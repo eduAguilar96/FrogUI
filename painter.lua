@@ -200,8 +200,9 @@ local function defaultText(host, node, style)
     stamp(0, 0)
 end
 
-local function imageGeometry(node, asset, fit)
-    local imageWidth, imageHeight = asset:getWidth(), asset:getHeight()
+local function imageGeometry(node, asset, fit, sourceRect)
+    local imageWidth = sourceRect and sourceRect.width or asset:getWidth()
+    local imageHeight = sourceRect and sourceRect.height or asset:getHeight()
     local scaleX, scaleY = node.width / imageWidth, node.height / imageHeight
     if fit == "contain" then
         local scale = math.min(scaleX, scaleY)
@@ -227,6 +228,25 @@ local function imageGeometry(node, asset, fit)
     }
 end
 
+local quadCache = setmetatable({}, { __mode = "k" })
+
+-- Caches source-pixel crops by image identity so drawing a stable component
+-- never allocates a new LÖVE Quad each frame.
+local function sourceQuad(asset, rect)
+    if not rect then return nil end
+    local key = table.concat({ rect.x, rect.y, rect.width, rect.height }, ":")
+    local cached = quadCache[asset]
+    if not cached then
+        cached = {}
+        quadCache[asset] = cached
+    end
+    if not cached[key] then
+        cached[key] = graphics().newQuad(rect.x, rect.y,
+            rect.width, rect.height, asset:getWidth(), asset:getHeight())
+    end
+    return cached[key]
+end
+
 local function missingAsset(node, style)
     local g = graphics()
     setColor(style.tint)
@@ -242,12 +262,18 @@ local function defaultImage(host, node, asset, style, clipState)
         missingAsset(node, style)
         return
     end
-    local geometry = imageGeometry(node, asset, style.fit)
+    local geometry = imageGeometry(node, asset, style.fit, style.sourceRect)
     setColor(style.tint)
     local shape = nodeShape(node, false)
     if style.fit == "cover" then beginClip(clipState, shape) end
-    g.draw(asset, geometry.x, geometry.y, 0,
-        geometry.scaleX, geometry.scaleY)
+    local quad = sourceQuad(asset, style.sourceRect)
+    if quad then
+        g.draw(asset, quad, geometry.x, geometry.y, 0,
+            geometry.scaleX, geometry.scaleY)
+    else
+        g.draw(asset, geometry.x, geometry.y, 0,
+            geometry.scaleX, geometry.scaleY)
+    end
     if style.fit == "cover" then endClip(clipState, shape) end
 end
 
@@ -277,13 +303,21 @@ local function defaultIcon(host, node, asset, style, clipState)
         missingAsset(node, style)
         return
     end
-    local geometry = imageGeometry(node, asset, style.fit)
+    local geometry = imageGeometry(node, asset, style.fit, style.sourceRect)
+    local quad = sourceQuad(asset, style.sourceRect)
     local scaleX = style.mirror and -geometry.scaleX or geometry.scaleX
     local function stamp(dx, dy)
-        g.draw(asset, geometry.centerX + (dx or 0),
-            geometry.centerY + (dy or 0), 0,
-            scaleX, geometry.scaleY,
-            geometry.imageWidth / 2, geometry.imageHeight / 2)
+        if quad then
+            g.draw(asset, quad, geometry.centerX + (dx or 0),
+                geometry.centerY + (dy or 0), 0,
+                scaleX, geometry.scaleY,
+                geometry.imageWidth / 2, geometry.imageHeight / 2)
+        else
+            g.draw(asset, geometry.centerX + (dx or 0),
+                geometry.centerY + (dy or 0), 0,
+                scaleX, geometry.scaleY,
+                geometry.imageWidth / 2, geometry.imageHeight / 2)
+        end
     end
 
     local shape = nodeShape(node, false)
@@ -360,6 +394,7 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             tint = faded(tinted(host:_color(node.props.tint, nil, { 1, 1, 1, 1 }),
                 style.tint), style.opacity),
             fit = node.props.fit or "contain",
+            sourceRect = node.props.sourceRect,
         }
         local asset = host:_asset(node.props.source)
         if custom then customCall(custom, "image", node, asset, imageStyle)
@@ -370,6 +405,7 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             tint = faded(tinted(host:_color(node.props.tint, nil, { 1, 1, 1, 1 }),
                 style.tint), style.opacity),
             fit = node.props.fit or "contain",
+            sourceRect = node.props.sourceRect,
             mirror = node.props.mirror == true,
             alphaMask = true,
             outline = outline and {

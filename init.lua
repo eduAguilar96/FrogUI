@@ -43,6 +43,19 @@ local Interaction = require("src.frogui.interaction")
 ---@class FrogUIJuiceBinding
 ---@field recipe table Declarative recipe returned by Frog.tween/spring/etc.
 ---@field key? string|number|boolean Replay identity; a changed key restarts it.
+--- Exactly-once terminal follow-up after a finite recipe settles and the Host
+--- update commits. Key replacement, restart, or unmount cancels stale work;
+--- reduced motion defers completion until the next update.
+---@field onComplete? fun()
+
+---@class FrogUIActorDefinition
+---@field initial any|fun(props:table):any Initial plain actor state.
+---@field actions? table Typed action reducers or scalar transition maps.
+---@field reactions? table[] Typed event reactions.
+--- Exactly-once terminal cleanup with final props/state after this actor mount
+--- leaves the committed tree. It cannot message, render, or route input.
+---@field unmount? fun(props:table,state:any)
+---@field render fun(props:table,state:any,send:fun(record:table)):FrogUIElementDescription?
 
 ---@class FrogUIElementDescription
 ---@field __frogDescriptor true
@@ -129,8 +142,16 @@ local Interaction = require("src.frogui.interaction")
 ---@alias FrogUIAssetSource string|userdata|table
 ---An application asset token or image-like object with width/height methods.
 
+---@class FrogUIImageSourceRect
+---@field x number Left source pixel; must be inside the source asset.
+---@field y number Top source pixel; must be inside the source asset.
+---@field width number Positive source-pixel width.
+---@field height number Positive source-pixel height.
+
 ---@class FrogImageProps:FrogUIElementProps
 ---@field source FrogUIAssetSource Required authored image source.
+--- Optional source-pixel crop; sizing and fit use the cropped dimensions.
+---@field sourceRect? FrogUIImageSourceRect
 ---@field fit? FrogUIImageFit Sizing policy; defaults to `contain`.
 ---@field tint? FrogUIColor Optional multiplicative tint.
 
@@ -140,6 +161,8 @@ local Interaction = require("src.frogui.interaction")
 
 ---@class FrogIconProps:FrogUIElementProps
 ---@field source FrogUIAssetSource Required alpha-silhouette source.
+--- Optional source-pixel crop; sizing and fit use the cropped dimensions.
+---@field sourceRect? FrogUIImageSourceRect
 ---@field fit? FrogUIImageFit Sizing policy; defaults to `contain`.
 ---@field tint? FrogUIColor Recolors from the source alpha.
 ---@field mirror? boolean Mirror horizontally.
@@ -348,6 +371,14 @@ Frog.DropTarget = Element.primitive("DropTarget")
 -- other components. See src/frogui/README.md for the complete reading model.
 Frog.component = Element.component
 Frog.each = Element.each
+--- Defines one state owner with typed actions, reactions, and visible output.
+---
+--- Optional `unmount(props, state)` runs exactly once after this mounted actor
+--- leaves a committed tree, using that mount's final props and state. It is a
+--- terminal domain-cleanup boundary: it may not send messages, rerender, or
+--- route input. Failed candidate renders, retained keys, and resize do not
+--- clean up the live mount.
+---@type fun(name:string, definition:FrogUIActorDefinition):table
 Frog.actor = Message.actor
 Frog.action = Message.action
 Frog.event = Message.event

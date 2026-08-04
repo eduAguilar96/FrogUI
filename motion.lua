@@ -284,6 +284,7 @@ local function cloneRunner(runner)
         base = copyValues(runner.base),
         order = runner.order,
         clockKind = runner.clockKind,
+        bindingKey = runner.bindingKey,
     }
 end
 
@@ -304,12 +305,28 @@ local function cloneInstance(old)
         active = {},
         motionTargets = {},
         node = old.node,
+        lifetime = old.lifetime,
+        pendingCompletions = {},
+        latestStarts = {},
     }
     for name, binding in pairs(old.recipes) do
-        instance.recipes[name] = { recipe = binding.recipe, key = binding.key }
+        instance.recipes[name] = {
+            recipe = binding.recipe,
+            key = binding.key,
+            onComplete = binding.onComplete,
+        }
     end
     for name, key in pairs(old.bindingKeys) do instance.bindingKeys[name] = key end
     for name, runner in pairs(old.active) do instance.active[name] = cloneRunner(runner) end
+    for name, pending in pairs(old.pendingCompletions or {}) do
+        instance.pendingCompletions[name] = {
+            key = pending.key,
+            order = pending.order,
+        }
+    end
+    for name, order in pairs(old.latestStarts or {}) do
+        instance.latestStarts[name] = order
+    end
     for name, value in pairs(old.motionTargets) do
         instance.motionTargets[name] = name == "tint" and copyColor(value) or value
     end
@@ -338,18 +355,28 @@ local function parseBinding(name, value)
         return { recipe = snapshot }
     end
     assert(type(value) == "table" and Juice.isRecipe(value.recipe),
-        "juice." .. tostring(name) .. " must be a recipe or { recipe, key }")
+        "juice." .. tostring(name)
+            .. " must be a recipe or { recipe, key, onComplete }")
     for key in pairs(value) do
-        assert(key == "recipe" or key == "key",
+        assert(key == "recipe" or key == "key" or key == "onComplete",
             "juice." .. tostring(name) .. " has unknown field " .. tostring(key))
     end
     assert(value.key == nil or type(value.key) == "string"
             or type(value.key) == "number" or type(value.key) == "boolean",
         "juice." .. tostring(name) .. " key must be a scalar")
+    assert(value.onComplete == nil or type(value.onComplete) == "function",
+        "juice." .. tostring(name) .. " onComplete must be a function")
     local snapshot = Juice.snapshot(value.recipe)
     validateClockPlacement(snapshot, true)
-    duration(snapshot)
-    return { recipe = snapshot, key = value.key }
+    local recipeDuration = duration(snapshot)
+    assert(value.onComplete == nil or recipeDuration < math.huge,
+        "juice." .. tostring(name)
+            .. " cannot complete an infinite recipe")
+    return {
+        recipe = snapshot,
+        key = value.key,
+        onComplete = value.onComplete,
+    }
 end
 
 local function validatedSpring(value, label)
@@ -391,7 +418,10 @@ local function start(instance, name, host)
         base = copyValues(instance.values),
         order = host:_nextMotionOrder(),
         clockKind = binding.recipe.kind == "with_clock" and "explicit" or "raw",
+        bindingKey = binding.key,
     }
+    instance.latestStarts[name] = runner.order
+    instance.pendingCompletions[name] = nil
     if host.reducedMotion then
         emitAllFeedback(recipe, host)
         local result = finalValues(recipe, runner.base)
@@ -399,6 +429,12 @@ local function start(instance, name, host)
             if mode ~= "add" then setValue(instance.settled, property, result[property]) end
         end
         instance.values = copyValues(instance.settled)
+        if binding.onComplete then
+            instance.pendingCompletions[name] = {
+                key = binding.key,
+                order = runner.order,
+            }
+        end
         return
     end
     emitFeedback(recipe, runner.previous, 0, host)
@@ -477,6 +513,7 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host)
         values = copyValues(),
         settled = copyValues(),
         recipes = {}, bindingKeys = {}, active = {}, motionTargets = {},
+        lifetime = {}, pendingCompletions = {}, latestStarts = {},
     }
     instance.identity = logicalIdentity
     instance.order = order
@@ -505,6 +542,8 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host)
         if not nextRecipes[name] and name:sub(1, 8) ~= "$motion:" then
             instance.active[name] = nil
             instance.bindingKeys[name] = nil
+            instance.pendingCompletions[name] = nil
+            instance.latestStarts[name] = nil
         end
     end
     for _, name in ipairs(sortedKeys(nextRecipes)) do
@@ -579,6 +618,7 @@ end
 -- recipes own properties they share with earlier recipes.
 function motion.updateAll(instances, host)
     local changed = false
+    local completions = {}
     local orderedInstances = {}
     for _, instance in pairs(instances) do
         orderedInstances[#orderedInstances + 1] = instance
@@ -587,6 +627,22 @@ function motion.updateAll(instances, host)
         return left.eventOrder < right.eventOrder
     end)
     for _, instance in ipairs(orderedInstances) do
+        for name, pending in pairs(instance.pendingCompletions or {}) do
+            local binding = instance.recipes[name]
+            if binding and binding.onComplete
+                    and binding.key == pending.key then
+                completions[#completions + 1] = {
+                    callback = binding.onComplete,
+                    identity = instance.identity,
+                    lifetime = instance.lifetime,
+                    name = name,
+                    key = pending.key,
+                    order = pending.order,
+                    source = instance.source,
+                }
+            end
+            instance.pendingCompletions[name] = nil
+        end
         local ordered = {}
         for name, runner in pairs(instance.active) do
             ordered[#ordered + 1] = { name = name, runner = runner }
@@ -613,11 +669,40 @@ function motion.updateAll(instances, host)
                 end
             end
             instance.active[entry.name] = nil
+            local binding = instance.recipes[entry.name]
+            if binding and binding.onComplete
+                    and binding.key == runner.bindingKey then
+                completions[#completions + 1] = {
+                    callback = binding.onComplete,
+                    identity = instance.identity,
+                    lifetime = instance.lifetime,
+                    name = entry.name,
+                    key = runner.bindingKey,
+                    order = runner.order,
+                    source = instance.source,
+                }
+            end
         end
         instance.values = values
         if instance.node then instance.node.presentation = copyValues(instance.values) end
     end
-    return changed
+    table.sort(completions, function(left, right)
+        if left.order ~= right.order then return left.order < right.order end
+        if left.identity ~= right.identity then return left.identity < right.identity end
+        return left.name < right.name
+    end)
+    return changed, completions
+end
+
+-- Confirms that a completed recipe still belongs to the same mounted element
+-- before its terminal callback is delivered.
+function motion.completionIsMounted(instances, completion)
+    local instance = instances and instances[completion.identity]
+    if not instance or instance.lifetime ~= completion.lifetime then return false end
+    local binding = instance.recipes[completion.name]
+    return binding ~= nil
+        and binding.key == completion.key
+        and instance.latestStarts[completion.name] == completion.order
 end
 
 
