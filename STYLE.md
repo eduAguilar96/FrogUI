@@ -128,6 +128,11 @@ projections, companion style files, or geometry files.
   immediately obvious.
 - Conditional children may use `condition and Child { ... }`; FrogUI ignores
   `false` and `nil` children.
+- Lua forwards every return value from a final function call. When one value is
+  intended inside a child table or another call, assign it to a named local or
+  parenthesize it. For example, write `(name:gsub(...))` in `Frog.Text` and do
+  not pass `assert(value, message)` directly as another function's last
+  argument; both functions return more than one value.
 - Key every reordered or generated child by stable domain identity.
 - Keep semantic colors/fonts/assets in the presentation theme and
   component-specific geometry beside the component.

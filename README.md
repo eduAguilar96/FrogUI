@@ -419,6 +419,7 @@ Some visual noise is Lua rather than FrogUI:
 | `#items` | array length |
 | `ipairs(items)` | ordered array iteration |
 | `pairs(map)` | unordered key/value iteration |
+| final `someFunction()` in a table/call | Lua may forward multiple return values; parenthesize or assign a local when exactly one is intended |
 | `local function Name(...)` | private render helper visible only in this file |
 | `local function name(...)` | private data/behavior helper visible only in this file |
 
