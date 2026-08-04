@@ -236,7 +236,10 @@ atomic domain operation and returns its result. FrogUI ends capture before the
 call, forbids messages and Host mutation inside it, then delivers
 `onDragEnd`/`DragEnded`; later UI failure can never retry or claim to roll back
 the domain operation. A Modal is likewise a real root portal: ancestor Motion
-and Scroll do not move or clip it, and covered input is consumed.
+and Scroll do not move or clip it, and covered input is consumed. Several
+independent Modals may compose in one tree. They paint in source order; only
+the last portal receives pointer, wheel, keyboard, or text input. Closing it
+restores the previous layer's keyboard focus before the base tree is exposed.
 
 An ordinary `Button.onPress` is reversible UI work. Use the explicit
 `onCommit`/`onResult` pair only when one press crosses an irreversible domain
@@ -575,7 +578,9 @@ and follow helpers only as needed.
 ## Development loop
 
 Run `love . --frogui gallery`. F6 shows the resolved component/primitive tree.
-F7 cycles viewport sizes. Saving the presentation theme, gallery card story, or
-any existing component in `src/presentation/spell_card/` reloads it; F5 forces
-that scoped set. A bad reload keeps the last good tree. Stateful actor modules
-and framework core require a restart.
+F7 cycles viewport sizes. Saving the presentation theme, gallery/card story,
+or a static component under `src/presentation/spell_card/`, `spellbook/`, or
+`relic/` reloads it; F5 forces that scoped set. This includes the ordinary
+`SpellbookOverlay` and shared bag surface, but not the stateful Spellbook actor.
+A bad reload keeps the last good tree. Stateful actor modules and framework
+core require a restart.

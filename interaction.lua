@@ -371,7 +371,7 @@ local function claimGesture(host, session, dx, dy)
 end
 
 function interaction.pointerDown(host, x, y, pointerId, button)
-    if button ~= nil and button ~= 1 then return false end
+    if button ~= nil and button ~= 1 then return host._modal ~= nil end
     host._pointerX, host._pointerY = x, y
     if host._interactionSession then return true end
     local modal = host._modal
@@ -438,7 +438,7 @@ function interaction.pointerMove(host, x, y, pointerId)
     local session = host._interactionSession
     if not session then
         setHover(host, hoverNode(host, x, y), pointerId)
-        return false
+        return host._modal ~= nil
     end
     if session.pointerId ~= pointerId then return true end
     session.x, session.y = x, y
@@ -475,10 +475,10 @@ local function modalDismisses(modal, way)
 end
 
 function interaction.pointerUp(host, x, y, pointerId, button)
-    if button ~= nil and button ~= 1 then return false end
+    if button ~= nil and button ~= 1 then return host._modal ~= nil end
     host._pointerX, host._pointerY = x, y
     local session = host._interactionSession
-    if not session then return false end
+    if not session then return host._modal ~= nil end
     if session.pointerId ~= pointerId then return true end
     if session.kind == "modal-outside" then
         local modal = host._modal
@@ -691,12 +691,12 @@ function interaction.activeRoot(host)
     return activeRoot(host)
 end
 
-function interaction.modalFromTree(root)
-    local found
+-- Collects root portals in authored source order; the last one is interactive.
+function interaction.modalsFromTree(root)
+    local found = {}
     local function walk(node)
         if node.type == "Modal" then
-            assert(not found, "FrogUI M4 permits one active Modal")
-            found = node
+            found[#found + 1] = node
         end
         for _, child in ipairs(node.children or {}) do walk(child) end
     end
@@ -732,6 +732,13 @@ function interaction.inspect(host)
         } or nil,
         scrolls = scrolls,
         modal = host._modal and host._modal.identity or nil,
+        modals = (function()
+            local out = {}
+            for index, modal in ipairs(host._modals or {}) do
+                out[index] = modal.identity
+            end
+            return out
+        end)(),
     }
 end
 

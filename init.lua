@@ -323,7 +323,9 @@ Frog.Scroll = Element.primitive("Scroll")
 --- Root-hosts one focus/input-isolated surface above the application tree.
 ---
 --- `dismiss` is `back`, `outside`, `both`, or `none`; `dismissSound` overrides
---- the semantic theme cue for either keyboard or pointer dismissal.
+--- the semantic theme cue for either keyboard or pointer dismissal. Multiple
+--- Modals paint in source order; only the last receives input, and closing it
+--- restores focus to the previous layer.
 ---@type fun(input:FrogModalProps):FrogUIElementDescription
 Frog.Modal = Element.primitive("Modal")
 

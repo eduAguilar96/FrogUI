@@ -314,8 +314,8 @@ local function customCall(custom, method, ...)
 end
 
 local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
-        clipState, portal)
-    if node._portal and not portal then return end
+        clipState, portalRoot)
+    if node._portal and node ~= portalRoot then return end
     local session = host._interactionSession
     if session and session.claimed == "drag"
             and node.identity == session.sourceIdentity then return end
@@ -388,7 +388,8 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
     local contentShape = nodeShape(node, true)
     if clipped and not custom and g then beginClip(clipState, contentShape) end
     for _, child in ipairs(node.children) do
-        drawNode(host, child, custom, style.opacity, style.tint, clipState, portal)
+        drawNode(host, child, custom, style.opacity, style.tint,
+            clipState, portalRoot)
     end
     if clipped and not custom and g then endClip(clipState, contentShape) end
     if node.type == "Scroll" and node.props.bar and node._scroll
@@ -540,7 +541,10 @@ local function defaultInteraction(host, state)
             tostring(session.claimed or "pending"), session.distance or 0,
             tostring(session.payloadKind or session.press or "pointer"))
     end
-    if state.modal then lines[#lines + 1] = "modal " .. state.modal end
+    if state.modal then
+        lines[#lines + 1] = ("modal top %s (%d deep)"):format(
+            state.modal, #(state.modals or {}))
+    end
     for _, scroll in ipairs(state.scrolls or {}) do
         lines[#lines + 1] = ("scroll %s %.1f/%.1f"):format(
             scroll.axis, scroll.offset, scroll.extent)
@@ -568,9 +572,9 @@ function painter.draw(host, custom)
     end
     drawNode(host, host._tree, custom, nil, nil,
         not custom and { depth = 0 } or nil)
-    if host._modal then
-        drawNode(host, host._modal, custom, nil, nil,
-            not custom and { depth = 0 } or nil, true)
+    for _, modal in ipairs(host._modals or {}) do
+        drawNode(host, modal, custom, nil, nil,
+            not custom and { depth = 0 } or nil, modal)
     end
     local session = host._interactionSession
     local preview = session and session.claimed == "drag"
@@ -583,7 +587,7 @@ function painter.draw(host, custom)
                 session.y - preview.height / 2)
         end
         drawNode(host, preview, custom, nil, nil,
-            not custom and { depth = 0 } or nil, true)
+            not custom and { depth = 0 } or nil, preview)
         if not custom and g then g.pop() end
     end
     if host._inspectorVisible then

@@ -693,21 +693,45 @@ local function collectButtons(node, output, spent)
     end
 end
 
-local function reconcileModalFocus(self, oldModalIdentity)
-    local newModalIdentity = self._modal and self._modal.identity or nil
-    if not oldModalIdentity and newModalIdentity then
-        self._modalReturnFocus = self._focusedIdentity
-        if self._focusedIdentity
-                and not findIdentity(self._modal, self._focusedIdentity) then
-            self._focusedIdentity = nil
-        end
-    elseif oldModalIdentity and not newModalIdentity then
-        local previous = self._modalReturnFocus
-        self._modalReturnFocus = nil
-        if previous and findIdentity(self._tree, previous) then
-            self._focusedIdentity = previous
-        end
+-- Saves and restores keyboard focus once per source-ordered modal layer.
+local function reconcileModalFocus(self, oldModals, oldFocusedIdentity)
+    oldModals = oldModals or {}
+    local newModals = self._modals or {}
+    local oldFrames = self._modalFocusStack or {}
+    local baseFocus = oldFocusedIdentity
+    if #oldModals > 0 then
+        baseFocus = oldFrames[1] and oldFrames[1].returnFocus or nil
     end
+
+    -- A covered layer's last focus is stored by the frame immediately above
+    -- it. Preserve that knowledge by semantic portal identity even when a
+    -- sibling Modal is inserted or removed below the still-active top plane.
+    local layerFocus = {}
+    for index, modal in ipairs(oldModals) do
+        local above = oldFrames[index + 1]
+        layerFocus[modal.identity] = above and above.returnFocus
+            or (index == #oldModals and oldFocusedIdentity or nil)
+    end
+
+    local frames = {}
+    for index, modal in ipairs(newModals) do
+        local lowerFocus = baseFocus
+        if index > 1 then
+            lowerFocus = layerFocus[newModals[index - 1].identity]
+        end
+        frames[index] = {
+            identity = modal.identity,
+            returnFocus = lowerFocus,
+        }
+    end
+
+    self._modalFocusStack = frames
+    local inputRoot = self._modal or self._tree
+    local top = newModals[#newModals]
+    local focus = baseFocus
+    if top then focus = layerFocus[top.identity] end
+    self._focusedIdentity = focus and findIdentity(inputRoot, focus)
+        and focus or nil
 end
 
 -- Captures every Host-owned value that render/input callbacks may change.
@@ -721,8 +745,9 @@ local function snapshotHost(self)
         addresses = self._addresses,
         semanticTokens = self._semanticTokens,
         motions = Motion.snapshot(self._motions),
+        modals = self._modals,
         modal = self._modal,
-        modalReturnFocus = self._modalReturnFocus,
+        modalFocusStack = deepCopy(self._modalFocusStack),
         focusedIdentity = self._focusedIdentity,
         selectedIdentity = self._selectedIdentity,
         inspectorVisible = self._inspectorVisible,
@@ -757,8 +782,9 @@ local function restoreHost(self, snapshot)
     self._addresses = snapshot.addresses
     self._semanticTokens = snapshot.semanticTokens
     self._motions = snapshot.motions
+    self._modals = snapshot.modals
     self._modal = snapshot.modal
-    self._modalReturnFocus = snapshot.modalReturnFocus
+    self._modalFocusStack = snapshot.modalFocusStack
     self._focusedIdentity = snapshot.focusedIdentity
     self._selectedIdentity = snapshot.selectedIdentity
     self._inspectorVisible = snapshot.inspectorVisible
@@ -839,8 +865,9 @@ function host.new(options)
     self._motions = {}
     self._scrolls = {}
     self._interactionSession = nil
+    self._modals = {}
     self._modal = nil
-    self._modalReturnFocus = nil
+    self._modalFocusStack = {}
     self._pointerX, self._pointerY = 0, 0
     self._motionStartSequence = 0
     self._feedbackQueue = {}
@@ -896,7 +923,9 @@ function host:mount(root)
     self._semanticTokens = context.semanticTokens
     self._motions = context.motions
     self._scrolls = context.scrolls
+    self._modals = context.modals
     self._modal = context.modal
+    reconcileModalFocus(self, {}, nil)
     self._generation = self._generation + 1
     self:_commitFeedback()
     return candidate
@@ -1224,7 +1253,8 @@ function host:_build(root)
     candidate = Layout.run(candidate,
         self._viewport.width, self._viewport.height, self)
     Motion.transformTree(candidate)
-    context.modal = Interaction.modalFromTree(candidate)
+    context.modals = Interaction.modalsFromTree(candidate)
+    context.modal = context.modals[#context.modals]
     return candidate, context
 end
 
@@ -1240,9 +1270,11 @@ function host:render(root)
         error(candidate, 0)
     end
     local previous = {
+        modals = checkpoint.modals or {},
         modalIdentity = checkpoint.modal and checkpoint.modal.identity or nil,
         tree = checkpoint.tree,
         modal = checkpoint.modal,
+        focusedIdentity = checkpoint.focusedIdentity,
         hoveredIdentity = checkpoint.interaction.hoveredIdentity,
     }
     local function commit()
@@ -1253,6 +1285,7 @@ function host:render(root)
         self._semanticTokens = context.semanticTokens
         self._motions = context.motions
         self._scrolls = context.scrolls
+        self._modals = context.modals
         self._modal = context.modal
         self._generation = self._generation + 1
         for identity in pairs(self._spentAuthorities) do
@@ -1260,17 +1293,12 @@ function host:render(root)
                 self._spentAuthorities[identity] = nil
             end
         end
-        if self._focusedIdentity
-                and not findIdentity(Interaction.activeRoot(self),
-                    self._focusedIdentity) then
-            self._focusedIdentity = nil
-        end
+        reconcileModalFocus(self, previous.modals, previous.focusedIdentity)
         if self._selectedIdentity
                 and not findIdentity(Interaction.activeRoot(self),
                     self._selectedIdentity) then
             self._selectedIdentity = nil
         end
-        reconcileModalFocus(self, previous.modalIdentity)
         Interaction.afterCommit(self, previous)
     end
     local committed, commitError
@@ -1791,9 +1819,11 @@ function host:resize(width, height)
         error(candidate, 0)
     end
     local previous = {
+        modals = checkpoint.modals or {},
         modalIdentity = checkpoint.modal and checkpoint.modal.identity or nil,
         tree = checkpoint.tree,
         modal = checkpoint.modal,
+        focusedIdentity = checkpoint.focusedIdentity,
         hoveredIdentity = checkpoint.interaction.hoveredIdentity,
     }
     local function commit()
@@ -1803,19 +1833,15 @@ function host:resize(width, height)
         self._semanticTokens = context.semanticTokens
         self._motions = context.motions
         self._scrolls = context.scrolls
+        self._modals = context.modals
         self._modal = context.modal
         self._generation = self._generation + 1
-        if self._focusedIdentity
-                and not findIdentity(Interaction.activeRoot(self),
-                    self._focusedIdentity) then
-            self._focusedIdentity = nil
-        end
+        reconcileModalFocus(self, previous.modals, previous.focusedIdentity)
         if self._selectedIdentity
                 and not findIdentity(Interaction.activeRoot(self),
                     self._selectedIdentity) then
             self._selectedIdentity = nil
         end
-        reconcileModalFocus(self, previous.modalIdentity)
         Interaction.cancel(self, "resize")
         Interaction.afterCommit(self, previous)
     end
@@ -2035,8 +2061,9 @@ function host:unmount()
     self._semanticTokens = {}
     self._motions = {}
     self._scrolls = {}
+    self._modals = {}
     self._modal = nil
-    self._modalReturnFocus = nil
+    self._modalFocusStack = {}
     self._feedbackQueue = {}
     self._rawClock:reset()
     self._messageQueue = {}

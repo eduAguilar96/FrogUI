@@ -197,6 +197,10 @@ projections, companion style files, or geometry files.
   `src/presentation/spell_card/`.
 - A single-file owner stays a single file; do not create an otherwise empty
   folder for symmetry.
+- When two presentations share a substantive visible subtree, give that
+  subtree one directly named component and let each shell own only placement.
+  The room drawer and ordinary modal both compose `SpellbookBag`; neither
+  carries a private copy of its cards, relic rail, targets, or scrolling.
 - SpellCard receives the cooked instance from `src.game.cards`. Its family may
   call the pure read-only display queries in `src.game.actions`, `affinities`,
   `modifiers`, and `requirements`; it must not mutate game state, draw RNG,
