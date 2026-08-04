@@ -180,6 +180,15 @@ projections, companion style files, or geometry files.
   layout footprint; scaling must not be used to negotiate sibling geometry.
 - Removing a prop-driven Motion target restores its neutral presentation;
   do not preserve layout or semantic state in an animation runner.
+- Components declare semantic sound ids, never asset paths or `love.audio`
+  calls. Keep generic Button/hover/drag/dismiss behavior inherited from
+  `theme.sounds`; override a primitive only when the action has a more precise
+  meaning.
+- State/event sounds use keyed or reaction-triggered `Frog.sound` recipes.
+  Do not call the application audio provider inside actor actions, render
+  functions, or domain callbacks.
+- A new cue updates the provider catalog, its component owner, the code-reading
+  guide, and a focused semantic-cue regression in the same change.
 
 ## 8. Component and folder ownership
 

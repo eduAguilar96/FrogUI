@@ -25,6 +25,8 @@ local Interaction = require("src.frogui.interaction")
 ---@alias FrogUIModalDismiss 'back'|'outside'|'both'|'none'
 ---@alias FrogUIButtonResultStatus 'committed'|'rejected'
 ---@alias FrogUIDragStatus 'committed'|'rejected'|'cancelled'
+---@alias FrogUISoundCue string|false
+---A semantic cue id, or `false` to disable that primitive's default sound.
 
 ---@class FrogUIOffset
 ---@field x? number Horizontal logical-pixel offset applied after layout.
@@ -164,6 +166,9 @@ local Interaction = require("src.frogui.interaction")
 ---@field onHoverChange? fun(hovered:boolean) Mouse enter/leave callback.
 ---@field onCommit? fun():boolean, any One irreversible domain call.
 ---@field onResult? fun(status:FrogUIButtonResultStatus, detail:any)
+---@field sound? FrogUISoundCue Activation/commit cue; defaults to theme `activate`.
+---@field rejectSound? FrogUISoundCue Rejected-commit cue; defaults to theme `reject`.
+---@field hoverSound? FrogUISoundCue Mouse-entry cue; defaults to theme `hover`.
 ---@field disabled? boolean Disable focus and activation.
 ---@field selected? boolean Paint the retained selected/toggled state.
 ---@field shortcut? string|string[] Keyboard shortcut or ordered alternatives.
@@ -197,6 +202,8 @@ local Interaction = require("src.frogui.interaction")
 ---@field onPress? fun() Pointer tap callback.
 ---@field onLongPress? fun() Pointer hold callback after the Host threshold.
 ---@field onHoverChange? fun(hovered:boolean) Mouse enter/leave callback.
+---@field sound? FrogUISoundCue Tap/hold cue; defaults to theme `activate`.
+---@field hoverSound? FrogUISoundCue Mouse-entry cue; defaults to theme `hover`.
 ---@field [integer] FrogUIElementDescription Exactly one child.
 
 ---@class FrogScrollProps:FrogUIElementProps
@@ -207,6 +214,7 @@ local Interaction = require("src.frogui.interaction")
 ---@class FrogModalProps:FrogUIBaseProps
 ---@field dismiss? FrogUIModalDismiss Defaults to `back`.
 ---@field onDismiss? fun() Required unless dismiss is `none`.
+---@field dismissSound? FrogUISoundCue Dismiss cue; defaults to theme `dismiss`.
 ---@field padding? FrogUIPadding
 ---@field background? FrogUIColor Root-plane background/scrim.
 ---@field align? FrogUIAlign Horizontal placement of the modal child.
@@ -226,6 +234,9 @@ local Interaction = require("src.frogui.interaction")
 ---@field onDrop fun(payload:FrogDragPayload, target:FrogDropMatch):boolean, any
 ---@field onDragStart? fun(payload:FrogDragPayload)
 ---@field onDragEnd? fun(status:FrogUIDragStatus, detail:any)
+---@field grabSound? FrogUISoundCue Drag-claim cue; defaults to theme `dragGrab`.
+---@field dropSound? FrogUISoundCue Committed-drop cue; defaults to theme `dragDrop`.
+---@field rejectSound? FrogUISoundCue Rejected-drop cue; defaults to theme `reject`.
 ---@field [integer] FrogUIElementDescription Exactly one visible source child.
 
 ---@class FrogDropTargetProps:FrogUIElementProps
@@ -285,6 +296,8 @@ Frog.Icon = Element.primitive("Icon")
 ---
 --- `align` moves its child horizontally; `justify` moves it vertically. Mouse
 --- hover, pointer press, and keyboard focus each have explicit paint tokens.
+--- `sound`, `rejectSound`, and `hoverSound` override semantic theme defaults;
+--- pass `false` to silence one interaction without changing its behavior.
 ---@type fun(input?: FrogButtonProps):FrogUIElementDescription
 Frog.Button = Element.primitive("Button")
 
@@ -296,7 +309,8 @@ Frog.Motion = Element.primitive("Motion")
 
 --- Adds pointer tap, hold, and mouse-hover behavior to exactly one child.
 ---
---- Supply at least one callback; keyboard-visible actions use Button.
+--- Supply at least one callback; keyboard-visible actions use Button. Sound
+--- overrides follow Button and accept `false` to suppress a theme default.
 ---@type fun(input:FrogPressableProps):FrogUIElementDescription
 Frog.Pressable = Element.primitive("Pressable")
 
@@ -308,13 +322,15 @@ Frog.Scroll = Element.primitive("Scroll")
 
 --- Root-hosts one focus/input-isolated surface above the application tree.
 ---
---- `dismiss` is `back`, `outside`, `both`, or `none`.
+--- `dismiss` is `back`, `outside`, `both`, or `none`; `dismissSound` overrides
+--- the semantic theme cue for either keyboard or pointer dismissal.
 ---@type fun(input:FrogModalProps):FrogUIElementDescription
 Frog.Modal = Element.primitive("Modal")
 
 --- Owns a typed drag payload, static preview, and one domain drop callback.
 ---
---- The Host supplies the deepest matching DropTarget to `onDrop`.
+--- The Host supplies the deepest matching DropTarget to `onDrop`. Grab,
+--- committed-drop, and rejected-drop sounds have separate semantic overrides.
 ---@type fun(input:FrogDragSourceProps):FrogUIElementDescription
 Frog.DragSource = Element.primitive("DragSource")
 

@@ -212,6 +212,18 @@ local function hoverNode(host, x, y)
         end)
 end
 
+-- Resolves a primitive cue override against the application theme defaults.
+local function soundCue(host, override, defaultKey)
+    if override == false then return nil end
+    return override or (host.theme.sounds or {})[defaultKey]
+end
+
+-- Stages sound with the surrounding Host transaction when one is declared.
+local function stageSound(host, override, defaultKey)
+    local cue = soundCue(host, override, defaultKey)
+    if cue then host:_stageFeedback("sound", cue) end
+end
+
 local function setHover(host, nextNode, pointerId)
     if pointerId ~= "mouse" then nextNode = nil end
     local previousIdentity = host._hoveredIdentity
@@ -224,10 +236,13 @@ local function setHover(host, nextNode, pointerId)
     local nextCallback = nextNode
         and (nextNode.type == "Pressable" or nextNode.type == "Button")
         and nextNode.props.onHoverChange or nil
-    if previousCallback or nextCallback then
+    local nextSound = nextNode and soundCue(
+        host, nextNode.props.hoverSound, "hover") or nil
+    if previousCallback or nextCallback or nextSound then
         host:_runCallback(function()
             host._hoveredIdentity = nextIdentity
             if previousCallback then previousCallback(false) end
+            if nextSound then host:_stageFeedback("sound", nextSound) end
             if nextCallback then nextCallback(true) end
         end, "FrogUI:hover", nextNode and nextNode.source or nil)
     else
@@ -245,6 +260,11 @@ local function notifyDragEnd(host, session, status, safeDetail, terminal)
             host._interactionSession = nil
             host._pressedIdentity = nil
             session.ended = true
+        end
+        if status == "committed" then
+            stageSound(host, session.source.props.dropSound, "dragDrop")
+        elseif status == "rejected" then
+            stageSound(host, session.source.props.rejectSound, "reject")
         end
         if session.onDragEnd then session.onDragEnd(status, safeDetail) end
         enqueueEvent(host, DragEnded {
@@ -308,6 +328,7 @@ local function beginDrag(host, session)
         session.source = findIdentity(activeRoot(host), session.sourceIdentity)
             or session.source
         host._pressedIdentity = nil
+        stageSound(host, session.source.props.grabSound, "dragGrab")
         if session.onDragStart then
             session.onDragStart(snapshotPlain(session.payload, "drag payload"))
         end
@@ -465,6 +486,7 @@ function interaction.pointerUp(host, x, y, pointerId, button)
                 and modalDismisses(modal, "outside") then
             local ok, err = pcall(host._runCallback, host, function()
                 host._interactionSession = nil
+                stageSound(host, modal.props.dismissSound, "dismiss")
                 modal.props.onDismiss()
             end, "Modal:outside", modal.source)
             if not ok then
@@ -500,6 +522,7 @@ function interaction.pointerUp(host, x, y, pointerId, button)
                 ok, err = pcall(host._activateButton, host, pressed)
             else
                 ok, err = pcall(host._runCallback, host, function()
+                    stageSound(host, pressed.props.sound, "activate")
                     pressed.props.onPress()
                 end, pressed.type .. ":" .. pressed.identity, pressed.source)
             end
@@ -527,6 +550,7 @@ function interaction.update(host, dt)
                 host:_runCallback(function()
                     session.claimed = "hold"
                     host._pressedIdentity = nil
+                    stageSound(host, pressed.props.sound, "activate")
                     pressed.props.onLongPress()
                 end, pressed.type .. ":hold", pressed.source)
             end
@@ -602,7 +626,10 @@ function interaction.keyBack(host)
     local modal = host._modal
     if not modal then return false end
     if modalDismisses(modal, "back") then
-        host:_runCallback(modal.props.onDismiss, "Modal:back", modal.source)
+        host:_runCallback(function()
+            stageSound(host, modal.props.dismissSound, "dismiss")
+            modal.props.onDismiss()
+        end, "Modal:back", modal.source)
     end
     return true
 end

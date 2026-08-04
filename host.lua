@@ -68,6 +68,7 @@ local TYPE_PROPS = {
         radius = true,
         onPress = true, onLongPress = true, onHoverChange = true,
         onCommit = true, onResult = true,
+        sound = true, rejectSound = true, hoverSound = true,
         disabled = true, selected = true, shortcut = true,
         align = true, justify = true,
     },
@@ -77,16 +78,19 @@ local TYPE_PROPS = {
     },
     Pressable = {
         onPress = true, onLongPress = true, onHoverChange = true,
+        sound = true, hoverSound = true,
     },
     Scroll = { axis = true, bar = true },
     Modal = {
         dismiss = true, onDismiss = true,
+        dismissSound = true,
         padding = true, background = true,
         align = true, justify = true,
     },
     DragSource = {
         payload = true, preview = true, onDrop = true,
         onDragStart = true, onDragEnd = true,
+        grabSound = true, dropSound = true, rejectSound = true,
     },
     DropTarget = { accepts = true, address = true },
 }
@@ -247,6 +251,32 @@ local function validateTheme(theme)
             validateColorTable(value, "theme.controls.button " .. key)
         end
     end
+    local soundKeys = {
+        activate = true, hover = true, reject = true, dismiss = true,
+        dragGrab = true, dragDrop = true,
+    }
+    assert(theme.sounds == nil or (type(theme.sounds) == "table"
+            and getmetatable(theme.sounds) == nil),
+        "theme.sounds must be a plain semantic-cue table")
+    for key, cue in pairs(theme.sounds or {}) do
+        assert(soundKeys[key],
+            "unknown theme.sounds field " .. tostring(key))
+        assert(type(cue) == "string" and cue ~= "",
+            "theme.sounds." .. key .. " must be a non-empty cue id")
+    end
+end
+
+-- Validates an optional semantic cue override; false explicitly disables it.
+local function validateSound(value, label)
+    assert(value == nil or value == false
+            or (type(value) == "string" and value ~= ""),
+        label .. " must be a non-empty cue id or false")
+end
+
+-- Resolves one component override against the application theme defaults.
+local function soundCue(self, override, defaultKey)
+    if override == false then return nil end
+    return override or (self.theme.sounds or {})[defaultKey]
 end
 
 local function validateSize(value, label)
@@ -392,6 +422,9 @@ local function validatePrimitiveProps(self, name, props)
             "Button disabled must be a boolean")
         assert(props.selected == nil or type(props.selected) == "boolean",
             "Button selected must be a boolean")
+        validateSound(props.sound, "Button sound")
+        validateSound(props.rejectSound, "Button rejectSound")
+        validateSound(props.hoverSound, "Button hoverSound")
         assert(props.shortcut == nil or type(props.shortcut) == "string"
             or type(props.shortcut) == "table",
             "Button shortcut must be a string or array")
@@ -471,6 +504,8 @@ local function validatePrimitiveProps(self, name, props)
             "Pressable onHoverChange must be a function")
         assert(props.onPress or props.onLongPress or props.onHoverChange,
             "Pressable requires a press, long-press, or hover callback")
+        validateSound(props.sound, "Pressable sound")
+        validateSound(props.hoverSound, "Pressable hoverSound")
     elseif name == "Scroll" then
         oneOf(props.axis, { "vertical", "horizontal" }, "Scroll axis")
         assert(props.axis ~= nil, "Scroll axis is required")
@@ -485,6 +520,7 @@ local function validatePrimitiveProps(self, name, props)
             "Modal onDismiss must be a function")
         assert((props.dismiss or "back") == "none" or props.onDismiss,
             "dismissible Modal requires onDismiss")
+        validateSound(props.dismissSound, "Modal dismissSound")
         oneOf(props.align, { "start", "center", "end", "stretch" },
             "Modal align")
         oneOf(props.justify, { "start", "center", "end", "stretch" },
@@ -503,6 +539,9 @@ local function validatePrimitiveProps(self, name, props)
             "DragSource onDragStart must be a function")
         assert(props.onDragEnd == nil or type(props.onDragEnd) == "function",
             "DragSource onDragEnd must be a function")
+        validateSound(props.grabSound, "DragSource grabSound")
+        validateSound(props.dropSound, "DragSource dropSound")
+        validateSound(props.rejectSound, "DragSource rejectSound")
     elseif name == "DropTarget" then
         assert(type(props.accepts) == "string" and props.accepts ~= "",
             "DropTarget accepts must be a non-empty string")
@@ -1664,7 +1703,12 @@ end
 function host:_activateButton(button)
     if self._spentAuthorities[button.identity] then return false end
     if not button.props.onCommit then
-        self:_runCallback(button.props.onPress,
+        if not button.props.onPress then return false end
+        self:_runCallback(function()
+            local cue = soundCue(self, button.props.sound, "activate")
+            if cue then self:_stageFeedback("sound", cue) end
+            button.props.onPress()
+        end,
             "Button:" .. button.identity, button.source)
         return true
     end
@@ -1676,7 +1720,13 @@ function host:_activateButton(button)
     local status = ok and "committed" or "rejected"
     if not ok then self._spentAuthorities[button.identity] = nil end
     detail = Message.snapshotPlain(detail, "Button onCommit detail")
-    local notify = function() button.props.onResult(status, detail) end
+    local notify = function()
+        local cue = ok
+            and soundCue(self, button.props.sound, "activate")
+            or soundCue(self, button.props.rejectSound, "reject")
+        if cue then self:_stageFeedback("sound", cue) end
+        button.props.onResult(status, detail)
+    end
     if ok then
         self:_runTerminalCallback(notify,
             "Button:onResult", button.source)

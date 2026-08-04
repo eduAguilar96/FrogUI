@@ -278,6 +278,130 @@ reconciliation, so a retained drag callback may safely report its result after
 another actor rerenders. Unmount/remount creates a new lifetime; an old callback
 then fails instead of reaching the new owner.
 
+## Adding sound to a component
+
+FrogUI components declare **semantic cue ids**, never asset paths and never
+`love.audio` calls. The replacement application owns the cue-to-file mapping
+in [`src/presentation/audio.lua`](../presentation/audio.lua), and its one Host
+receives that provider once. This gives mute, volume, missing-file handling,
+caching, and overlapping playback one owner.
+
+### Controls already sound correct by default
+
+The presentation theme defines six generic interaction defaults:
+
+| Theme field | Used by | Current cue |
+|---|---|---|
+| `sounds.activate` | Button/Pressable tap, hold, or successful commit | `ui.activate` |
+| `sounds.hover` | mouse entry into Button/Pressable | `ui.hover` |
+| `sounds.reject` | rejected Button commit or drag drop | `ui.reject` |
+| `sounds.dismiss` | Modal back/outside dismissal | `ui.close` |
+| `sounds.dragGrab` | DragSource claiming the gesture | `drag.grab` |
+| `sounds.dragDrop` | DragSource committing a drop | `drag.drop` |
+
+Most components therefore add no sound prop:
+
+```lua
+Frog.Button {
+    onPress = props.onContinue,
+    Frog.Text "Continue",
+}
+```
+
+Use a semantic override when the action has more precise meaning. Editor hover
+on `Frog.Button`, `Frog.Pressable`, `Frog.Modal`, or `Frog.DragSource` lists
+every supported sound prop:
+
+```lua
+Frog.Button {
+    sound = props.open and "ui.close" or "ui.open",
+    onPress = props.onToggle,
+    Frog.Text "Spellbook",
+}
+
+Frog.DragSource {
+    grabSound = "drag.grab",       -- optional; already the default
+    dropSound = "shop.purchase",  -- only after onDrop commits
+    rejectSound = "ui.reject",    -- only after onDrop rejects
+    payload = props.payload,
+    preview = props.preview,
+    onDrop = props.onDrop,
+    props.content,
+}
+```
+
+`Button.sound` covers an ordinary activation or successful `onCommit`;
+`Button.rejectSound` covers a rejected `onCommit`; `hoverSound` covers mouse
+entry. `Pressable` supports `sound` and `hoverSound`. `Modal.dismissSound`
+covers both keyboard-back and outside-pointer dismissal. Pass `false` to any
+sound prop to deliberately suppress that one inherited/default cue.
+
+### State changes and events use keyed juice
+
+A cue that is not the direct result of a primitive interaction belongs beside
+the semantic state or event that owns it. Use `Frog.sound` in a named recipe;
+do not hide `audio:play()` inside an actor action:
+
+```lua
+Frog.Box {
+    juice = {
+        claimed = {
+            key = props.claimReceipt.sequence,
+            recipe = Frog.sound { cue = "reward.claim" },
+        },
+    },
+    RewardSummary { receipt = props.claimReceipt },
+}
+```
+
+The key must be a stable scalar that changes once per semantic occurrence. A
+rerender with the same key does not replay the sound. A typed event reaction
+may instead use `do_ = Frog.play("claimed")` on an element with that named
+recipe. Both paths use the Host feedback transaction: failed callbacks,
+messages, or renders emit no sound.
+
+### Registering a new sound
+
+Follow all five steps in one change:
+
+1. Add the `.wav` under `assets/audio/`. Replacement UI assets keep the
+   existing `ui_*` filename convention; components still never mention it.
+2. Add one semantic cue entry to `CATALOG` in
+   [`src/presentation/audio.lua`](../presentation/audio.lua). Name the event
+   (`shop.purchase`, `spell.execute`), not the file (`ui_hold_drop`). A cue may
+   list several files; the provider chooses one per play.
+3. Declare the cue at its owner: use a primitive sound prop for an input
+   interaction, or keyed/event-driven `Frog.sound` for a state/event outcome.
+   Change `theme.sounds` only when the generic default should change for every
+   component.
+4. Add or update a focused check that asserts the semantic cue id. Device
+   audio is not required for deterministic tests.
+5. Restart the gallery after adding/replacing an asset or changing the catalog;
+   the provider intentionally caches static Sources. Theme defaults and
+   watched component cue props continue to hot-reload normally.
+
+The provider fails loudly for an unregistered cue, skips a registered cue whose
+file is absent, clones its cached base Source so rapid interactions overlap,
+and reads `theme.audio.muted`/`volume` at play time. The gallery wires it like
+this; the eventual application root will use the same single injection:
+
+```lua
+local Audio = require("src.presentation.audio")
+local audio = Audio.new {
+    settings = function() return theme.audio end,
+}
+
+local host = Frog.host {
+    theme = theme,
+    assets = theme.assets,
+    feedback = audio:feedback(),
+}
+```
+
+Run `love . --check frogui` after changing sound authoring. The focused
+`tools/frogui/audiocheck.lua` verifies provider caching/overlap/settings and
+the Button, hover, modal, and drag cue lifecycle.
+
 ## Motion and juice
 
 `Frog.Motion` is a primitive, not a state owner. It keeps layout dimensions
@@ -353,13 +477,14 @@ the entire named recipe and selects an explicit clock whose complete API is
 `advance(dt)`, `now()`, and `reset(time)`. Motion is sampled from absolute clock time, so splitting a dt
 does not change the result and Host updates do not rerender components.
 
-Feedback is injected explicitly:
+Juice feedback uses the same provider described above. The low-level Host
+shape is:
 
 ```lua
-Frog.host {
+local host = Frog.host {
     reducedMotion = accessibility.reduceMotion,
     feedback = {
-        sound = function(cue) audio.play(cue) end,
+        sound = function(cue) audio:play(cue) end,
         haptic = function(cue) device.haptic(cue) end,
     },
 }
