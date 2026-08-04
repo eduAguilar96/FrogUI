@@ -236,10 +236,14 @@ projections, companion style files, or geometry files.
   `onPress`.
 - Compose drag and Scroll directly. Gesture thresholds and arbitration are
   framework constants, not component props or per-screen recognizer tables.
-- When one actor replaces a visible region, mount that actor at the region and
-  pass the ordinary child directly. Closed state returns the child; open state
-  returns the replacement. Do not mount a hidden owner elsewhere and project
-  its state back through an addressed gate or generic slot component.
+- When one actor replaces one visible region, mount it at that region and pass
+  the ordinary child directly. When one state change has several visible
+  consumers, mount the actor around the smallest common interaction region and
+  use named addressed views at those concrete surfaces. For example,
+  Liquidation reserves a staged copy in the active stack, drawer, and sale
+  surface without copying that state into ShopScreen. Do not mount a hidden
+  owner elsewhere or project its state through screen callbacks or generic
+  render slots.
 
 ## 9. Updating this guide
 
