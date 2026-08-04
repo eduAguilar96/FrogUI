@@ -201,6 +201,13 @@ projections, companion style files, or geometry files.
   subtree one directly named component and let each shell own only placement.
   The room drawer and ordinary modal both compose `SpellbookBag`; neither
   carries a private copy of its cards, relic rail, targets, or scrolling.
+- Extend a reusable source through one specifically named typed seam, never a
+  catch-all callback. `onMutationDrop` is invoked only by a
+  `spell-mutation` target carrying the exact room, visit and offer address;
+  unknown target kinds remain rejected by the owned source.
+- Keep visual variants centralized on the canonical component. Smithy supplies
+  `variantFor` to the shared SpellCard stack/bag path so full spells use the
+  standard dimmed face while remaining draggable for an authoritative refusal.
 - SpellCard receives the cooked instance from `src.game.cards`. Its family may
   call the pure read-only display queries in `src.game.actions`, `affinities`,
   `modifiers`, and `requirements`; it must not mutate game state, draw RNG,
@@ -210,6 +217,9 @@ projections, companion style files, or geometry files.
   state stores semantic deltas such as consumed offer ids, exact receipts,
   feedback, and mode, then derives the remaining visible rows. Do not copy a
   full stock/opportunity projection into actor state.
+- Name authority precisely. Smithy and Charmer receive immutable route-issued
+  offer props; their visible ids only guard the selected drop. Transfiguration
+  recipes are revalidated by Run's exact quote/commit authority.
 - A stateful screen keeps its small typed actions, reducers, and concrete render
   with that actor. Do not extract a `state.lua`, action table, or generic
   render-callback projection to make a line budget appear smaller.
