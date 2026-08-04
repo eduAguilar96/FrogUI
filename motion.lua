@@ -722,6 +722,9 @@ end
 local IDENTITY = { a = 1, b = 0, c = 0, d = 1, tx = 0, ty = 0 }
 
 local function transformNode(node, parent)
+    -- Portals are painted and hit-tested in the Host root plane. Their
+    -- authored tree position must not inherit Motion or Scroll transforms.
+    if node._portal then parent = IDENTITY end
     node.presentation = node.presentation or copyValues()
     node._localTransform = localMatrix(node)
     node._worldTransform = multiply(parent or IDENTITY, node._localTransform)

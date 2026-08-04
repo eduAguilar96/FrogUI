@@ -109,24 +109,35 @@ local function styleFor(host, node, inheritedOpacity, inheritedTint)
     }
     if node.type == "Button" then
         local button = ((host.theme.controls or {}).button or {})
+        local background = props.background or button.background
+        local border = props.border or button.border
         if props.disabled then
-            style.background = host:_color(props.background or button.disabled,
+            background = props.background or button.disabled
+            style.background = host:_color(background,
                 "buttonDisabled")
         elseif host._pressedIdentity == node.identity then
-            style.background = host:_color(props.background or button.pressed,
+            background = props.pressedBackground or props.background
+                or button.pressed
+            border = props.pressedBorder or props.border or button.border
+            style.background = host:_color(background,
                 "buttonPressed")
         elseif props.selected then
-            style.background = host:_color(props.background or button.selected,
+            background = props.selectedBackground or button.selected
+                or props.background
+            border = props.selectedBorder or props.border or button.border
+            style.background = host:_color(background,
                 "buttonSelected")
         elseif host._hoveredIdentity == node.identity then
-            style.background = host:_color(props.background or button.hover,
+            background = props.hoverBackground or props.background
+                or button.hover
+            border = props.hoverBorder or props.border or button.border
+            style.background = host:_color(background,
                 "buttonHover")
         else
-            style.background = host:_color(props.background or button.background,
-                "button")
+            style.background = host:_color(background, "button")
         end
-        if not style.border and (props.border or button.border) then
-            style.border = host:_color(props.border or button.border, "border")
+        if border then
+            style.border = host:_color(border, "border")
             style.borderWidth = props.borderWidth or 1
         end
         style.radius = props.radius or button.radius or 5
@@ -296,7 +307,11 @@ local function customCall(custom, method, ...)
 end
 
 local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
-        clipState)
+        clipState, portal)
+    if node._portal and not portal then return end
+    local session = host._interactionSession
+    if session and session.claimed == "drag"
+            and node.identity == session.sourceIdentity then return end
     local g = graphics()
     local presentation = node.presentation or {}
     if not custom and g then
@@ -361,13 +376,33 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
         else defaultIcon(host, node, asset, iconStyle, clipState) end
     end
 
-    local clipped = node.props.clip or node.props.overflow == "clip"
+    local clipped = node.type == "Scroll" or node.props.clip
+        or node.props.overflow == "clip"
     local contentShape = nodeShape(node, true)
     if clipped and not custom and g then beginClip(clipState, contentShape) end
     for _, child in ipairs(node.children) do
-        drawNode(host, child, custom, style.opacity, style.tint, clipState)
+        drawNode(host, child, custom, style.opacity, style.tint, clipState, portal)
     end
     if clipped and not custom and g then endClip(clipState, contentShape) end
+    if node.type == "Scroll" and node.props.bar and node._scroll
+            and node._scroll.extent > 0 and not custom and g then
+        local scroll = node._scroll
+        local ratio = scroll.viewport / math.max(scroll.viewport, scroll.content)
+        local progress = scroll.offset / scroll.extent
+        setColor(host:_color(nil, "textDim", { 0.65, 0.7, 0.72, 0.65 }))
+        if scroll.axis == "vertical" then
+            local length = math.max(16, node.contentHeight * ratio)
+            g.rectangle("fill", node.contentX + node.contentWidth - 3,
+                node.contentY + (node.contentHeight - length) * progress,
+                3, length, 1.5, 1.5)
+        else
+            local length = math.max(16, node.contentWidth * ratio)
+            g.rectangle("fill", node.contentX
+                    + (node.contentWidth - length) * progress,
+                node.contentY + node.contentHeight - 3,
+                length, 3, 1.5, 1.5)
+        end
+    end
     if not custom and g then g.pop() end
 end
 
@@ -484,6 +519,34 @@ local function defaultActors(host, actors)
     end
 end
 
+local function defaultInteraction(host, state)
+    local g = graphics()
+    if not g or not state then return end
+    local session = state.session
+    if not session and #(state.scrolls or {}) == 0 and not state.modal then return end
+    local font = host:_font("caption")
+    if font then g.setFont(font) end
+    local lineHeight = font and font:getHeight() + 2 or 15
+    local lines = {}
+    if session then
+        lines[#lines + 1] = ("gesture %s · %.1fpx · %s"):format(
+            tostring(session.claimed or "pending"), session.distance or 0,
+            tostring(session.payloadKind or session.press or "pointer"))
+    end
+    if state.modal then lines[#lines + 1] = "modal " .. state.modal end
+    for _, scroll in ipairs(state.scrolls or {}) do
+        lines[#lines + 1] = ("scroll %s %.1f/%.1f"):format(
+            scroll.axis, scroll.offset, scroll.extent)
+    end
+    local width, x, y = math.min(330, host._viewport.width - 16), 8, 8
+    setColor({ 0.03, 0.04, 0.05, 0.92 })
+    g.rectangle("fill", x, y, width, #lines * lineHeight + 8, 4, 4)
+    setColor(host:_color(nil, "inspector"))
+    for index, line in ipairs(lines) do
+        g.print(line, x + 4, y + 4 + (index - 1) * lineHeight)
+    end
+end
+
 function painter.draw(host, custom)
     if not host._tree then return end
     local g = graphics()
@@ -498,6 +561,24 @@ function painter.draw(host, custom)
     end
     drawNode(host, host._tree, custom, nil, nil,
         not custom and { depth = 0 } or nil)
+    if host._modal then
+        drawNode(host, host._modal, custom, nil, nil,
+            not custom and { depth = 0 } or nil, true)
+    end
+    local session = host._interactionSession
+    local preview = session and session.claimed == "drag"
+        and session.source and session.source._dragPreview or nil
+    if preview then
+        customCall(custom, "dragPreview", preview, session)
+        if not custom and g then
+            g.push("all")
+            g.translate(session.x - preview.width / 2,
+                session.y - preview.height / 2)
+        end
+        drawNode(host, preview, custom, nil, nil,
+            not custom and { depth = 0 } or nil, true)
+        if not custom and g then g.pop() end
+    end
     if host._inspectorVisible then
         local inspection = host:inspectionTree()
         for _, entry in ipairs(inspection.nodes) do
@@ -509,6 +590,8 @@ function painter.draw(host, custom)
         else defaultMessages(host, inspection.messages) end
         if custom then customCall(custom, "actors", inspection.actors)
         else defaultActors(host, inspection.actors) end
+        if custom then customCall(custom, "interaction", inspection.interaction)
+        else defaultInteraction(host, inspection.interaction) end
     end
     if not custom and g then g.pop() end
     customCall(custom, "finish")

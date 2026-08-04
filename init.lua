@@ -6,20 +6,318 @@ local Host = require("src.frogui.host")
 local Message = require("src.frogui.message")
 local Clock = require("src.frogui.clock")
 local Juice = require("src.frogui.juice")
+local Interaction = require("src.frogui.interaction")
+
+---@alias FrogUISize number|string
+---Logical pixels or a percentage such as `"100%"`.
+
+---@alias FrogUIRGBA number[]|{r:number,g:number,b:number,a?:number}
+---@alias FrogUIColor string|FrogUIRGBA
+---A semantic theme token or numeric RGBA color.
+
+---@alias FrogUIOverflow 'clip'|'visible'
+---@alias FrogUIAlign 'start'|'center'|'end'|'stretch'
+---@alias FrogUIBoxJustify 'start'|'center'|'end'|'stretch'
+---@alias FrogUIFlowJustify 'start'|'center'|'end'|'space-between'
+---@alias FrogUITextAlign 'left'|'center'|'right'|'start'|'end'
+---@alias FrogUIImageFit 'contain'|'cover'|'stretch'
+---@alias FrogUIScrollAxis 'vertical'|'horizontal'
+---@alias FrogUIModalDismiss 'back'|'outside'|'both'|'none'
+---@alias FrogUIButtonResultStatus 'committed'|'rejected'
+---@alias FrogUIDragStatus 'committed'|'rejected'|'cancelled'
+
+---@class FrogUIOffset
+---@field x? number Horizontal logical-pixel offset applied after layout.
+---@field y? number Vertical logical-pixel offset applied after layout.
+
+---@class FrogUIPaddingSides
+---@field left? number
+---@field right? number
+---@field top? number
+---@field bottom? number
+
+---@alias FrogUIPadding number|FrogUIPaddingSides
+
+---@class FrogUIJuiceBinding
+---@field recipe table Declarative recipe returned by Frog.tween/spring/etc.
+---@field key? string|number|boolean Replay identity; a changed key restarts it.
+
+---@class FrogUIElementDescription
+---@field __frogDescriptor true
+---@field props table
+---@field children FrogUIElementDescription[]
+
+---@class FrogUIBaseProps
+---@field key? string|number Stable identity among reordered siblings.
+---@field width? FrogUISize Explicit width; otherwise measure naturally.
+---@field height? FrogUISize Explicit height; otherwise measure naturally.
+---@field grow? number Non-negative share of remaining Row/Column space.
+---@field opacity? number Static opacity from 0 through 1.
+---@field testId? string Readable development/test identity shown by F6.
+---@field juice? table<string, table|FrogUIJuiceBinding> Named recipes.
+---@field reactions? table[] Typed element reactions that play named juice.
+
+---@class FrogUIElementProps:FrogUIBaseProps
+---@field offset? FrogUIOffset Translation that does not move later siblings.
+
+---@class FrogBoxProps:FrogUIElementProps
+---@field padding? FrogUIPadding Inner space around its child.
+---@field background? FrogUIColor
+---@field border? FrogUIColor
+---@field borderWidth? number Non-negative border thickness.
+---@field radius? number Non-negative corner radius.
+---@field clip? boolean Clip descendants to this box.
+---@field overflow? FrogUIOverflow Explicit clipping policy.
+---@field align? FrogUIAlign Horizontal placement of the child.
+---@field justify? FrogUIBoxJustify Vertical placement of the child.
+---@field [integer] FrogUIElementDescription Zero or one child.
+
+---@class FrogRowProps:FrogUIElementProps
+---@field padding? FrogUIPadding
+---@field background? FrogUIColor
+---@field border? FrogUIColor
+---@field borderWidth? number
+---@field radius? number
+---@field clip? boolean
+---@field overflow? FrogUIOverflow
+---@field gap? number Non-negative horizontal gap between children.
+---@field align? FrogUIAlign Vertical/cross-axis child placement.
+---@field justify? FrogUIFlowJustify Horizontal/main-axis distribution.
+---@field wrap? boolean Wrap children onto additional rows.
+---@field [integer] FrogUIElementDescription Any number of children.
+
+---@class FrogColumnProps:FrogUIElementProps
+---@field padding? FrogUIPadding
+---@field background? FrogUIColor
+---@field border? FrogUIColor
+---@field borderWidth? number
+---@field radius? number
+---@field clip? boolean
+---@field overflow? FrogUIOverflow
+---@field gap? number Non-negative vertical gap between children.
+---@field align? FrogUIAlign Horizontal/cross-axis child placement.
+---@field justify? FrogUIFlowJustify Vertical/main-axis distribution.
+---@field [integer] FrogUIElementDescription Any number of children.
+
+---@class FrogOverlayProps:FrogUIElementProps
+---@field padding? FrogUIPadding
+---@field background? FrogUIColor
+---@field border? FrogUIColor
+---@field borderWidth? number
+---@field radius? number
+---@field clip? boolean
+---@field overflow? FrogUIOverflow
+---@field align? FrogUIAlign Horizontal placement shared by every child.
+---@field justify? FrogUIBoxJustify Vertical placement shared by every child.
+---@field [integer] FrogUIElementDescription Children paint back-to-front.
+
+---@class FrogTextProps:FrogUIElementProps
+---@field text? string Text content; a lone positional string/number is shorthand.
+---@field role? string Semantic theme font role; defaults to `body`.
+---@field fontScale? number Positive local multiplier for the current role size.
+---@field color? FrogUIColor
+---@field wrap? boolean Wrap within the resolved width.
+---@field maxLines? integer Positive visible-line cap, normally paired with wrap.
+---@field align? FrogUITextAlign Horizontal alignment inside the text box.
+---@field fitDown? boolean Shrink until bounds/line cap fit; never grow.
+---@field outlineWidth? number Non-negative outline thickness.
+---@field outlineColor? FrogUIColor
+---@field [integer] string|number At most one readable text shorthand.
+
+---@alias FrogUIAssetSource string|userdata|table
+---An application asset token or image-like object with width/height methods.
+
+---@class FrogImageProps:FrogUIElementProps
+---@field source FrogUIAssetSource Required authored image source.
+---@field fit? FrogUIImageFit Sizing policy; defaults to `contain`.
+---@field tint? FrogUIColor Optional multiplicative tint.
+
+---@class FrogIconOutline
+---@field width? number Non-negative outline thickness.
+---@field color? FrogUIColor
+
+---@class FrogIconProps:FrogUIElementProps
+---@field source FrogUIAssetSource Required alpha-silhouette source.
+---@field fit? FrogUIImageFit Sizing policy; defaults to `contain`.
+---@field tint? FrogUIColor Recolors from the source alpha.
+---@field mirror? boolean Mirror horizontally.
+---@field outline? FrogIconOutline
+
+---@class FrogButtonProps:FrogUIElementProps
+---@field padding? FrogUIPadding
+---@field background? FrogUIColor
+---@field border? FrogUIColor
+---@field borderWidth? number
+---@field radius? number
+---@field hoverBackground? FrogUIColor
+---@field hoverBorder? FrogUIColor
+---@field pressedBackground? FrogUIColor
+---@field pressedBorder? FrogUIColor
+---@field selectedBackground? FrogUIColor
+---@field selectedBorder? FrogUIColor
+---@field align? FrogUIAlign Horizontal placement of the child.
+---@field justify? FrogUIBoxJustify Vertical placement of the child.
+---@field onPress? fun() Reversible UI callback.
+---@field onCommit? fun():boolean, any One irreversible domain call.
+---@field onResult? fun(status:FrogUIButtonResultStatus, detail:any)
+---@field disabled? boolean Disable focus and activation.
+---@field selected? boolean Paint the retained selected/toggled state.
+---@field shortcut? string|string[] Keyboard shortcut or ordered alternatives.
+---@field [integer] FrogUIElementDescription Zero or one child.
+
+---@class FrogMotionSpring
+---@field frequency? number Positive oscillation frequency.
+---@field damping? number Positive damping ratio.
+
+---@alias FrogMotionSpringChoice string|FrogMotionSpring
+---Built-ins are `gentle`, `snappy`, and `bouncy`; themes may add names.
+
+---@class FrogMotionNumberTarget
+---@field target number
+---@field spring? FrogMotionSpringChoice
+
+---@class FrogMotionColorTarget
+---@field target FrogUIRGBA
+---@field spring? FrogMotionSpringChoice
+
+---@class FrogMotionProps:FrogUIElementProps
+---@field x? number|FrogMotionNumberTarget Horizontal paint/input translation.
+---@field y? number|FrogMotionNumberTarget Vertical paint/input translation.
+---@field rotation? number|FrogMotionNumberTarget Radians around element center.
+---@field scale? number|FrogMotionNumberTarget Non-negative center scale.
+---@field opacity? number|FrogMotionNumberTarget Value from 0 through 1.
+---@field tint? FrogUIRGBA|FrogMotionColorTarget Numeric multiplicative tint.
+---@field [integer] FrogUIElementDescription Zero or one stable-layout child.
+
+---@class FrogPressableProps:FrogUIElementProps
+---@field onPress? fun() Pointer tap callback.
+---@field onLongPress? fun() Pointer hold callback after the Host threshold.
+---@field onHoverChange? fun(hovered:boolean) Mouse enter/leave callback.
+---@field [integer] FrogUIElementDescription Exactly one child.
+
+---@class FrogScrollProps:FrogUIElementProps
+---@field axis FrogUIScrollAxis Required retained scrolling axis.
+---@field bar? boolean Show the built-in touch-sized scrollbar.
+---@field [integer] FrogUIElementDescription Exactly one content child.
+
+---@class FrogModalProps:FrogUIBaseProps
+---@field dismiss? FrogUIModalDismiss Defaults to `back`.
+---@field onDismiss? fun() Required unless dismiss is `none`.
+---@field padding? FrogUIPadding
+---@field background? FrogUIColor Root-plane background/scrim.
+---@field align? FrogUIAlign Horizontal placement of the modal child.
+---@field justify? FrogUIBoxJustify Vertical placement of the modal child.
+---@field [integer] FrogUIElementDescription Exactly one child.
+
+---@class FrogDragPayload
+---@field kind string Required non-empty type matched by DropTarget.accepts.
+
+---@class FrogDropMatch
+---@field key string|number Stable target identity.
+---@field address table Plain application-owned destination address.
+
+---@class FrogDragSourceProps:FrogUIElementProps
+---@field payload FrogDragPayload Plain finite acyclic drag value.
+---@field preview FrogUIElementDescription Static root-plane preview.
+---@field onDrop fun(payload:FrogDragPayload, target:FrogDropMatch):boolean, any
+---@field onDragStart? fun(payload:FrogDragPayload)
+---@field onDragEnd? fun(status:FrogUIDragStatus, detail:any)
+---@field [integer] FrogUIElementDescription Exactly one visible source child.
+
+---@class FrogDropTargetProps:FrogUIElementProps
+---@field key string|number Required stable target identity.
+---@field accepts string Required payload kind.
+---@field address table Plain finite acyclic application destination.
+---@field [integer] FrogUIElementDescription Exactly one visible target child.
 
 local Frog = {}
 
 -- Primitives are FrogUI's built-in layout/paint vocabulary. Calling one
 -- creates a description; the Host later measures, paints, and routes it.
+--- Paints and pads one rectangular region around zero or one child.
+---
+--- `align` moves the child horizontally. `justify` moves it vertically.
+---@type fun(input?: FrogBoxProps):FrogUIElementDescription
 Frog.Box = Element.primitive("Box")
+
+--- Flows children from left to right, optionally wrapping onto more rows.
+---
+--- `justify` distributes horizontally; `align` places children vertically.
+---@type fun(input?: FrogRowProps):FrogUIElementDescription
 Frog.Row = Element.primitive("Row")
+
+--- Flows children from top to bottom.
+---
+--- `justify` distributes vertically; `align` places children horizontally.
+---@type fun(input?: FrogColumnProps):FrogUIElementDescription
 Frog.Column = Element.primitive("Column")
+
+--- Gives every child the same region and paints them in listed order.
+---
+--- `align` is horizontal and `justify` is vertical for every child.
+---@type fun(input?: FrogOverlayProps):FrogUIElementDescription
 Frog.Overlay = Element.primitive("Overlay")
+
+--- Draws one text leaf. `role` selects a semantic theme size; `fontScale`
+--- changes only this use while preserving responsive role changes. `fitDown`
+--- may shrink that requested size to fit explicit bounds. Hover this symbol or
+--- command-click it in LuaLS for the complete `FrogTextProps` contract.
+---@type fun(input:FrogTextProps|string|number):FrogUIElementDescription
 Frog.Text = Element.primitive("Text")
+
+--- Draws an authored image without replacing its RGB colors.
+---
+--- `fit` accepts `contain`, `cover`, or `stretch`.
+---@type fun(input:FrogImageProps):FrogUIElementDescription
 Frog.Image = Element.primitive("Image")
+
+--- Draws and recolors an alpha-silhouette asset.
+---
+--- Use this for icons; use Image when authored RGB colors must survive.
+---@type fun(input:FrogIconProps):FrogUIElementDescription
 Frog.Icon = Element.primitive("Icon")
+
+--- Owns focus, shortcuts, disabled/selected state, and activation paint.
+---
+--- `align` moves its child horizontally; `justify` moves it vertically.
+---@type fun(input?: FrogButtonProps):FrogUIElementDescription
 Frog.Button = Element.primitive("Button")
+
+--- Animates one child's paint and input transform without changing layout.
+---
+--- Scalar targets snap; `{ target, spring }` targets reconcile smoothly.
+---@type fun(input?: FrogMotionProps):FrogUIElementDescription
 Frog.Motion = Element.primitive("Motion")
+
+--- Adds pointer tap, hold, and mouse-hover behavior to exactly one child.
+---
+--- Supply at least one callback; keyboard-visible actions use Button.
+---@type fun(input:FrogPressableProps):FrogUIElementDescription
+Frog.Pressable = Element.primitive("Pressable")
+
+--- Retains clipped wheel/touch scrolling along one required axis.
+---
+--- `axis` is `vertical` or `horizontal`; gesture arbitration is Host-owned.
+---@type fun(input:FrogScrollProps):FrogUIElementDescription
+Frog.Scroll = Element.primitive("Scroll")
+
+--- Root-hosts one focus/input-isolated surface above the application tree.
+---
+--- `dismiss` is `back`, `outside`, `both`, or `none`.
+---@type fun(input:FrogModalProps):FrogUIElementDescription
+Frog.Modal = Element.primitive("Modal")
+
+--- Owns a typed drag payload, static preview, and one domain drop callback.
+---
+--- The Host supplies the deepest matching DropTarget to `onDrop`.
+---@type fun(input:FrogDragSourceProps):FrogUIElementDescription
+Frog.DragSource = Element.primitive("DragSource")
+
+--- Advertises one typed, stable application destination to drag sources.
+---
+--- `accepts` must equal the source payload's `kind`.
+---@type fun(input:FrogDropTargetProps):FrogUIElementDescription
+Frog.DropTarget = Element.primitive("DropTarget")
 
 -- component(name, render) defines a reusable stateless application concept.
 -- Calling the returned token also creates a description; during Host render,
@@ -36,6 +334,7 @@ Frog.prop = Message.prop
 Frog.oneOf = Message.oneOf
 Frog.send = Host.send
 Frog.emit = Host.emit
+Frog.events = Interaction.events
 
 -- Juice recipes are inert data. Named element bindings and typed event
 -- reactions decide when the Host plays them.

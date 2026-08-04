@@ -40,7 +40,7 @@ end
 
 local function textSize(node, maxWidth, maxHeight, host)
     local text = tostring(node.props.text or "")
-    local size = host:_fontSize(node.props.role)
+    local size = host:_fontSize(node.props.role) * (node.props.fontScale or 1)
     local minimum = (host.theme.fontSizes or {}).minimum or 8
     local font, width, height, lineCount
     local function measureAt(candidateSize)
@@ -128,7 +128,9 @@ local function measure(node, maxWidth, maxHeight, host)
     local innerMaxHeight = math.max(0, (height or maxHeight) - pad.top - pad.bottom)
     local naturalWidth, naturalHeight = 0, 0
 
-    if node.type == "Text" then
+    if node.type == "Modal" and not node._portalLayout then
+        naturalWidth, naturalHeight = 0, 0
+    elseif node.type == "Text" then
         naturalWidth, naturalHeight = textSize(node, innerMaxWidth, innerMaxHeight, host)
     elseif node.type == "Image" or node.type == "Icon" then
         naturalWidth, naturalHeight = imageSize(node, host)
@@ -163,7 +165,17 @@ local function measure(node, maxWidth, maxHeight, host)
             naturalWidth = math.max(naturalWidth, child.measuredWidth)
             naturalHeight = math.max(naturalHeight, child.measuredHeight)
         end
-    else -- Box and Button
+    elseif node.type == "Scroll" then
+        local child = node.children[1]
+        if child then
+            local childMaxWidth = node.props.axis == "horizontal"
+                and math.huge or innerMaxWidth
+            local childMaxHeight = node.props.axis == "vertical"
+                and math.huge or innerMaxHeight
+            measure(child, childMaxWidth, childMaxHeight, host)
+            naturalWidth, naturalHeight = child.measuredWidth, child.measuredHeight
+        end
+    else -- Box, Button, Pressable, DragSource, and DropTarget
         local child = node.children[1]
         if child then
             measure(child, innerMaxWidth, innerMaxHeight, host)
@@ -298,6 +310,8 @@ local function childBox(node, child, host)
     local justify = node.props.justify
     if node.type == "Overlay" then
         align, justify = align or "stretch", justify or "stretch"
+    elseif node.type == "Modal" then
+        align, justify = align or "center", justify or "center"
     elseif node.type == "Button" then
         align, justify = align or "center", justify or "center"
     else
@@ -308,6 +322,41 @@ local function childBox(node, child, host)
     local x = alignedStart(align, node.contentX, node.contentWidth, width)
     local y = alignedStart(justify, node.contentY, node.contentHeight, height)
     layout.arrange(child, x, y, width, height, host)
+end
+
+-- Repositions one retained Scroll child after layout, wheel input, or
+-- momentum without asking application components to rerender.
+function layout.arrangeScroll(node, host)
+    local child = node.children[1]
+    local scroll = node._scroll
+    if not child or not scroll then return end
+    local vertical = scroll.axis == "vertical"
+    if vertical then
+        assert(type(child.props.height) ~= "string",
+            "vertical Scroll child height must be naturally measured")
+        measure(child, node.contentWidth, math.huge, host)
+        local width = resolveSize(child.props.width, node.contentWidth)
+            or math.max(node.contentWidth, child.measuredWidth)
+        local height = child.measuredHeight
+        scroll.viewport, scroll.content = node.contentHeight, height
+        scroll.extent = math.max(0, height - node.contentHeight)
+        scroll.offset = clamp(scroll.offset or 0, 0, scroll.extent)
+        layout.arrange(child, node.contentX, node.contentY - scroll.offset,
+            width, height, host)
+    else
+        assert(type(child.props.width) ~= "string",
+            "horizontal Scroll child width must be naturally measured")
+        measure(child, math.huge, node.contentHeight, host)
+        local width = child.measuredWidth
+        local height = resolveSize(child.props.height, node.contentHeight)
+            or math.max(node.contentHeight, child.measuredHeight)
+        scroll.viewport, scroll.content = node.contentWidth, width
+        scroll.extent = math.max(0, width - node.contentWidth)
+        scroll.offset = clamp(scroll.offset or 0, 0, scroll.extent)
+        layout.arrange(child, node.contentX - scroll.offset, node.contentY,
+            width, height, host)
+    end
+    scroll.node = node
 end
 
 function layout.arrange(node, x, y, width, height, host)
@@ -324,6 +373,8 @@ function layout.arrange(node, x, y, width, height, host)
     node.contentWidth = math.max(0, width - pad.left - pad.right)
     node.contentHeight = math.max(0, height - pad.top - pad.bottom)
 
+    if node.type == "Modal" and not node._portalLayout then return end
+
     if node.type == "Row" and node.props.wrap then
         arrangeWrappedRow(node, host)
     elseif node.type == "Row" then
@@ -332,8 +383,39 @@ function layout.arrange(node, x, y, width, height, host)
         arrangeFlow(node, false, host)
     elseif node.type == "Overlay" then
         for _, child in ipairs(node.children) do childBox(node, child, host) end
+    elseif node.type == "Scroll" then
+        layout.arrangeScroll(node, host)
     elseif node.children[1] then
         childBox(node, node.children[1], host)
+    end
+end
+
+local function arrangePortal(node, width, height, host)
+    node._portal, node._portalLayout = true, true
+    node._padding = padding(node.props.padding)
+    layout.arrange(node, 0, 0, width, height, host)
+    node._portalLayout = nil
+end
+
+local function prepareDetached(node, maxWidth, maxHeight, host)
+    measure(node, maxWidth, maxHeight, host)
+    local width = resolveSize(node.props.width, maxWidth) or node.measuredWidth
+    local height = resolveSize(node.props.height, maxHeight) or node.measuredHeight
+    layout.arrange(node, 0, 0, width, height, host)
+    for _, child in ipairs(node.children or {}) do
+        if child._dragPreview then
+            prepareDetached(child._dragPreview, maxWidth, maxHeight, host)
+        end
+    end
+end
+
+local function preparePlanes(node, width, height, host)
+    if node.type == "Modal" then arrangePortal(node, width, height, host) end
+    if node._dragPreview then
+        prepareDetached(node._dragPreview, width, height, host)
+    end
+    for _, child in ipairs(node.children or {}) do
+        preparePlanes(child, width, height, host)
     end
 end
 
@@ -342,6 +424,7 @@ function layout.run(root, width, height, host)
     local arrangedWidth = resolveSize(root.props.width, width) or width
     local arrangedHeight = resolveSize(root.props.height, height) or height
     layout.arrange(root, 0, 0, arrangedWidth, arrangedHeight, host)
+    preparePlanes(root, width, height, host)
     return root
 end
 

@@ -126,16 +126,39 @@ function message.validate(record, expectedKind)
     return validateRecord(token, record), token
 end
 
-local function clonePayload(value, seen)
-    if type(value) ~= "table" then return value end
+local function finite(value)
+    return type(value) == "number" and value == value
+        and value > -math.huge and value < math.huge
+end
+
+-- Takes the defensive finite, acyclic, plain-data snapshot promised by every
+-- delivered action/event. Bindings must already have resolved at this edge.
+local function snapshotPlain(value, label, seen)
+    local kind = type(value)
+    if kind == "nil" or kind == "boolean" or kind == "string" then
+        return value
+    end
+    if kind == "number" then
+        assert(finite(value), label .. " contains a non-finite number")
+        return value
+    end
+    assert(kind == "table" and getmetatable(value) == nil,
+        label .. " must contain only plain data")
     assert(not value.__frogBinding,
-        "Frog.prop/Frog.oneOf bindings must be resolved by Frog.go before delivery")
+        "Frog.prop/Frog.oneOf bindings must be resolved before delivery")
     seen = seen or {}
-    assert(not seen[value], "FrogUI message payloads may not contain cycles")
+    assert(not seen[value], label .. " must be acyclic")
     seen[value] = true
     local output = {}
     for key, nested in pairs(value) do
-        output[clonePayload(key, seen)] = clonePayload(nested, seen)
+        local keyKind = type(key)
+        assert(keyKind == "string" or keyKind == "number"
+                or keyKind == "boolean",
+            label .. " keys must be scalar")
+        if keyKind == "number" then
+            assert(finite(key), label .. " contains a non-finite key")
+        end
+        output[key] = snapshotPlain(nested, label, seen)
     end
     seen[value] = nil
     return output
@@ -143,8 +166,10 @@ end
 
 function message.snapshot(record, expectedKind)
     local _, token = message.validate(record, expectedKind)
-    return token(clonePayload(record))
+    return token(snapshotPlain(record, token.name .. " payload"))
 end
+
+message.snapshotPlain = snapshotPlain
 
 local addressMeta = {
     __tostring = function(address)

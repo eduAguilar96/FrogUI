@@ -84,6 +84,11 @@ the Host, so unknown props fail loudly.
 | `Frog.Icon` | Draw and recolor an alpha silhouette | none |
 | `Frog.Button` | One-child pressable box with theme states | zero or one |
 | `Frog.Motion` | Animate one child's paint/input presentation without changing layout | zero or one |
+| `Frog.Pressable` | Add pointer tap, hold, and mouse-hover to one child | exactly one |
+| `Frog.Scroll` | Retain clipped wheel/touch scrolling on one axis | exactly one |
+| `Frog.Modal` | Root-host one focus/input-isolated surface | exactly one |
+| `Frog.DragSource` | Own a plain payload, preview, and domain drop callback | exactly one |
+| `Frog.DropTarget` | Advertise one typed address to the deepest matching source | exactly one |
 
 `Overlay` is the important SpellCard primitive. Its first child is painted
 first (behind); later children paint on top. It is used for visual layers, not
@@ -93,6 +98,51 @@ Common layout props are `width`, `height`, `grow`, `padding`, `offset`, and
 `testId`. Containers add `gap`, `align`, `justify`, `wrap`, `clip`, and
 `overflow`. See the authoritative prop table in the
 [FrogUI guide](../../design/reference/frog-ui.md#layout-used-by-ordinary-screens).
+
+### Discovering primitive props in the editor
+
+Every FrogUI primitive has a dedicated, line-spaced LuaLS comment and complete
+props type beside its public export in [`init.lua`](init.lua). With the
+repository-recommended Lua extension, hover or command-click `Frog.Box`,
+`Frog.Text`, `Frog.Button`, or another primitive to see what it does and every
+accepted prop. Closed values are literal unions, so completion for `justify`,
+`align`, `fit`, `axis`, and `dismiss` offers the legal options rather than an
+unexplained string.
+
+Runtime validation mirrors those contracts. An unknown prop or unsupported
+value still fails loudly even when an editor is not present.
+
+Alignment names describe how a parent places its child or children. To center
+a button inside an Overlay:
+
+```lua
+Frog.Overlay {
+    align = "center",   -- horizontal placement
+    justify = "center", -- vertical placement
+    Frog.Button { Frog.Text "Close" },
+}
+```
+
+Changing `justify` on a Box moves the Box's child; it does not move that Box
+inside its own parent. Change the surrounding Row, Column, Overlay, or Box when
+the control itself needs to move.
+
+Text begins at the semantic size selected by `role`. To tune one use without
+changing every user of that role, apply a positive local multiplier:
+
+```lua
+Frog.Text {
+    role = "spellLabel",
+    fontScale = 1.25, -- this value only; still follows responsive role changes
+    fitDown = true,   -- may shrink to fit, never grows the text
+    "+8",
+}
+```
+
+This sizing is dynamic: each render resolves the current theme role and then
+multiplies it by `fontScale`. Change the role in the presentation theme when a
+semantic class should change everywhere; use `fontScale` for intentional,
+component-local emphasis.
 
 ## What `Frog.component` actually returns
 
@@ -150,9 +200,75 @@ The current public vocabulary is:
 | `Frog.delay` / `sequence` / `parallel` / `loop` | Compose recipes without frame code |
 | `Frog.sound` / `haptic` | Declare Host-provided feedback cues |
 | `Frog.withClock` / `play` | Bind recipe time and trigger a named recipe |
+| `Frog.events.DragStarted` / `DragEnded` | Typed facts emitted by the Host-wide drag lifecycle |
 
 The actor/message guide and production examples start at
 [`design/reference/frog-ui.md` section 3](../../design/reference/frog-ui.md#3-state-belongs-to-the-component).
+
+## Interaction stays small
+
+`Button` owns keyboard focus, shortcuts, disabled state, and activation.
+It may locally override `background`/`border` plus
+`hoverBackground`/`hoverBorder` and `pressedBackground`/`pressedBorder`; this
+`selectedBackground`/`selectedBorder` keeps an owned open/toggled state
+distinct. Precedence is disabled, pressed, selected, hover, then base. This is
+generic state paint, not an application painter hook.
+`Pressable` is pointer-only. `Scroll`, `Modal`, `DragSource`, and `DropTarget`
+own generic mechanics; they never import Run, Reward, Spellbook, or another
+game concept. A drag source alone calls the domain operation after FrogUI
+supplies the deepest matching `{ address, key }` target.
+
+Inside a Scroll, movement along its axis scrolls while cross-axis movement
+drags. The fixed 8px/1.25-bias rule is Host-owned, so components never assemble
+recognizers or receive raw pointer coordinates. See the exact constructors and
+cancellation order in [section 5 of the guide](../../design/reference/frog-ui.md#5-m4am4b-mobile-interaction-recipes).
+
+`onDrop` is deliberately narrower than an ordinary UI callback: it calls one
+atomic domain operation and returns its result. FrogUI ends capture before the
+call, forbids messages and Host mutation inside it, then delivers
+`onDragEnd`/`DragEnded`; later UI failure can never retry or claim to roll back
+the domain operation. A Modal is likewise a real root portal: ancestor Motion
+and Scroll do not move or clip it, and covered input is consumed.
+
+An ordinary `Button.onPress` is reversible UI work. Use the explicit
+`onCommit`/`onResult` pair only when one press crosses an irreversible domain
+boundary such as claiming or skipping a Reward:
+
+```lua
+Frog.Button {
+    shortcut = "s",
+    onCommit = function()
+        return run:commitSkipReward(quote) -- exactly one domain call
+    end,
+    onResult = function(status, receipt)
+        if status == "committed" then
+            send(Claimed { receipt = receipt })
+        else
+            send(Rejected { message = receipt })
+        end
+    end,
+    Frog.Text "Skip",
+}
+```
+
+`onCommit` cannot send messages, rerender, route input, or mutate the Host; it
+must return `ok, detail`. A successful call spends that exact mounted Button
+before `onResult` runs. `detail` is defensively snapshotted as finite, acyclic
+plain data before delivery; a malformed successful result remains spent while
+a malformed rejection remains retryable. If notification, navigation, or the first truthful
+render then throws, FrogUI still settles queued actor state and never exposes
+the spent control for a retry. A rejected call remains available. This narrow
+boundary is for authoritative mutations only, not ordinary menu callbacks.
+
+Platform input is root-only and cannot be called again from an active callback.
+Messages drain breadth-first to quiescence: if a dirty render opens a Modal or
+removes a drag source, the resulting cancellation fact drains before the input
+transaction completes instead of being discarded.
+
+An actor's local `send` keeps one mount-lifetime identity across ordinary
+reconciliation, so a retained drag callback may safely report its result after
+another actor rerenders. Unmount/remount creates a new lifetime; an old callback
+then fails instead of reaching the new owner.
 
 ## Motion and juice
 

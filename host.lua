@@ -8,6 +8,7 @@ local Element = require("src.frogui.element")
 local Message = require("src.frogui.message")
 local Clock = require("src.frogui.clock")
 local Motion = require("src.frogui.motion")
+local Interaction = require("src.frogui.interaction")
 
 local host = {}
 host.__index = host
@@ -18,6 +19,8 @@ local renderingHost = nil
 local PRIMITIVES = {
     Box = true, Row = true, Column = true, Overlay = true,
     Text = true, Image = true, Icon = true, Button = true, Motion = true,
+    Pressable = true, Scroll = true, Modal = true,
+    DragSource = true, DropTarget = true,
 }
 
 local DEFAULT_FONT_SIZES = { title = 28, heading = 22, body = 18, caption = 13 }
@@ -46,7 +49,8 @@ local TYPE_PROPS = {
         align = true, justify = true,
     },
     Text = {
-        text = true, role = true, color = true, wrap = true, maxLines = true,
+        text = true, role = true, fontScale = true,
+        color = true, wrap = true, maxLines = true,
         align = true, fitDown = true,
         outlineWidth = true, outlineColor = true,
     },
@@ -57,14 +61,32 @@ local TYPE_PROPS = {
     },
     Button = {
         padding = true, background = true, border = true, borderWidth = true,
+        hoverBackground = true, hoverBorder = true,
+        pressedBackground = true, pressedBorder = true,
+        selectedBackground = true, selectedBorder = true,
         radius = true,
-        onPress = true, disabled = true, selected = true, shortcut = true,
+        onPress = true, onCommit = true, onResult = true,
+        disabled = true, selected = true, shortcut = true,
         align = true, justify = true,
     },
     Motion = {
         x = true, y = true, rotation = true, scale = true,
         opacity = true, tint = true,
     },
+    Pressable = {
+        onPress = true, onLongPress = true, onHoverChange = true,
+    },
+    Scroll = { axis = true, bar = true },
+    Modal = {
+        dismiss = true, onDismiss = true,
+        padding = true, background = true,
+        align = true, justify = true,
+    },
+    DragSource = {
+        payload = true, preview = true, onDrop = true,
+        onDragStart = true, onDragEnd = true,
+    },
+    DropTarget = { accepts = true, address = true },
 }
 
 local function shallowCopy(input)
@@ -154,6 +176,9 @@ local function validatePrimitive(name, children)
     assert(PRIMITIVES[name], "unknown FrogUI primitive " .. tostring(name))
     if name == "Box" or name == "Button" or name == "Motion" then
         assert(#children <= 1, "Frog." .. name .. " accepts at most one child")
+    elseif name == "Pressable" or name == "Scroll" or name == "Modal"
+            or name == "DragSource" or name == "DropTarget" then
+        assert(#children == 1, "Frog." .. name .. " accepts exactly one child")
     elseif name == "Text" or name == "Image" or name == "Icon" then
         assert(#children == 0, "Frog." .. name .. " does not accept children")
     end
@@ -315,6 +340,9 @@ local function validatePrimitiveProps(self, name, props)
 
     for _, colorProp in ipairs({
         "background", "border", "color", "tint", "outlineColor",
+        "hoverBackground", "hoverBorder",
+        "pressedBackground", "pressedBorder",
+        "selectedBackground", "selectedBorder",
     }) do
         local color = props[colorProp]
         if name == "Motion" and colorProp == "tint" then color = nil end
@@ -342,6 +370,14 @@ local function validatePrimitiveProps(self, name, props)
     if name == "Button" then
         assert(props.onPress == nil or type(props.onPress) == "function",
             "Button onPress must be a function")
+        assert(props.onCommit == nil or type(props.onCommit) == "function",
+            "Button onCommit must be a function")
+        assert(props.onResult == nil or type(props.onResult) == "function",
+            "Button onResult must be a function")
+        assert(not props.onCommit or (not props.onPress and props.onResult),
+            "Button onCommit requires onResult and cannot use onPress")
+        assert(not props.onResult or props.onCommit,
+            "Button onResult requires onCommit")
         assert(props.disabled == nil or type(props.disabled) == "boolean",
             "Button disabled must be a boolean")
         assert(props.selected == nil or type(props.selected) == "boolean",
@@ -400,6 +436,9 @@ local function validatePrimitiveProps(self, name, props)
     elseif name == "Text" then
         assert(type(props.text or "") == "string", "Text text must be a string")
         assert(props.role == nil or type(props.role) == "string", "Text role must be a string")
+        validateNumber(props.fontScale, "Text fontScale")
+        assert(props.fontScale == nil or props.fontScale > 0,
+            "Text fontScale must be positive")
         assert(props.wrap == nil or type(props.wrap) == "boolean", "Text wrap must be a boolean")
         assert(props.fitDown == nil or type(props.fitDown) == "boolean",
             "Text fitDown must be a boolean")
@@ -413,6 +452,55 @@ local function validatePrimitiveProps(self, name, props)
     elseif name == "Motion" then
         assert(props.reactions == nil or #props.reactions == 0 or props.juice ~= nil,
             "Frog.Motion reactions require named juice recipes")
+    elseif name == "Pressable" then
+        assert(props.onPress == nil or type(props.onPress) == "function",
+            "Pressable onPress must be a function")
+        assert(props.onLongPress == nil or type(props.onLongPress) == "function",
+            "Pressable onLongPress must be a function")
+        assert(props.onHoverChange == nil or type(props.onHoverChange) == "function",
+            "Pressable onHoverChange must be a function")
+        assert(props.onPress or props.onLongPress or props.onHoverChange,
+            "Pressable requires a press, long-press, or hover callback")
+    elseif name == "Scroll" then
+        oneOf(props.axis, { "vertical", "horizontal" }, "Scroll axis")
+        assert(props.axis ~= nil, "Scroll axis is required")
+        assert(props.bar == nil or type(props.bar) == "boolean",
+            "Scroll bar must be a boolean")
+    elseif name == "Modal" then
+        assert(props.offset == nil,
+            "Modal is a root portal and does not accept offset")
+        oneOf(props.dismiss, { "back", "outside", "both", "none" },
+            "Modal dismiss")
+        assert(props.onDismiss == nil or type(props.onDismiss) == "function",
+            "Modal onDismiss must be a function")
+        assert((props.dismiss or "back") == "none" or props.onDismiss,
+            "dismissible Modal requires onDismiss")
+        oneOf(props.align, { "start", "center", "end", "stretch" },
+            "Modal align")
+        oneOf(props.justify, { "start", "center", "end", "stretch" },
+            "Modal justify")
+    elseif name == "DragSource" then
+        local payload = Interaction.snapshotPlain(props.payload,
+            "DragSource payload")
+        assert(type(payload) == "table" and type(payload.kind) == "string"
+                and payload.kind ~= "",
+            "DragSource payload requires a non-empty string kind")
+        assert(Element.isDescriptor(props.preview),
+            "DragSource preview must be a FrogUI description")
+        assert(type(props.onDrop) == "function",
+            "DragSource onDrop must be a function")
+        assert(props.onDragStart == nil or type(props.onDragStart) == "function",
+            "DragSource onDragStart must be a function")
+        assert(props.onDragEnd == nil or type(props.onDragEnd) == "function",
+            "DragSource onDragEnd must be a function")
+    elseif name == "DropTarget" then
+        assert(type(props.accepts) == "string" and props.accepts ~= "",
+            "DropTarget accepts must be a non-empty string")
+        Interaction.snapshotPlain(props.address, "DropTarget address")
+        assert(type(props.address) == "table",
+            "DropTarget address must be a plain table")
+        assert(type(props.key) == "string" or type(props.key) == "number",
+            "DropTarget requires a stable string/number key")
     end
 end
 
@@ -448,7 +536,7 @@ local function inside(node, x, y)
         and localX <= node.x + node.width and localY <= node.y + node.height
 end
 
-local function nodeEntry(node, depth)
+local function nodeEntry(node, depth, visibleBounds)
     local entry = {
         type = node.type,
         key = node.key,
@@ -458,7 +546,7 @@ local function nodeEntry(node, depth)
         source = node.source,
         depth = depth,
         testId = node.props.testId,
-        bounds = deepCopy(node._visualBounds
+        bounds = deepCopy(visibleBounds or node._visualBounds
             or { x = node.x, y = node.y, width = node.width, height = node.height }),
         restBounds = { x = node.x, y = node.y, width = node.width, height = node.height },
     }
@@ -473,19 +561,53 @@ local function nodeEntry(node, depth)
             reducedMotion = inspected.reducedMotion,
         }
     end
+    if node._scroll then
+        entry.scroll = {
+            axis = node._scroll.axis,
+            offset = node._scroll.offset,
+            extent = node._scroll.extent,
+            velocity = node._scroll.velocity,
+        }
+    end
     if node.actor then entry.actor = deepCopy(node.actor) end
     if node.view then entry.view = deepCopy(node.view) end
     return entry
 end
 
-local function flatten(node, depth, output)
-    output[#output + 1] = nodeEntry(node, depth)
-    for _, child in ipairs(node.children) do flatten(child, depth + 1, output) end
+local function intersection(left, right)
+    if not left then return right and deepCopy(right) or nil end
+    if not right then return deepCopy(left) end
+    local x = math.max(left.x, right.x)
+    local y = math.max(left.y, right.y)
+    local farX = math.min(left.x + left.width, right.x + right.width)
+    local farY = math.min(left.y + left.height, right.y + right.height)
+    if farX <= x or farY <= y then return nil end
+    return { x = x, y = y, width = farX - x, height = farY - y }
+end
+
+local function flatten(node, depth, output, inheritedClip)
+    local bounds = node._visualBounds
+        or { x = node.x, y = node.y, width = node.width, height = node.height }
+    local visible = intersection(bounds, inheritedClip)
+    if not visible then return end
+    output[#output + 1] = nodeEntry(node, depth, visible)
+    local childClip = inheritedClip
+    if node.type == "Scroll" or node.props.clip
+            or node.props.overflow == "clip" then
+        childClip = intersection(childClip, node._visualContentBounds
+            or { x = node.contentX, y = node.contentY,
+                width = node.contentWidth, height = node.contentHeight })
+        if not childClip then return end
+    end
+    for _, child in ipairs(node.children) do
+        flatten(child, depth + 1, output, childClip)
+    end
 end
 
 local function deepest(node, x, y, predicate)
     local contained = inside(node, x, y)
-    if node.props.clip or node.props.overflow == "clip" then
+    if node.type == "Scroll" or node.props.clip
+            or node.props.overflow == "clip" then
         if not contained then return nil end
         local localX, localY = Motion.localPoint(node, x, y)
         if localX < node.contentX or localY < node.contentY
@@ -512,9 +634,110 @@ local function findIdentity(node, identity)
     return nil
 end
 
-local function collectButtons(node, output)
-    if node.type == "Button" and not node.props.disabled then output[#output + 1] = node end
-    for _, child in ipairs(node.children) do collectButtons(child, output) end
+local function collectButtons(node, output, spent)
+    if node.type == "Button" and not node.props.disabled
+            and not spent[node.identity] then
+        output[#output + 1] = node
+    end
+    for _, child in ipairs(node.children) do
+        collectButtons(child, output, spent)
+    end
+end
+
+local function reconcileModalFocus(self, oldModalIdentity)
+    local newModalIdentity = self._modal and self._modal.identity or nil
+    if not oldModalIdentity and newModalIdentity then
+        self._modalReturnFocus = self._focusedIdentity
+        if self._focusedIdentity
+                and not findIdentity(self._modal, self._focusedIdentity) then
+            self._focusedIdentity = nil
+        end
+    elseif oldModalIdentity and not newModalIdentity then
+        local previous = self._modalReturnFocus
+        self._modalReturnFocus = nil
+        if previous and findIdentity(self._tree, previous) then
+            self._focusedIdentity = previous
+        end
+    end
+end
+
+-- Captures every Host-owned value that render/input callbacks may change.
+-- Candidate builds and lifecycle callbacks restore this exact checkpoint on
+-- failure, including focus, interaction, and physical viewport dimensions.
+local function snapshotHost(self)
+    local snapshot = {
+        tree = self._tree,
+        descriptor = self._rootDescriptor,
+        actors = self._actors,
+        addresses = self._addresses,
+        semanticTokens = self._semanticTokens,
+        motions = Motion.snapshot(self._motions),
+        modal = self._modal,
+        modalReturnFocus = self._modalReturnFocus,
+        focusedIdentity = self._focusedIdentity,
+        selectedIdentity = self._selectedIdentity,
+        inspectorVisible = self._inspectorVisible,
+        lastInputText = self._lastInputText,
+        interaction = Interaction.snapshot(self),
+        motionStartSequence = self._motionStartSequence,
+        feedbackQueue = deepCopy(self._feedbackQueue),
+        generation = self._generation,
+        states = {},
+        queue = self._messageQueue,
+        trace = deepCopy(self._messageTrace),
+        messageSequence = self._messageSequence,
+        spentAuthorities = deepCopy(self._spentAuthorities),
+        physicalWidth = self._viewport.physicalWidth,
+        physicalHeight = self._viewport.physicalHeight,
+    }
+    for identity, instance in pairs(self._actors or {}) do
+        snapshot.states[identity] = deepCopy(instance.state)
+    end
+    return snapshot
+end
+
+-- Restores a checkpoint without rerendering application components.
+local function restoreHost(self, snapshot)
+    if self._viewport.physicalWidth ~= snapshot.physicalWidth
+            or self._viewport.physicalHeight ~= snapshot.physicalHeight then
+        self._viewport:resize(snapshot.physicalWidth, snapshot.physicalHeight)
+    end
+    self._tree = snapshot.tree
+    self._rootDescriptor = snapshot.descriptor
+    self._actors = snapshot.actors
+    self._addresses = snapshot.addresses
+    self._semanticTokens = snapshot.semanticTokens
+    self._motions = snapshot.motions
+    self._modal = snapshot.modal
+    self._modalReturnFocus = snapshot.modalReturnFocus
+    self._focusedIdentity = snapshot.focusedIdentity
+    self._selectedIdentity = snapshot.selectedIdentity
+    self._inspectorVisible = snapshot.inspectorVisible
+    self._lastInputText = snapshot.lastInputText
+    Interaction.restore(self, snapshot.interaction)
+    Motion.bindAll(self._motions)
+    Motion.transformTree(self._tree)
+    self._motionStartSequence = snapshot.motionStartSequence
+    self._feedbackQueue = snapshot.feedbackQueue
+    self._generation = snapshot.generation
+    for identity, state in pairs(snapshot.states) do
+        if self._actors[identity] then self._actors[identity].state = state end
+    end
+    self._messageQueue = snapshot.queue
+    self._messageTrace = snapshot.trace
+    self._messageSequence = snapshot.messageSequence
+    self._spentAuthorities = snapshot.spentAuthorities
+end
+
+local function assertPresentationAllowed(self, operation)
+    assert(not self._authorityCallbackActive,
+        (self._authorityLabel or "authority callback") .. " may not " .. operation
+            .. " presentation; return the domain result")
+end
+
+local function assertInputBoundary(self)
+    assert(self._callbackDepth == 0,
+        "platform input may not re-enter an active FrogUI callback")
 end
 
 function host.new(options)
@@ -553,6 +776,7 @@ function host.new(options)
     self._messageQueue = {}
     self._messageTrace = {}
     self._messageSequence = 0
+    self._spentAuthorities = {}
     self._messageTraceLimit = options.messageTraceLimit or 80
     self._messageLoopLimit = options.messageLoopLimit or 256
     assert(type(self._messageTraceLimit) == "number"
@@ -564,6 +788,11 @@ function host.new(options)
     self._callbackDepth = 0
     self._rawClock = Clock.new()
     self._motions = {}
+    self._scrolls = {}
+    self._interactionSession = nil
+    self._modal = nil
+    self._modalReturnFocus = nil
+    self._pointerX, self._pointerY = 0, 0
     self._motionStartSequence = 0
     self._feedbackQueue = {}
     return self
@@ -617,6 +846,8 @@ function host:mount(root)
     self._addresses = context.addresses
     self._semanticTokens = context.semanticTokens
     self._motions = context.motions
+    self._scrolls = context.scrolls
+    self._modal = context.modal
     self._generation = self._generation + 1
     self:_commitFeedback()
     return candidate
@@ -654,8 +885,11 @@ function host:_accepts(instance, action)
 end
 
 function host:_actorSend(instance)
+    local target = { identity = instance.identity, token = instance.token,
+        lifetime = instance.lifetime }
     return function(record)
-        return self:_enqueueAction(instance, record, "actor:" .. actorLabel(instance))
+        return self:_enqueueAction(target, record,
+            "actor:" .. actorLabel(instance))
     end
 end
 
@@ -667,6 +901,8 @@ end
 
 function host:_registerActor(descriptor, owner, path, descendantPath, context,
         logicalPath)
+    assert((context.previewDepth or 0) == 0,
+        "DragSource preview must be stateless presentation")
     local token = descriptor.token
     assert(not context.actors[logicalPath],
         "duplicate mounted actor identity " .. logicalPath)
@@ -682,6 +918,9 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
         order = context.nextOrder,
         source = token.source or descriptor.source,
         mountSource = descriptor.source,
+        -- Reconciliations replace candidate instance tables, but a callback
+        -- retained by drag/animation still belongs to this exact mount.
+        lifetime = old and old.token == token and old.lifetime or {},
     }
     context.nextOrder = context.nextOrder + 1
     local address = props.address
@@ -734,6 +973,8 @@ end
 
 function host:_resolveView(descriptor, owner, path, descendantPath, context,
         logicalPath)
+    assert((context.previewDepth or 0) == 0,
+        "DragSource preview cannot mount an actor view")
     local token = descriptor.token
     local props = shallowCopy(descriptor.props)
     props.children = descriptor.children
@@ -821,6 +1062,15 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
 
     validatePrimitive(token.name, descriptor.children)
     validatePrimitiveProps(self, token.name, descriptor.props)
+    if (context.previewDepth or 0) > 0 then
+        assert(token.name ~= "Pressable" and token.name ~= "Scroll"
+                and token.name ~= "Modal" and token.name ~= "DragSource"
+                and token.name ~= "DropTarget" and token.name ~= "Button",
+            "DragSource preview must be static presentation")
+        assert(token.name ~= "Motion" and descriptor.props.juice == nil
+                and descriptor.props.reactions == nil,
+            "DragSource preview cannot own Motion or event reactions")
+    end
     local node = {
         type = token.name,
         key = descriptor.key,
@@ -831,6 +1081,11 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         props = shallowCopy(descriptor.props),
         children = {},
     }
+    if token.name == "Scroll" then
+        local instance = Interaction.reconcileScroll(
+            self._scrolls[logicalPath], node, node.props, logicalPath)
+        context.scrolls[logicalPath] = instance
+    end
     if token.name == "Motion" or descriptor.props.juice
             or descriptor.props.reactions then
         local instance = Motion.reconcile(self._motions[logicalPath], node,
@@ -844,6 +1099,15 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             childPath(childrenPath, child, index), nil, context,
             logicalChildPath(logicalPath, child, index))
         if resolved then node.children[#node.children + 1] = resolved end
+    end
+    if token.name == "DragSource" then
+        context.previewDepth = (context.previewDepth or 0) + 1
+        local preview = descriptor.props.preview
+        node._dragPreview = self:_resolve(preview, owner,
+            childPath(path .. "/preview", preview, 1), nil, context,
+            logicalChildPath(logicalPath .. "/preview", preview, 1))
+        context.previewDepth = context.previewDepth - 1
+        assert(node._dragPreview, "DragSource preview returned nil")
     end
     return node
 end
@@ -886,6 +1150,8 @@ function host:_build(root)
         semanticTokens = {},
         nextOrder = 1,
         motions = {},
+        scrolls = {},
+        previewDepth = 0,
         nextReceiverOrder = 1,
     }
     local rootPath = childPath("root", root, 1)
@@ -909,33 +1175,65 @@ function host:_build(root)
     candidate = Layout.run(candidate,
         self._viewport.width, self._viewport.height, self)
     Motion.transformTree(candidate)
+    context.modal = Interaction.modalFromTree(candidate)
     return candidate, context
 end
 
 function host:render(root)
     assert(self._mounted and activeHost == self, "Host is not mounted")
+    assertPresentationAllowed(self, "render")
     local requested = root or self._rootDescriptor
     assert(Element.isDescriptor(requested), "Host:render expects a FrogUI element/component")
-    local feedbackMark = #self._feedbackQueue
-    local motionSequence = self._motionStartSequence
+    local checkpoint = snapshotHost(self)
     local ok, candidate, context = pcall(self._build, self, requested)
     if not ok then
-        self:_trimFeedback(feedbackMark)
-        self._motionStartSequence = motionSequence
+        restoreHost(self, checkpoint)
         error(candidate, 0)
     end
-    self._rootDescriptor = requested
-    self._tree = candidate
-    self._actors = context.actors
-    self._addresses = context.addresses
-    self._semanticTokens = context.semanticTokens
-    self._motions = context.motions
-    self._generation = self._generation + 1
-    if self._focusedIdentity and not findIdentity(candidate, self._focusedIdentity) then
-        self._focusedIdentity = nil
+    local previous = {
+        modalIdentity = checkpoint.modal and checkpoint.modal.identity or nil,
+        tree = checkpoint.tree,
+        modal = checkpoint.modal,
+        hoveredIdentity = checkpoint.interaction.hoveredIdentity,
+    }
+    local function commit()
+        self._rootDescriptor = requested
+        self._tree = candidate
+        self._actors = context.actors
+        self._addresses = context.addresses
+        self._semanticTokens = context.semanticTokens
+        self._motions = context.motions
+        self._scrolls = context.scrolls
+        self._modal = context.modal
+        self._generation = self._generation + 1
+        for identity in pairs(self._spentAuthorities) do
+            if not findIdentity(self._tree, identity) then
+                self._spentAuthorities[identity] = nil
+            end
+        end
+        if self._focusedIdentity
+                and not findIdentity(Interaction.activeRoot(self),
+                    self._focusedIdentity) then
+            self._focusedIdentity = nil
+        end
+        if self._selectedIdentity
+                and not findIdentity(Interaction.activeRoot(self),
+                    self._selectedIdentity) then
+            self._selectedIdentity = nil
+        end
+        reconcileModalFocus(self, previous.modalIdentity)
+        Interaction.afterCommit(self, previous)
     end
-    if self._selectedIdentity and not findIdentity(candidate, self._selectedIdentity) then
-        self._selectedIdentity = nil
+    local committed, commitError
+    if self._callbackDepth == 0 then
+        committed, commitError = pcall(self._runCallback, self, commit,
+            "Host:render")
+    else
+        committed, commitError = pcall(commit)
+    end
+    if not committed then
+        restoreHost(self, checkpoint)
+        error(commitError, 0)
     end
     if self._callbackDepth == 0 then self:_commitFeedback() end
     return candidate
@@ -946,6 +1244,7 @@ end
 -- reload separately by preserving their token-table identity.
 function host:refreshTheme(theme, assets, root)
     assert(self._mounted and activeHost == self, "Host is not mounted")
+    assertPresentationAllowed(self, "refresh")
     assert(type(theme) == "table", "Host:refreshTheme needs a theme table")
     assert(type(assets) == "table", "Host:refreshTheme needs an asset table")
     validateTheme(theme)
@@ -986,9 +1285,45 @@ function host:_enqueue(entry)
     assert(self._mounted and activeHost == self, "FrogUI has no mounted Host")
     assert(renderingHost == nil,
         "FrogUI messages may not be sent or emitted during render")
+    assert(not self._authorityCallbackActive,
+        (self._authorityLabel or "authority callback")
+            .. " must return its domain result; use its result callback"
+            .. " for UI messages")
     assert(not self._dispatching,
         "FrogUI reducers/reactions may emit only through Frog.go")
     self._messageQueue[#self._messageQueue + 1] = entry
+end
+
+-- Runs one irreversible domain callback without opening a UI transaction.
+-- Input owns terminalization; UI follow-up belongs to a result callback.
+function host:_runAuthorityCallback(label, callback, ...)
+    assert(type(callback) == "function", label .. " must be a function")
+    assert(not self._authorityCallbackActive,
+        "nested authority callbacks are forbidden")
+    local previousDepth = self._callbackDepth
+    assert(previousDepth == 0,
+        label .. " authority requires the root input boundary")
+    local previousOrigin = self._currentOrigin
+    local previousSource = self._currentOriginSource
+    self._callbackDepth = previousDepth + 1
+    self._authorityCallbackActive = true
+    self._authorityLabel = label
+    self._currentOrigin = label
+    local args = { ... }
+    local results = { pcall(function() return callback(unpack(args)) end) }
+    self._authorityCallbackActive = nil
+    self._authorityLabel = nil
+    self._callbackDepth = previousDepth
+    self._currentOrigin = previousOrigin
+    self._currentOriginSource = previousSource
+    if not results[1] then error(results[2], 0) end
+    table.remove(results, 1)
+    return unpack(results)
+end
+
+-- Preserves the existing source-owned drop boundary name and diagnostics.
+function host:_runDropCallback(callback, ...)
+    return self:_runAuthorityCallback("DragSource onDrop", callback, ...)
 end
 
 function host:_enqueueAction(target, record, origin)
@@ -1051,10 +1386,13 @@ function host:_resolveTarget(target)
         assert(instance, "actor address " .. target.name .. " is not mounted")
         return instance
     end
-    assert(type(target) == "table" and target.identity and target.token,
+    assert(type(target) == "table" and target.identity and target.token
+            and target.lifetime,
         "FrogUI action target must be an actor address")
     local mounted = self._actors[target.identity]
-    assert(mounted == target, "cannot send through an unmounted actor")
+    assert(mounted and mounted.token == target.token
+            and mounted.lifetime == target.lifetime,
+        "cannot send through an unmounted actor")
     return mounted
 end
 
@@ -1063,7 +1401,7 @@ function host:_emitTransitionFact(template, props, origin, originSource)
     local token = Message.token(template)
     assert(token and token.messageKind == "event", "Frog.go emit must be a typed event")
     local resolved = Message.resolve(template, props, "emit")
-    local record = token(resolved)
+    local record = Message.snapshot(token(resolved), "event")
     self._messageQueue[#self._messageQueue + 1] = {
         kind = "event",
         record = record,
@@ -1207,13 +1545,13 @@ function host:_processEvent(entry)
     return changed, traceIndex
 end
 
-function host:_drainMessages()
+function host:_drainMessages(budget)
     local dirty = false
-    local processed = 0
+    budget = budget or { processed = 0 }
     local lastTraceIndex
     while #self._messageQueue > 0 do
-        processed = processed + 1
-        assert(processed <= self._messageLoopLimit,
+        budget.processed = budget.processed + 1
+        assert(budget.processed <= self._messageLoopLimit,
             "FrogUI message loop exceeded " .. self._messageLoopLimit .. " deliveries")
         local entry = table.remove(self._messageQueue, 1)
         local changed, traceIndex
@@ -1228,24 +1566,7 @@ end
 function host:_runCallback(callback, origin, originSource, ...)
     assert(type(callback) == "function", "FrogUI callback must be a function")
     if self._callbackDepth > 0 then return callback(...) end
-    local snapshot = {
-        tree = self._tree,
-        descriptor = self._rootDescriptor,
-        actors = self._actors,
-        addresses = self._addresses,
-        semanticTokens = self._semanticTokens,
-        motions = Motion.snapshot(self._motions),
-        motionStartSequence = self._motionStartSequence,
-        feedbackQueue = deepCopy(self._feedbackQueue),
-        generation = self._generation,
-        states = {},
-        queue = self._messageQueue,
-        trace = deepCopy(self._messageTrace),
-        messageSequence = self._messageSequence,
-    }
-    for identity, instance in pairs(self._actors) do
-        snapshot.states[identity] = deepCopy(instance.state)
-    end
+    local snapshot = snapshotHost(self)
     self._messageQueue = {}
     self._callbackDepth = 1
     self._currentOrigin = origin or "callback"
@@ -1253,42 +1574,106 @@ function host:_runCallback(callback, origin, originSource, ...)
     local args = { ... }
     local results = { pcall(function() return callback(unpack(args)) end) }
     if results[1] then
-        local ok, dirty, traceIndex = pcall(self._drainMessages, self)
-        if ok and dirty then
-            ok, dirty = pcall(self.render, self)
-            if ok and traceIndex and self._messageTrace[traceIndex] then
-                self._messageTrace[traceIndex].reconciled = true
+        local budget = { processed = 0 }
+        local settled = false
+        while not settled do
+            local ok, dirty, traceIndex = pcall(
+                self._drainMessages, self, budget)
+            if not ok then
+                results = { false, dirty }
+                break
             end
+            if dirty then
+                local rendered, renderError = pcall(self.render, self)
+                if not rendered then
+                    results = { false, renderError }
+                    break
+                end
+                if traceIndex and self._messageTrace[traceIndex] then
+                    self._messageTrace[traceIndex].reconciled = true
+                end
+            end
+            settled = #self._messageQueue == 0
         end
-        if not ok then results = { false, dirty } end
     end
     self._callbackDepth = 0
     self._currentOrigin = nil
     self._currentOriginSource = nil
     if not results[1] then
-        self._tree = snapshot.tree
-        self._rootDescriptor = snapshot.descriptor
-        self._actors = snapshot.actors
-        self._addresses = snapshot.addresses
-        self._semanticTokens = snapshot.semanticTokens
-        self._motions = snapshot.motions
-        Motion.bindAll(self._motions)
-        Motion.transformTree(self._tree)
-        self._motionStartSequence = snapshot.motionStartSequence
-        self._feedbackQueue = snapshot.feedbackQueue
-        self._generation = snapshot.generation
-        for identity, state in pairs(snapshot.states) do
-            if self._actors[identity] then self._actors[identity].state = state end
-        end
-        self._messageQueue = snapshot.queue
-        self._messageTrace = snapshot.trace
-        self._messageSequence = snapshot.messageSequence
+        restoreHost(self, snapshot)
         error(results[2], 0)
     end
     self._messageQueue = snapshot.queue
     self:_commitFeedback()
     table.remove(results, 1)
     return unpack(results)
+end
+
+-- Settles UI follow-up after a successful irreversible domain call without
+-- restoring pre-call actor state. A transient failed render is retried once;
+-- the spent control remains inert if recovery is still impossible.
+function host:_runTerminalCallback(callback, origin, originSource, ...)
+    assert(type(callback) == "function", "FrogUI callback must be a function")
+    assert(self._callbackDepth == 0,
+        "terminal UI follow-up requires the root input boundary")
+    self._messageQueue = {}
+    self._callbackDepth = 1
+    self._currentOrigin = origin or "terminal callback"
+    self._currentOriginSource = originSource
+    local args = { ... }
+    local results = { pcall(function() return callback(unpack(args)) end) }
+    local failure = not results[1] and results[2] or nil
+    local budget = { processed = 0 }
+    while #self._messageQueue > 0 do
+        local ok, dirty, traceIndex = pcall(
+            self._drainMessages, self, budget)
+        if not ok then failure = failure or dirty break end
+        if dirty then
+            local rendered, renderError = pcall(self.render, self)
+            if not rendered then failure = failure or renderError break end
+            if traceIndex and self._messageTrace[traceIndex] then
+                self._messageTrace[traceIndex].reconciled = true
+            end
+        end
+    end
+    self._callbackDepth = 0
+    self._currentOrigin = nil
+    self._currentOriginSource = nil
+    self._messageQueue = {}
+    if failure then
+        pcall(self.render, self)
+        error(failure, 0)
+    end
+    self:_commitFeedback()
+    table.remove(results, 1)
+    return unpack(results)
+end
+
+-- Activates either an ordinary Button or its explicit one-shot authority
+-- boundary. A successful commit spends this exact mounted control first.
+function host:_activateButton(button)
+    if self._spentAuthorities[button.identity] then return false end
+    if not button.props.onCommit then
+        self:_runCallback(button.props.onPress,
+            "Button:" .. button.identity, button.source)
+        return true
+    end
+    self._spentAuthorities[button.identity] = true
+    local ok, detail = self:_runAuthorityCallback(
+        "Button onCommit", button.props.onCommit)
+    assert(type(ok) == "boolean",
+        "Button onCommit must return ok, detail")
+    local status = ok and "committed" or "rejected"
+    if not ok then self._spentAuthorities[button.identity] = nil end
+    detail = Message.snapshotPlain(detail, "Button onCommit detail")
+    local notify = function() button.props.onResult(status, detail) end
+    if ok then
+        self:_runTerminalCallback(notify,
+            "Button:onResult", button.source)
+    else
+        self:_runCallback(notify, "Button:onResult", button.source)
+    end
+    return true
 end
 
 function host.send(address, record)
@@ -1306,18 +1691,22 @@ end
 
 function host:update(dt)
     assert(self._mounted, "Host is not mounted")
+    assertPresentationAllowed(self, "advance")
     assert(type(dt) == "number" and dt >= 0, "Host:update dt must be non-negative")
     local time = self._rawClock:now()
     local instances = Motion.snapshot(self._motions)
+    local interactionState = Interaction.snapshot(self)
     local feedback = deepCopy(self._feedbackQueue)
     local ok, err = pcall(function()
         self._rawClock:advance(dt)
+        Interaction.update(self, dt)
         Motion.updateAll(self._motions, self)
         Motion.transformTree(self._tree)
     end)
     if not ok then
         self._rawClock:reset(time)
         self._motions = instances
+        Interaction.restore(self, interactionState)
         self._feedbackQueue = feedback
         Motion.bindAll(self._motions)
         Motion.transformTree(self._tree)
@@ -1333,38 +1722,61 @@ end
 
 function host:resize(width, height)
     assert(self._mounted, "Host is not mounted")
-    self._captures = {}
-    self._pressedIdentity = nil
-    local oldWidth = self._viewport.physicalWidth
-    local oldHeight = self._viewport.physicalHeight
+    assertPresentationAllowed(self, "resize")
+    local checkpoint = snapshotHost(self)
     self._viewport:resize(width, height)
-    local feedbackMark = #self._feedbackQueue
-    local motionSequence = self._motionStartSequence
     local ok, candidate, context = pcall(self._build, self, self._rootDescriptor)
     if not ok then
-        self._viewport:resize(oldWidth, oldHeight)
-        self:_trimFeedback(feedbackMark)
-        self._motionStartSequence = motionSequence
+        restoreHost(self, checkpoint)
         error(candidate, 0)
     end
-    self._tree = candidate
-    self._actors = context.actors
-    self._addresses = context.addresses
-    self._semanticTokens = context.semanticTokens
-    self._motions = context.motions
-    self._generation = self._generation + 1
-    if self._focusedIdentity and not findIdentity(candidate, self._focusedIdentity) then
-        self._focusedIdentity = nil
+    local previous = {
+        modalIdentity = checkpoint.modal and checkpoint.modal.identity or nil,
+        tree = checkpoint.tree,
+        modal = checkpoint.modal,
+        hoveredIdentity = checkpoint.interaction.hoveredIdentity,
+    }
+    local function commit()
+        self._tree = candidate
+        self._actors = context.actors
+        self._addresses = context.addresses
+        self._semanticTokens = context.semanticTokens
+        self._motions = context.motions
+        self._scrolls = context.scrolls
+        self._modal = context.modal
+        self._generation = self._generation + 1
+        if self._focusedIdentity
+                and not findIdentity(Interaction.activeRoot(self),
+                    self._focusedIdentity) then
+            self._focusedIdentity = nil
+        end
+        if self._selectedIdentity
+                and not findIdentity(Interaction.activeRoot(self),
+                    self._selectedIdentity) then
+            self._selectedIdentity = nil
+        end
+        reconcileModalFocus(self, previous.modalIdentity)
+        Interaction.cancel(self, "resize")
+        Interaction.afterCommit(self, previous)
     end
-    if self._selectedIdentity and not findIdentity(candidate, self._selectedIdentity) then
-        self._selectedIdentity = nil
+    local committed, commitError
+    if self._callbackDepth == 0 then
+        committed, commitError = pcall(self._runCallback, self, commit,
+            "Host:resize")
+    else
+        committed, commitError = pcall(commit)
+    end
+    if not committed then
+        restoreHost(self, checkpoint)
+        error(commitError, 0)
     end
     if self._callbackDepth == 0 then self:_commitFeedback() end
 end
 
 function host:_pointerId(pointerId)
     if pointerId == nil then return "mouse" end
-    return pointerId
+    if pointerId == "mouse" or pointerId == "touch" then return pointerId end
+    return "touch:" .. tostring(pointerId)
 end
 
 function host:_virtual(x, y)
@@ -1374,64 +1786,53 @@ end
 
 function host:pointerDown(x, y, pointerId, button)
     assert(self._mounted, "Host is not mounted")
+    assertPresentationAllowed(self, "route pointer input through")
+    assertInputBoundary(self)
     if self._inspectorVisible then
         self:inspect(x, y)
         return true
     end
-    if button ~= nil and button ~= 1 then return false end
     local virtualX, virtualY = self:_virtual(x, y)
-    local target = self._tree and deepest(self._tree, virtualX, virtualY,
-        function(node) return node.type == "Button" and not node.props.disabled end)
-    if not target then return false end
     local id = self:_pointerId(pointerId)
-    self._captures[id] = target.identity
-    self._pressedIdentity = target.identity
-    self._focusedIdentity = target.identity
-    return true
+    return Interaction.pointerDown(self, virtualX, virtualY, id, button)
 end
 
 function host:pointerMove(x, y, pointerId)
     assert(self._mounted, "Host is not mounted")
+    assertPresentationAllowed(self, "route pointer input through")
+    assertInputBoundary(self)
     local virtualX, virtualY = self:_virtual(x, y)
-    local target = self._tree and deepest(self._tree, virtualX, virtualY,
-        function(node) return node.type == "Button" and not node.props.disabled end)
-    self._hoveredIdentity = target and target.identity or nil
-    return self._captures[self:_pointerId(pointerId)] ~= nil
+    return Interaction.pointerMove(self, virtualX, virtualY,
+        self:_pointerId(pointerId))
 end
 
 function host:pointerUp(x, y, pointerId, button)
     assert(self._mounted, "Host is not mounted")
-    if button ~= nil and button ~= 1 then return false end
-    local id = self:_pointerId(pointerId)
-    local capturedIdentity = self._captures[id]
-    self._captures[id] = nil
-    self._pressedIdentity = nil
-    if not capturedIdentity then return false end
+    assertPresentationAllowed(self, "route pointer input through")
+    assertInputBoundary(self)
     local virtualX, virtualY = self:_virtual(x, y)
-    local captured = findIdentity(self._tree, capturedIdentity)
-    if not captured or captured.props.disabled or not inside(captured, virtualX, virtualY) then
-        return true
-    end
-    if captured.props.onPress then
-        self:_runCallback(captured.props.onPress, "Button:" .. captured.identity,
-            captured.source)
-    end
-    return true
+    return Interaction.pointerUp(self, virtualX, virtualY,
+        self:_pointerId(pointerId), button)
 end
 
 function host:keyDown(key, scancode, isrepeat)
     assert(self._mounted, "Host is not mounted")
+    assertPresentationAllowed(self, "route key input through")
+    assertInputBoundary(self)
     if key == "f6" then
-        self._captures = {}
-        self._pressedIdentity = nil
+        Interaction.cancel(self, "inspector")
         self._inspectorVisible = true
         return true
     end
-    if isrepeat then return false end
+    if isrepeat then return self._modal ~= nil end
+    if key == "escape" and Interaction.keyBack(self) then return true end
     local buttons = {}
-    if self._tree then collectButtons(self._tree, buttons) end
+    local inputRoot = self._modal or self._tree
+    if inputRoot then
+        collectButtons(inputRoot, buttons, self._spentAuthorities)
+    end
     if key == "tab" then
-        if #buttons == 0 then return false end
+        if #buttons == 0 then return self._modal ~= nil end
         local nextIndex = 1
         for index, button in ipairs(buttons) do
             if button.identity == self._focusedIdentity then
@@ -1440,6 +1841,7 @@ function host:keyDown(key, scancode, isrepeat)
             end
         end
         self._focusedIdentity = buttons[nextIndex].identity
+        Interaction.revealFocus(self, self._focusedIdentity)
         return true
     end
     local activated
@@ -1454,40 +1856,43 @@ function host:keyDown(key, scancode, isrepeat)
         if matches then activated = button break end
     end
     if not activated and (key == "return" or key == "space" or key == "kpenter") then
-        activated = findIdentity(self._tree, self._focusedIdentity)
+        activated = findIdentity(inputRoot, self._focusedIdentity)
         if activated and (activated.type ~= "Button" or activated.props.disabled) then activated = nil end
     end
-    if activated and activated.props.onPress then
-        self:_runCallback(activated.props.onPress, "Button:" .. activated.identity,
-            activated.source)
+    if activated and (activated.props.onPress or activated.props.onCommit) then
+        self:_activateButton(activated)
         return true
     end
-    return false
+    return self._modal ~= nil
 end
 
 function host:keyUp(key)
     assert(self._mounted, "Host is not mounted")
+    assertPresentationAllowed(self, "route key input through")
+    assertInputBoundary(self)
     if key == "f6" then
         self._inspectorVisible = false
         self._selectedIdentity = nil
         return true
     end
-    return false
+    return self._modal ~= nil
 end
 
 function host:textInput(text)
     assert(self._mounted, "Host is not mounted")
+    assertPresentationAllowed(self, "route text input through")
+    assertInputBoundary(self)
     assert(type(text) == "string", "Host:textInput expects text")
     self._lastInputText = text
-    return false
+    return self._modal ~= nil
 end
 
 function host:setInspectorVisible(visible)
     assert(self._mounted, "Host is not mounted")
+    assertPresentationAllowed(self, "change inspector state in")
     assert(type(visible) == "boolean", "inspector visibility must be boolean")
     if visible and not self._inspectorVisible then
-        self._captures = {}
-        self._pressedIdentity = nil
+        Interaction.cancel(self, "inspector")
     end
     self._inspectorVisible = visible
     if not visible then self._selectedIdentity = nil end
@@ -1495,13 +1900,15 @@ end
 
 function host:inspect(x, y)
     assert(self._mounted, "Host is not mounted")
+    assertPresentationAllowed(self, "change inspection selection in")
     local virtualX, virtualY = self:_virtual(x, y)
-    local selected = self._tree and deepest(self._tree, virtualX, virtualY,
+    local root = Interaction.activeRoot(self)
+    local selected = root and deepest(root, virtualX, virtualY,
         function() return true end)
     self._selectedIdentity = selected and selected.identity or nil
     if not selected then return nil end
     local nodes = {}
-    flatten(self._tree, 0, nodes)
+    flatten(root, 0, nodes)
     for _, entry in ipairs(nodes) do
         if entry.identity == selected.identity then return entry end
     end
@@ -1510,7 +1917,8 @@ end
 function host:inspectionTree()
     assert(self._mounted, "Host is not mounted")
     local nodes = {}
-    if self._tree then flatten(self._tree, 0, nodes) end
+    local root = Interaction.activeRoot(self)
+    if root then flatten(root, 0, nodes) end
     local selected
     for _, entry in ipairs(nodes) do
         if entry.identity == self._selectedIdentity then selected = entry break end
@@ -1534,6 +1942,7 @@ function host:inspectionTree()
         selected = selected,
         messages = self:messageTrace(),
         actors = actors,
+        interaction = Interaction.inspect(self),
     }
 end
 
@@ -1544,6 +1953,8 @@ end
 
 function host:unmount()
     assert(self._mounted, "Host is not mounted")
+    assertPresentationAllowed(self, "unmount")
+    Interaction.cancel(self, "unmount")
     self._captures = {}
     self._pressedIdentity = nil
     self._hoveredIdentity = nil
@@ -1555,6 +1966,9 @@ function host:unmount()
     self._addresses = {}
     self._semanticTokens = {}
     self._motions = {}
+    self._scrolls = {}
+    self._modal = nil
+    self._modalReturnFocus = nil
     self._feedbackQueue = {}
     self._rawClock:reset()
     self._messageQueue = {}
@@ -1647,8 +2061,17 @@ function host:touchreleased(id, x, y)
     return self:pointerUp(x, y, id, 1)
 end
 
+function host:wheelMoved(dx, dy)
+    assert(self._mounted, "Host is not mounted")
+    assertPresentationAllowed(self, "route wheel input through")
+    assertInputBoundary(self)
+    assert(finite(dx) and finite(dy), "wheel delta must be finite")
+    return Interaction.wheelMoved(self, dx, dy)
+end
+
 host.keypressed = host.keyDown
 host.keyreleased = host.keyUp
 host.textinput = host.textInput
+host.wheelmoved = host.wheelMoved
 
 return host

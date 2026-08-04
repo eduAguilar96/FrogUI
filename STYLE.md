@@ -135,7 +135,25 @@ projections, companion style files, or geometry files.
   because FrogUI interpolates them; keep a one-owner endpoint beside its named
   recipe and comment its visual meaning instead of hiding it in framework code.
 
-## 6. Motion and feedback stay declarative
+## 6. Public APIs are discoverable where they are used
+
+- Every public primitive's complete LuaLS contract lives beside its export in
+  `src/frogui/init.lua`. Hover and command-click must expose every accepted prop
+  without requiring a developer to inspect Host validation.
+- Give each primitive a separate multi-line documentation block with a blank
+  line before the next primitive. Do not collapse the public vocabulary into
+  one continuous comment or assignment run.
+- Closed string vocabularies use literal-union aliases. Fields such as
+  `justify`, `align`, `fit`, `axis`, and `dismiss` must offer editor completion
+  for every accepted value.
+- A new or renamed primitive prop updates four places in the same change: the
+  inline LuaLS contract, Host validation, the code-reading guide, and a focused
+  framework regression.
+- Semantic font roles remain the default. Use `Text.fontScale` for deliberate
+  local emphasis and keep the multiplier beside its component owner; change the
+  theme role only when every semantic user should change.
+
+## 7. Motion and feedback stay declarative
 
 - Components attach named `juice` recipes or wrap content in `Frog.Motion`;
   they do not add per-frame update/draw functions for micro-interactions.
@@ -151,7 +169,7 @@ projections, companion style files, or geometry files.
 - Removing a prop-driven Motion target restores its neutral presentation;
   do not preserve layout or semantic state in an animation runner.
 
-## 7. Component and folder ownership
+## 8. Component and folder ownership
 
 - One ordinary visible concept has one directly named file.
 - A component with subcomponents owns one folder, such as
@@ -163,8 +181,26 @@ projections, companion style files, or geometry files.
   `modifiers`, and `requirements`; it must not mutate game state, draw RNG,
   advance simulation, or import Battle/Run command owners.
 - Application state belongs to its actor, not App/root props.
+- A stateful screen keeps its small typed actions, reducers, and concrete render
+  with that actor. Do not extract a `state.lua`, action table, or generic
+  render-callback projection to make a line budget appear smaller.
+- Use `Button` for keyboard-visible actions and `Pressable` for pointer-only
+  inspection/hold surfaces. Do not hide a keyboard shortcut in raw screen key
+  handling.
+- A `DragSource` owns the domain callback; a `DropTarget` exposes only a typed
+  plain-data address and stable key. Never put Run/room policy into a target or
+  the FrogUI interaction runtime.
+- Keep `onDrop` to one atomic domain call and `return` its result directly. It
+  must not send/emit or mutate the Host; UI state reacts in `onDragEnd` or to
+  the typed `DragEnded` fact after the captured session is terminal.
+- Use `Button.onCommit`/`onResult` only for one irreversible authoritative
+  method call. Keep messages/navigation in `onResult`; a successful commit
+  spends that exact control even if the follow-up fails. Ordinary Buttons use
+  `onPress`.
+- Compose drag and Scroll directly. Gesture thresholds and arbitration are
+  framework constants, not component props or per-screen recognizer tables.
 
-## 8. Updating this guide
+## 9. Updating this guide
 
 When review creates or changes a convention:
 
