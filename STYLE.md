@@ -139,6 +139,13 @@ projections, companion style files, or geometry files.
 - Static semantic colors use theme tokens. Animated tint endpoints are numeric
   because FrogUI interpolates them; keep a one-owner endpoint beside its named
   recipe and comment its visual meaning instead of hiding it in framework code.
+- Do not make static identity or already-complete prose clickable. A Button
+  must expose distinct value, and deeper rules need an explicit visible
+  affordance instead of turning an entire title or paragraph into a surprise
+  action.
+- Keep actor state semantic. One selected atom may derive several ordered
+  reference panels; store the atom identity and derive the panels in its
+  presentation owner instead of retaining copied panel arrays in state.
 
 ## 6. Public APIs are discoverable where they are used
 
