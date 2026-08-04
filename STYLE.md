@@ -193,6 +193,10 @@ projections, companion style files, or geometry files.
   `modifiers`, and `requirements`; it must not mutate game state, draw RNG,
   advance simulation, or import Battle/Run command owners.
 - Application state belongs to its actor, not App/root props.
+- Immutable route-issued catalogs/capabilities stay as screen props. Actor
+  state stores semantic deltas such as consumed offer ids, exact receipts,
+  feedback, and mode, then derives the remaining visible rows. Do not copy a
+  full stock/opportunity projection into actor state.
 - A stateful screen keeps its small typed actions, reducers, and concrete render
   with that actor. Do not extract a `state.lua`, action table, or generic
   render-callback projection to make a line budget appear smaller.
