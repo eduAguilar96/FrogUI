@@ -249,6 +249,60 @@ source reorder fail loudly rather than binding the wrong identity. A compatible
 hot-reloaded render callback may move source lines while preserving count and
 kind; structural hook edits require restarting the gallery.
 
+## Mounted resources and frame callbacks
+
+Ordinary components should remain pure render trees. Use a mounted process only
+when one semantic owner must hold an external value and advance it over time,
+such as Battle playback. The complete shape is intentionally two lines:
+
+```lua
+local playback = Frog.useResource(function()
+    local value = Playback.new(props.route)
+    return value, function() value:dispose() end
+end)
+
+Frog.useFrame(function(dt)
+    local revision, snapshot = playback:update(dt)
+    if revision then
+        send(SnapshotCommitted { revision = revision, view = snapshot })
+    end
+end)
+```
+
+`useResource(create)` calls `create` once for that component, actor, or
+addressed-view lifetime. The function must return a non-nil value and one
+cleanup closure. Ordinary rerenders, state changes, responsive Row/Column
+switches, theme refreshes, and resizes retain the value. Changing the semantic
+owner's key creates a new lifetime. A compatible owner-callback hot reload also
+creates a fresh value; the old cleanup runs only after the replacement commits.
+Stateful owner modules remain restart-only in the current gallery hot-reloader.
+
+Failed candidate renders clean their unpublished resources and leave the live
+resource alone. Failed outer callbacks also dispose any resource created by a
+nested render and restore the previous lifetime. Successful removal and Host
+unmount call cleanup exactly once. Cleanup is terminal: FrogUI tries every
+pending cleanup, surfaces the first failure, never replays a disposed cleanup,
+and forbids cleanup from sending messages or changing presentation.
+
+`useFrame(callback)` receives the raw non-negative `dt` exactly once for every
+Host update. It remains active under reduced motion; pausing a process is an
+explicit condition inside the callback. Rerenders replace the closure without
+adding a second subscription. Multiple frame callbacks run in semantic source
+order against the tree committed at the start of the update.
+
+Publish visible changes with typed `send` or `Frog.emit`. FrogUI queues every
+frame publication, then reconciles once after all subscribers finish. Calling
+`Host:render` directly from a frame callback rejects. If a callback fails, its
+queued UI publications roll back. FrogUI cannot and does not pretend to roll
+back arbitrary mutations already made inside the owned resource; a frame error
+is therefore a development failure that must be fixed, not normal control flow.
+
+Both hooks are positional and unconditional. Keep them on separate lines and
+never put them behind a branch or loop. Hold F6 on the owner's visible root to
+see its stable resource id, frame id, and mounted state. The generic gallery
+story demonstrates pause, resize retention, snapshot publication, and explicit
+resource reset without importing game code.
+
 ## State is a separate concept
 
 `Frog.component` is stateless. `Frog.actor` defines a stateful component with
@@ -277,6 +331,8 @@ The current public vocabulary is:
 | `Frog.useViewport` | Read responsive viewport values while rendering |
 | `Frog.useRef` | Retain one exact arranged primitive rectangle |
 | `Frog.useKeyedRefs` | Retain exact primitive refs by authored scalar key |
+| `Frog.useResource` | Own one disposable value for a semantic mount |
+| `Frog.useFrame` | Advance that process once per Host update |
 | `Frog.host` | Create the one application tree owner |
 | `Frog.clock` | Create a deterministic explicitly advanced clock |
 | `Frog.tween` / `spring` / `shake` | Declare reusable visual recipes |

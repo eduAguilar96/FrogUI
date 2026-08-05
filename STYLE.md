@@ -209,7 +209,32 @@ projections, companion style files, or geometry files.
   still match; a structural hook edit keeps the last good tree and requires a
   gallery restart.
 
-## 8. Motion and feedback stay declarative
+## 8. Mounted processes are explicit escape hatches
+
+- Use `Frog.useResource` only when one semantic owner must retain a disposable
+  external process. Ordinary menus, cards, layout, hover state, and visual
+  recipes remain components, actors, primitives, or Motion.
+- Keep `useResource` and `useFrame` calls unconditional, one per line, and in a
+  stable order. Change the owner's semantic key when its process identity must
+  change; do not add dependency arrays or manual caches.
+- A resource factory returns `value, cleanup`. Cleanup belongs beside creation,
+  is safe to call exactly once, sends no FrogUI messages, and does not change
+  presentation. Candidate rollback, committed removal, compatible owner
+  callback reload, and Host unmount are framework-owned lifecycle boundaries.
+- `useFrame` advances only the retained process. It publishes readable snapshots
+  through typed `send` or `emit`; it never calls Host render directly and never
+  rebuilds the tree merely to expose smooth per-frame interpolation.
+- Frame callbacks receive raw `dt` under normal and reduced-motion settings.
+  Game-specific pause and speed policies belong explicitly inside their process,
+  while visual micro-interactions continue to use named Motion clocks.
+- Treat a frame callback exception as a development failure. Queued UI messages
+  roll back, but mutable resource internals cannot be rewound by the framework.
+- Every mounted-process owner must fit on one readable screen: resource creation
+  and cleanup, frame advancement, typed snapshot publication, visible tree.
+  Split the process implementation itself only when it is an independently
+  named concept such as `BattlePlayback`.
+
+## 9. Motion and feedback stay declarative
 
 - Components attach named `juice` recipes or wrap content in `Frog.Motion`;
   they do not add per-frame update/draw functions for micro-interactions.
@@ -240,7 +265,7 @@ projections, companion style files, or geometry files.
 - A new cue updates the provider catalog, its component owner, the code-reading
   guide, and a focused semantic-cue regression in the same change.
 
-## 9. Component and folder ownership
+## 10. Component and folder ownership
 
 - One ordinary visible concept has one directly named file.
 - A component with subcomponents owns one folder, such as
@@ -321,7 +346,7 @@ projections, companion style files, or geometry files.
   owner elsewhere or project its state through screen callbacks or generic
   render slots.
 
-## 10. Updating this guide
+## 11. Updating this guide
 
 When review creates or changes a convention:
 

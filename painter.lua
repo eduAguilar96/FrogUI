@@ -488,6 +488,18 @@ local function defaultInspector(host, entry, selected)
                 bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
             detailLine = detailLine + 1
         end
+        for _, process in ipairs(entry.processes or {}) do
+            local hooks = {}
+            for _, hook in ipairs(process.hooks or {}) do
+                local state = hook.kind == "useResource"
+                    and (hook.mounted and " mounted" or " disposed") or ""
+                hooks[#hooks + 1] = hook.kind .. " " .. hook.id .. state
+            end
+            g.print("process " .. process.owner .. ": "
+                    .. table.concat(hooks, " / "),
+                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
+            detailLine = detailLine + 1
+        end
         if entry.motion then
             local declared = {}
             for _, recipe in ipairs(entry.motion.declared or {}) do

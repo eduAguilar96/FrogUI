@@ -476,4 +476,25 @@ Frog.useRef = Host.useRef
 ---@return table<FrogUIRefKey, FrogUIRef>
 Frog.useKeyedRefs = Host.useKeyedRefs
 
+--- Creates one resource for the current component, actor, or addressed-view
+--- lifetime. Ordinary rerenders and resizes retain it. Owner removal, Host
+--- unmount, or a compatible owner-callback hot reload runs cleanup exactly
+--- once after the successful outer transaction commits.
+---
+--- The create function runs during the first candidate render and must return
+--- both a non-nil value and its cleanup closure. If that candidate fails,
+--- FrogUI cleans up the unpublished value and keeps the committed resource.
+---@generic T
+---@param create fun(): T, fun()
+---@return T
+Frog.useResource = Host.useResource
+
+--- Subscribes the current semantic owner to Host updates. The callback receives
+--- the raw non-negative dt exactly once per update, including when reduced
+--- motion is enabled. Rerenders replace its closure without adding another
+--- subscription. Publish visible changes with Frog.send or Frog.emit; FrogUI
+--- batches all frame publications before reconciling the tree.
+---@param callback fun(dt: number)
+Frog.useFrame = Host.useFrame
+
 return Frog

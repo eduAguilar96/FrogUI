@@ -149,6 +149,36 @@ local function actorLabel(instance)
     return instance.identity
 end
 
+-- Preserves the primary failure while still surfacing a cleanup failure that
+-- happened while FrogUI restored the last committed tree.
+local function appendFailure(primary, label, secondary)
+    if not secondary then return primary end
+    return tostring(primary) .. "\n" .. label .. ": " .. tostring(secondary)
+end
+
+-- Returns every live resource that exists after a checkpoint but not in it.
+-- Pending disposals matter because a nested render may create and then remove
+-- a resource before the surrounding callback rolls back.
+local function abandonedResources(self, snapshot)
+    local retained, found, output = {}, {}, {}
+    for _, instance in ipairs(snapshot.resources or {}) do
+        retained[instance.lifetime] = true
+    end
+    local function collect(entries)
+        for _, instance in ipairs(entries or {}) do
+            if not retained[instance.lifetime]
+                    and not found[instance.lifetime]
+                    and not instance.disposed then
+                found[instance.lifetime] = true
+                output[#output + 1] = instance
+            end
+        end
+    end
+    collect(self._resources)
+    collect(self._pendingResourceDisposals)
+    return output
+end
+
 local function stateAllowed(state, from)
     if from == nil then return true end
     if type(from) ~= "table" then return state == from end
@@ -675,6 +705,9 @@ local function nodeEntry(node, depth, visibleBounds)
         }
     end
     if node._ref then entry.ref = Ref.inspect(node._ref) end
+    if node._processOwners then
+        entry.processes = deepCopy(node._processOwners)
+    end
     if node.actor then entry.actor = deepCopy(node.actor) end
     if node.view then entry.view = deepCopy(node.view) end
     return entry
@@ -839,6 +872,10 @@ local function snapshotHost(self)
         addresses = self._addresses,
         semanticTokens = self._semanticTokens,
         hookOwners = self._hookOwners,
+        resources = self._resources,
+        frames = self._frames,
+        nextResourceId = self._nextResourceId,
+        nextFrameId = self._nextFrameId,
         refs = self._refs,
         refRectangles = Ref.snapshot(self._refs),
         nextRefId = self._nextRefId,
@@ -863,6 +900,10 @@ local function snapshotHost(self)
         pendingActorUnmounts = shallowCopy(self._pendingActorUnmounts),
         pendingActorUnmountLifetimes = shallowCopy(
             self._pendingActorUnmountLifetimes),
+        pendingResourceDisposals = shallowCopy(
+            self._pendingResourceDisposals),
+        pendingResourceLifetimes = shallowCopy(
+            self._pendingResourceLifetimes),
         physicalWidth = self._viewport.physicalWidth,
         physicalHeight = self._viewport.physicalHeight,
     }
@@ -874,6 +915,7 @@ end
 
 -- Restores a checkpoint without rerendering application components.
 local function restoreHost(self, snapshot)
+    local abandoned = abandonedResources(self, snapshot)
     Ref.restore(self._refs, snapshot.refs, snapshot.refRectangles)
     if self._viewport.physicalWidth ~= snapshot.physicalWidth
             or self._viewport.physicalHeight ~= snapshot.physicalHeight then
@@ -885,6 +927,10 @@ local function restoreHost(self, snapshot)
     self._addresses = snapshot.addresses
     self._semanticTokens = snapshot.semanticTokens
     self._hookOwners = snapshot.hookOwners
+    self._resources = snapshot.resources
+    self._frames = snapshot.frames
+    self._nextResourceId = snapshot.nextResourceId
+    self._nextFrameId = snapshot.nextFrameId
     self._refs = snapshot.refs
     self._nextRefId = snapshot.nextRefId
     self._motions = snapshot.motions
@@ -912,12 +958,23 @@ local function restoreHost(self, snapshot)
     self._spentAuthorities = snapshot.spentAuthorities
     self._pendingActorUnmounts = snapshot.pendingActorUnmounts
     self._pendingActorUnmountLifetimes = snapshot.pendingActorUnmountLifetimes
+    self._pendingResourceDisposals = snapshot.pendingResourceDisposals
+    self._pendingResourceLifetimes = snapshot.pendingResourceLifetimes
+    return self:_disposeResources(abandoned, "resource rollback")
 end
 
 local function assertPresentationAllowed(self, operation)
     assert(not self._authorityCallbackActive,
         (self._authorityLabel or "authority callback") .. " may not " .. operation
             .. " presentation; return the domain result")
+end
+
+-- Frame subscribers publish typed messages; they never re-enter structural
+-- Host lifecycle methods before the shared frame batch has finished.
+local function assertFramePublication(self, operation)
+    assert(not self._frameCallbacksActive,
+        "useFrame callbacks publish with Frog.send/Frog.emit; direct "
+            .. operation .. " is forbidden")
 end
 
 local function assertInputBoundary(self)
@@ -959,6 +1016,10 @@ function host.new(options)
     self._addresses = {}
     self._semanticTokens = {}
     self._hookOwners = {}
+    self._resources = {}
+    self._frames = {}
+    self._nextResourceId = 0
+    self._nextFrameId = 0
     self._refs = {}
     self._nextRefId = 0
     self._messageQueue = {}
@@ -987,6 +1048,8 @@ function host.new(options)
     self._feedbackQueue = {}
     self._pendingActorUnmounts = {}
     self._pendingActorUnmountLifetimes = {}
+    self._pendingResourceDisposals = {}
+    self._pendingResourceLifetimes = {}
     return self
 end
 
@@ -1068,12 +1131,17 @@ function host:_newRef(key)
     return Ref.new(self, "ref-" .. tostring(self._nextRefId), key)
 end
 
--- Publishes every arranged ref as the final step of a successful Host commit.
-function host:_publishRefs(context)
-    local previous = self._refs
+-- Publishes render-hook ownership, process subscriptions, and arranged refs as
+-- one successful Host commit. Removed resources are only staged here; their
+-- cleanup waits for the surrounding callback transaction to settle.
+function host:_publishRenderHooks(context)
+    local previousRefs = self._refs
+    self:_stageResourceDisposals(self._resources, context.resources)
     self._hookOwners = context.hookOwners
+    self._resources = context.resources
+    self._frames = context.frames
     self._refs = context.refs
-    Ref.publish(previous, self._refs, context.refRectangles)
+    Ref.publish(previousRefs, self._refs, context.refRectangles)
 end
 
 -- Republishes geometry after retained layout mutates the committed tree, such
@@ -1156,6 +1224,104 @@ function host.useKeyedRefs(keys)
     return public
 end
 
+-- Creates one resource owned by the current semantic render lifetime. Ordinary
+-- rerenders and resizes retain it; replacing the owner's render callback during
+-- hot reload creates a fresh resource and disposes the old one after commit.
+function host.useResource(create)
+    assert(renderingHost,
+        "Frog.useResource(create) may only run while a component, actor, or view renders")
+    assert(type(create) == "function",
+        "Frog.useResource(create) expects a create function")
+    local source = hookSource()
+    local session, previous = renderingHost:_consumeHook(
+        "useResource", source)
+    local instance = previous and not session.refreshSources
+        and previous.instance or nil
+    if not instance then
+        local value, cleanup = create()
+        assert(value ~= nil,
+            "Frog.useResource(create) must return a non-nil resource")
+        assert(type(cleanup) == "function",
+            "Frog.useResource(create) must return resource, cleanup")
+        renderingHost._nextResourceId = renderingHost._nextResourceId + 1
+        instance = {
+            id = "resource-" .. tostring(renderingHost._nextResourceId),
+            lifetime = {},
+            value = value,
+            cleanup = cleanup,
+            source = source,
+            owner = session.label,
+            disposed = false,
+        }
+        session.context.createdResources[
+            #session.context.createdResources + 1] = instance
+    end
+    session.context.resources[#session.context.resources + 1] = instance
+    session.hooks[session.index] = {
+        kind = "useResource",
+        source = source,
+        instance = instance,
+    }
+    return instance.value
+end
+
+-- Registers one callback for every Host update. The current committed callback
+-- replaces the previous closure without duplicating the subscription.
+function host.useFrame(callback)
+    assert(renderingHost,
+        "Frog.useFrame(callback) may only run while a component, actor, or view renders")
+    assert(type(callback) == "function",
+        "Frog.useFrame(callback) expects a function")
+    local source = hookSource()
+    local session, previous = renderingHost:_consumeHook("useFrame", source)
+    local id = previous and previous.id
+    if not id then
+        renderingHost._nextFrameId = renderingHost._nextFrameId + 1
+        id = "frame-" .. tostring(renderingHost._nextFrameId)
+    end
+    local frame = {
+        id = id,
+        callback = callback,
+        source = source,
+        owner = session.label,
+    }
+    session.context.frames[#session.context.frames + 1] = frame
+    session.hooks[session.index] = {
+        kind = "useFrame",
+        source = source,
+        id = id,
+        frame = frame,
+    }
+end
+
+-- Attaches development-only process metadata to the visible root returned by
+-- one semantic owner. Nested semantic wrappers accumulate readable entries.
+local function annotateProcesses(node, ownerRecord, label, logicalPath)
+    if not node or not ownerRecord then return end
+    local hooks = {}
+    for _, hook in ipairs(ownerRecord.hooks or {}) do
+        if hook.kind == "useResource" then
+            hooks[#hooks + 1] = {
+                kind = hook.kind,
+                id = hook.instance.id,
+                mounted = not hook.instance.disposed,
+            }
+        elseif hook.kind == "useFrame" then
+            hooks[#hooks + 1] = {
+                kind = hook.kind,
+                id = hook.id,
+            }
+        end
+    end
+    if #hooks == 0 then return end
+    node._processOwners = node._processOwners or {}
+    table.insert(node._processOwners, 1, {
+        owner = label,
+        logicalPath = logicalPath,
+        hooks = hooks,
+    })
+end
+
 function host:mount(root)
     assert(Element.isDescriptor(root), "Host:mount expects a FrogUI element/component")
     assert(not self._mounted, "Host is already mounted")
@@ -1164,11 +1330,15 @@ function host:mount(root)
     local feedbackMark = #self._feedbackQueue
     local motionSequence = self._motionStartSequence
     local refSequence = self._nextRefId
+    local resourceSequence = self._nextResourceId
+    local frameSequence = self._nextFrameId
     local ok, candidate, context = pcall(self._build, self, root)
     if not ok then
         self:_trimFeedback(feedbackMark)
         self._motionStartSequence = motionSequence
         self._nextRefId = refSequence
+        self._nextResourceId = resourceSequence
+        self._nextFrameId = frameSequence
         error(candidate, 0)
     end
     activeHost = self
@@ -1185,7 +1355,7 @@ function host:mount(root)
     self._chrome = context.chrome
     reconcileModalFocus(self, {}, nil)
     self._generation = self._generation + 1
-    self:_publishRefs(context)
+    self:_publishRenderHooks(context)
     self:_commitFeedback()
     return candidate
 end
@@ -1335,6 +1505,8 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
     local resolved = self:_resolve(rendered, token.name, outputPath, path, context,
         logicalOutputPath(logicalPath, rendered))
     if resolved then
+        annotateProcesses(resolved, context.hookOwners[logicalPath],
+            token.name, logicalPath)
         resolved._actorInstances = resolved._actorInstances or {}
         table.insert(resolved._actorInstances, 1, instance)
         if descriptor.key ~= nil then resolved.key = descriptor.key end
@@ -1383,6 +1555,8 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
     local resolved = self:_resolve(rendered, token.name, outputPath,
         descendantPath or path, context, logicalOutputPath(logicalPath, rendered))
     if resolved then
+        annotateProcesses(resolved, context.hookOwners[logicalPath],
+            token.name, logicalPath)
         if descriptor.key ~= nil then resolved.key = descriptor.key end
         resolved.view = {
             name = token.name,
@@ -1425,7 +1599,11 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         local outputPath = childPath(path .. "/output", rendered, 1)
         local resolved = self:_resolve(rendered, token.name, outputPath, path,
             context, logicalOutputPath(logicalPath, rendered))
-        if resolved and descriptor.key ~= nil then resolved.key = descriptor.key end
+        if resolved then
+            annotateProcesses(resolved, context.hookOwners[logicalPath],
+                token.name, logicalPath)
+            if descriptor.key ~= nil then resolved.key = descriptor.key end
+        end
         return resolved
     elseif token.kind == "actor" then
         return self:_registerActor(descriptor, owner, path, descendantPath,
@@ -1547,6 +1725,9 @@ function host:_build(root)
         addressNames = {},
         semanticTokens = {},
         hookOwners = {},
+        resources = {},
+        createdResources = {},
+        frames = {},
         refs = {},
         refAttachments = {},
         refRectangles = {},
@@ -1556,50 +1737,63 @@ function host:_build(root)
         previewDepth = 0,
         nextReceiverOrder = 1,
     }
-    local rootPath = childPath("root", root, 1)
-    local rootLogicalPath = logicalChildPath("logical-root", root, 1)
-    local candidate = self:_resolve(root, nil, rootPath, nil, context,
-        rootLogicalPath)
-    candidate = self:_resolveDeferred(candidate, context)
-    assert(candidate, "Host root component returned nil")
-    local nextEventOrder = assignEventOrder(candidate, 1)
-    local hiddenActors = {}
-    for _, instance in pairs(context.actors) do
-        hiddenActors[#hiddenActors + 1] = instance
-    end
-    table.sort(hiddenActors, function(left, right) return left.order < right.order end)
-    for _, instance in ipairs(hiddenActors) do
-        if not instance.eventOrder then
-            instance.eventOrder = nextEventOrder
-            nextEventOrder = nextEventOrder + 1
+    local function buildCandidate()
+        local rootPath = childPath("root", root, 1)
+        local rootLogicalPath = logicalChildPath("logical-root", root, 1)
+        local candidate = self:_resolve(root, nil, rootPath, nil, context,
+            rootLogicalPath)
+        candidate = self:_resolveDeferred(candidate, context)
+        assert(candidate, "Host root component returned nil")
+        local nextEventOrder = assignEventOrder(candidate, 1)
+        local hiddenActors = {}
+        for _, instance in pairs(context.actors) do
+            hiddenActors[#hiddenActors + 1] = instance
         end
+        table.sort(hiddenActors,
+            function(left, right) return left.order < right.order end)
+        for _, instance in ipairs(hiddenActors) do
+            if not instance.eventOrder then
+                instance.eventOrder = nextEventOrder
+                nextEventOrder = nextEventOrder + 1
+            end
+        end
+        candidate = Layout.run(candidate,
+            self._viewport.width, self._viewport.height, self)
+        for handle, node in pairs(context.refAttachments) do
+            context.refRectangles[handle] = {
+                x = node.x,
+                y = node.y,
+                width = node.width,
+                height = node.height,
+            }
+        end
+        Motion.transformTree(candidate)
+        context.modals, context.chrome = Interaction.planesFromTree(candidate)
+        context.modal = context.modals[#context.modals]
+        return candidate
     end
-    candidate = Layout.run(candidate,
-        self._viewport.width, self._viewport.height, self)
-    for handle, node in pairs(context.refAttachments) do
-        context.refRectangles[handle] = {
-            x = node.x,
-            y = node.y,
-            width = node.width,
-            height = node.height,
-        }
+    local ok, candidate = pcall(buildCandidate)
+    if not ok then
+        local cleanupError = self:_disposeResources(
+            context.createdResources, "Candidate resource rollback")
+        error(appendFailure(candidate,
+            "candidate resource rollback failed", cleanupError), 0)
     end
-    Motion.transformTree(candidate)
-    context.modals, context.chrome = Interaction.planesFromTree(candidate)
-    context.modal = context.modals[#context.modals]
     return candidate, context
 end
 
 function host:render(root)
     assert(self._mounted and activeHost == self, "Host is not mounted")
     assertPresentationAllowed(self, "render")
+    assertFramePublication(self, "render")
     local requested = root or self._rootDescriptor
     assert(Element.isDescriptor(requested), "Host:render expects a FrogUI element/component")
     local checkpoint = snapshotHost(self)
     local ok, candidate, context = pcall(self._build, self, requested)
     if not ok then
-        restoreHost(self, checkpoint)
-        error(candidate, 0)
+        local rollbackError = restoreHost(self, checkpoint)
+        error(appendFailure(candidate, "Host render rollback failed",
+            rollbackError), 0)
     end
     local previous = {
         actors = checkpoint.actors,
@@ -1636,7 +1830,7 @@ function host:render(root)
                     self._selectedIdentity) then
             self._selectedIdentity = nil
         end
-        self:_publishRefs(context)
+        self:_publishRenderHooks(context)
         Interaction.afterCommit(self, previous)
         commitFinished = true
     end
@@ -1648,19 +1842,26 @@ function host:render(root)
         committed, commitError = pcall(commit)
     end
     if not committed then
-        if not commitFinished then restoreHost(self, checkpoint) end
-        error(commitError, 0)
+        local rollbackError
+        if not commitFinished then rollbackError = restoreHost(self, checkpoint) end
+        local cleanupError = self:_disposeResources(
+            context.createdResources, "Candidate resource rollback")
+        local failure = appendFailure(commitError,
+            "Host render rollback failed", rollbackError)
+        error(appendFailure(failure,
+            "candidate resource rollback failed", cleanupError), 0)
     end
     if self._callbackDepth == 0 then self:_commitFeedback() end
     return candidate
 end
 
--- Dev presentation reload keeps the mounted Host and actor state, but drops
--- resource caches before rebuilding the committed tree. Component modules
+-- Dev presentation reload keeps mounted actors/processes, but drops font and
+-- asset caches before rebuilding the committed tree. Component modules
 -- reload separately by preserving their token-table identity.
 function host:refreshTheme(theme, assets, root)
     assert(self._mounted and activeHost == self, "Host is not mounted")
     assertPresentationAllowed(self, "refresh")
+    assertFramePublication(self, "theme refresh")
     assert(type(theme) == "table", "Host:refreshTheme needs a theme table")
     assert(type(assets) == "table", "Host:refreshTheme needs an asset table")
     validateTheme(theme)
@@ -1804,6 +2005,64 @@ function host:_stageActorUnmounts(previousActors, nextActors)
             }
         end
     end
+end
+
+-- Defers cleanup for committed resources that are absent from the next tree.
+-- Matching lifetimes survive reorders, resizes, and ordinary rerenders.
+function host:_stageResourceDisposals(previousResources, nextResources)
+    local retained = {}
+    for _, instance in ipairs(nextResources or {}) do
+        retained[instance.lifetime] = true
+    end
+    for _, instance in ipairs(previousResources or {}) do
+        if not retained[instance.lifetime]
+                and not self._pendingResourceLifetimes[instance.lifetime]
+                and not instance.disposed then
+            self._pendingResourceLifetimes[instance.lifetime] = true
+            self._pendingResourceDisposals[
+                #self._pendingResourceDisposals + 1] = instance
+        end
+    end
+end
+
+-- Runs resource cleanup as a terminal authority boundary. Cleanup cannot send
+-- UI messages or mutate presentation, and every resource is attempted once
+-- even when an earlier cleanup fails.
+function host:_disposeResources(resources, label)
+    if not resources or #resources == 0 then return nil end
+    local previousDepth = self._callbackDepth
+    local previousOrigin = self._currentOrigin
+    local previousSource = self._currentOriginSource
+    local previousAuthority = self._authorityCallbackActive
+    local previousAuthorityLabel = self._authorityLabel
+    self._callbackDepth = previousDepth + 1
+    self._authorityCallbackActive = true
+    self._authorityLabel = label or "Resource cleanup"
+    local firstError
+    for _, instance in ipairs(resources) do
+        if not instance.disposed then
+            instance.disposed = true
+            self._currentOrigin = instance.owner .. ":resource cleanup"
+            self._currentOriginSource = instance.source
+            local ok, err = pcall(instance.cleanup)
+            if not ok and not firstError then firstError = err end
+        end
+    end
+    self._authorityCallbackActive = previousAuthority
+    self._authorityLabel = previousAuthorityLabel
+    self._callbackDepth = previousDepth
+    self._currentOrigin = previousOrigin
+    self._currentOriginSource = previousSource
+    return firstError
+end
+
+-- Commits every resource disposal staged by successful reconciliation.
+function host:_commitResourceDisposals()
+    if #self._pendingResourceDisposals == 0 then return nil end
+    local pending = self._pendingResourceDisposals
+    self._pendingResourceDisposals = {}
+    self._pendingResourceLifetimes = {}
+    return self:_disposeResources(pending, "Resource cleanup")
 end
 
 -- Runs every committed actor cleanup exactly once as a terminal authority
@@ -2068,14 +2327,16 @@ function host:_runCallback(callback, origin, originSource, ...)
     self._currentOrigin = nil
     self._currentOriginSource = nil
     if not results[1] then
-        restoreHost(self, snapshot)
-        error(results[2], 0)
+        local rollbackError = restoreHost(self, snapshot)
+        error(appendFailure(results[2], "Host callback rollback failed",
+            rollbackError), 0)
     end
     self._messageQueue = snapshot.queue
     local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
-    local cleanupError = self:_commitActorUnmounts()
-    if not feedbackOk or cleanupError then
-        error(not feedbackOk and feedbackError or cleanupError, 0)
+    local resourceError = self:_commitResourceDisposals()
+    local actorError = self:_commitActorUnmounts()
+    if not feedbackOk or resourceError or actorError then
+        error(not feedbackOk and feedbackError or resourceError or actorError, 0)
     end
     table.remove(results, 1)
     return unpack(results)
@@ -2114,8 +2375,10 @@ function host:_runTerminalCallback(callback, origin, originSource, ...)
     self._messageQueue = {}
     if failure then pcall(self.render, self) end
     local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
+    local resourceError = self:_commitResourceDisposals()
     local cleanupError = self:_commitActorUnmounts()
     failure = failure or (not feedbackOk and feedbackError or nil)
+        or resourceError
         or cleanupError
     if failure then error(failure, 0) end
     table.remove(results, 1)
@@ -2173,10 +2436,35 @@ function host.emit(record)
     return activeHost:_enqueueEvent(record, "Frog.emit")
 end
 
+-- Delivers one dt to the callbacks committed at the start of this update.
+-- Their typed publications share one callback transaction and therefore
+-- reconcile only after every frame subscriber has run.
+function host:_runFrames(dt)
+    if #self._frames == 0 then return end
+    local frames = {}
+    for index, frame in ipairs(self._frames) do frames[index] = frame end
+    self:_runCallback(function()
+        self._frameCallbacksActive = true
+        local ok, failure = pcall(function()
+            for _, frame in ipairs(frames) do
+                local delivered, err = pcall(frame.callback, dt)
+                if not delivered then
+                    error(frame.owner .. " " .. frame.id
+                        .. " failed: " .. tostring(err), 0)
+                end
+            end
+        end)
+        self._frameCallbacksActive = nil
+        if not ok then error(failure, 0) end
+    end, "Host:update frames")
+end
+
 function host:update(dt)
     assert(self._mounted, "Host is not mounted")
     assertPresentationAllowed(self, "advance")
+    assertInputBoundary(self)
     assert(type(dt) == "number" and dt >= 0, "Host:update dt must be non-negative")
+    self:_runFrames(dt)
     local time = self._rawClock:now()
     local instances = Motion.snapshot(self._motions)
     local interactionState = Interaction.snapshot(self)
@@ -2222,12 +2510,14 @@ end
 function host:resize(width, height)
     assert(self._mounted, "Host is not mounted")
     assertPresentationAllowed(self, "resize")
+    assertFramePublication(self, "resize")
     local checkpoint = snapshotHost(self)
     self._viewport:resize(width, height)
     local ok, candidate, context = pcall(self._build, self, self._rootDescriptor)
     if not ok then
-        restoreHost(self, checkpoint)
-        error(candidate, 0)
+        local rollbackError = restoreHost(self, checkpoint)
+        error(appendFailure(candidate, "Host resize rollback failed",
+            rollbackError), 0)
     end
     local previous = {
         actors = checkpoint.actors,
@@ -2258,7 +2548,7 @@ function host:resize(width, height)
                     self._selectedIdentity) then
             self._selectedIdentity = nil
         end
-        self:_publishRefs(context)
+        self:_publishRenderHooks(context)
         Interaction.cancel(self, "resize")
         Interaction.afterCommit(self, previous)
         commitFinished = true
@@ -2271,8 +2561,14 @@ function host:resize(width, height)
         committed, commitError = pcall(commit)
     end
     if not committed then
-        if not commitFinished then restoreHost(self, checkpoint) end
-        error(commitError, 0)
+        local rollbackError
+        if not commitFinished then rollbackError = restoreHost(self, checkpoint) end
+        local cleanupError = self:_disposeResources(
+            context.createdResources, "Candidate resource rollback")
+        local failure = appendFailure(commitError,
+            "Host resize rollback failed", rollbackError)
+        error(appendFailure(failure,
+            "candidate resource rollback failed", cleanupError), 0)
     end
     if self._callbackDepth == 0 then self:_commitFeedback() end
 end
@@ -2495,8 +2791,10 @@ end
 function host:unmount()
     assert(self._mounted, "Host is not mounted")
     assertPresentationAllowed(self, "unmount")
+    assertFramePublication(self, "unmount")
     Interaction.cancel(self, "unmount")
     self:_stageActorUnmounts(self._actors, {})
+    self:_stageResourceDisposals(self._resources, {})
     self._captures = {}
     self._pressedIdentity = nil
     self._hoveredIdentity = nil
@@ -2509,6 +2807,8 @@ function host:unmount()
     self._semanticTokens = {}
     local committedRefs = self._refs
     self._hookOwners = {}
+    self._resources = {}
+    self._frames = {}
     self._refs = {}
     Ref.publish(committedRefs, self._refs, {})
     self._motions = {}
@@ -2522,8 +2822,11 @@ function host:unmount()
     self._messageQueue = {}
     self._mounted = false
     if activeHost == self then activeHost = nil end
-    local cleanupError = self:_commitActorUnmounts()
-    if cleanupError then error(cleanupError, 0) end
+    local resourceError = self:_commitResourceDisposals()
+    local actorError = self:_commitActorUnmounts()
+    if resourceError or actorError then
+        error(resourceError or actorError, 0)
+    end
 end
 
 function host:_fontSize(role)
