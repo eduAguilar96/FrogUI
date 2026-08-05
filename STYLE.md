@@ -82,6 +82,22 @@ Test-only components and actors follow the same rule: either an adjacent
 comment or a clearly enclosing test comment must explain what contract the
 probe exercises.
 
+### Code is the single runtime authority
+
+- A tunable value or executable rule lives in exactly one code owner. Do not
+  copy its literal into documentation, another component, or a test.
+- Documentation explains purpose and names the owning Lua field/function; it
+  does not maintain a second numeric table that can drift. When code and prose
+  disagree, correct the prose and follow the code.
+- Tests import the owner or assert semantic relationships. They do not restate
+  production constants as independent expected values.
+- Simulation owns every game-state transition. Presentation may consume the
+  exact emitted fact and its resulting value for timed display, but it may not
+  know or repeat the rule that produced it.
+- A pre-implementation design may propose a value temporarily. The slice that
+  implements it must move it into its one code owner and replace the document
+  literal with that owner's name.
+
 ## 3. One file reads in a predictable order
 
 Prefer this order for a component module:
@@ -179,8 +195,9 @@ projections, companion style files, or geometry files.
 - Give commonly reused pulse, flash, shake, and entrance compositions a
   PascalCase recipe name near their visual owner. Do not add a framework tag
   for a composition that is already readable as `Frog.sequence`.
-- Select raw, playback, or feedback time explicitly with `Frog.withClock`.
-  UI recipes never advance a clock themselves.
+- Select the owner's named time policy explicitly with `Frog.withClock`.
+  Battle distinguishes raw, execution, dice, and feedback; ordinary UI normally
+  uses raw. UI recipes never advance a clock themselves.
 - `Frog.Motion` changes presentation only. Its parent allocates the stable
   layout footprint; scaling must not be used to negotiate sibling geometry.
 - Removing a prop-driven Motion target restores its neutral presentation;
