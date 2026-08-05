@@ -306,8 +306,13 @@ the deepest matching `{ address, key }` target.
 
 Inside a Scroll, movement along its axis scrolls while cross-axis movement
 drags. The fixed 8px/1.25-bias rule is Host-owned, so components never assemble
-recognizers or receive raw pointer coordinates. See the exact constructors and
-cancellation order in [section 5 of the guide](../../design/reference/frog-ui.md#5-m4am4b-mobile-interaction-recipes).
+recognizers or receive raw pointer coordinates. Ordinary lists omit
+`scrollPosition` and retain their current offset. A selection carousel can set
+`scrollPosition`, `snapInterval`, and `onScrollEnd`: arrows declaratively move
+the selected item, a completed touch swipe snaps to one interval, and the
+callback receives that final offset. FrogUI still owns pointer math; the
+component only converts an offset into its semantic selected index. See the
+exact constructors and cancellation order in [section 5 of the guide](../../design/reference/frog-ui.md#5-m4am4b-mobile-interaction-recipes).
 
 `onDrop` is deliberately narrower than an ordinary UI callback: it calls one
 atomic domain operation and returns its result. FrogUI ends capture before the

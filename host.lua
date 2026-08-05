@@ -80,7 +80,10 @@ local TYPE_PROPS = {
         onPress = true, onLongPress = true, onHoverChange = true,
         sound = true, hoverSound = true,
     },
-    Scroll = { axis = true, bar = true },
+    Scroll = {
+        axis = true, bar = true, scrollPosition = true,
+        snapInterval = true, onScrollEnd = true,
+    },
     Modal = {
         dismiss = true, onDismiss = true,
         dismissSound = true,
@@ -542,6 +545,12 @@ local function validatePrimitiveProps(self, name, props)
         assert(props.axis ~= nil, "Scroll axis is required")
         assert(props.bar == nil or type(props.bar) == "boolean",
             "Scroll bar must be a boolean")
+        validateNumber(props.scrollPosition, "Scroll scrollPosition", 0)
+        validateNumber(props.snapInterval, "Scroll snapInterval")
+        assert(props.snapInterval == nil or props.snapInterval > 0,
+            "Scroll snapInterval must be positive")
+        assert(props.onScrollEnd == nil or type(props.onScrollEnd) == "function",
+            "Scroll onScrollEnd must be a function")
     elseif name == "Modal" then
         assert(props.offset == nil,
             "Modal is a root portal and does not accept offset")

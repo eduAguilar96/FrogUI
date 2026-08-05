@@ -232,6 +232,13 @@ local Interaction = require("src.frogui.interaction")
 ---@class FrogScrollProps:FrogUIElementProps
 ---@field axis FrogUIScrollAxis Required retained scrolling axis.
 ---@field bar? boolean Show the built-in touch-sized scrollbar.
+--- Requested logical offset. When present, reconciliation moves directly to
+--- this position; omit it for ordinary retained free scrolling.
+---@field scrollPosition? number
+--- Positive logical-pixel interval used to snap a completed touch gesture.
+---@field snapInterval? number
+--- Called once after a claimed touch gesture settles, with its final offset.
+---@field onScrollEnd? fun(position:number)
 ---@field [integer] FrogUIElementDescription Exactly one content child.
 
 ---@class FrogModalProps:FrogUIBaseProps

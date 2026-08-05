@@ -263,6 +263,10 @@ projections, companion style files, or geometry files.
   Do not manufacture a successful commit receipt just to reuse the visual.
 - Compose drag and Scroll directly. Gesture thresholds and arbitration are
   framework constants, not component props or per-screen recognizer tables.
+- A centered selection rail uses Scroll's declarative `scrollPosition`,
+  `snapInterval`, and final `onScrollEnd(position)` seam. Convert that settled
+  offset into an actor-owned selected index; do not recreate raw drag sessions,
+  per-move state, or carousel pointer math inside the component.
 - When one actor replaces one visible region, mount it at that region and pass
   the ordinary child directly. When one state change has several visible
   consumers, mount the actor around the smallest common interaction region and

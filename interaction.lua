@@ -67,6 +67,10 @@ function interaction.reconcileScroll(old, node, props, identity)
     instance.identity = identity
     instance.axis = props.axis
     instance.node = node
+    if props.scrollPosition ~= nil then
+        instance.offset = props.scrollPosition
+        instance.velocity = 0
+    end
     node._scroll = instance
     return instance
 end
@@ -531,6 +535,34 @@ function interaction.pointerUp(host, x, y, pointerId, button)
     if session.claimed == "drag" then
         local target = acceptedTarget(host, x, y, session.payload.kind)
         finishDrag(host, session, "cancelled", "no-target", target)
+    elseif session.claimed == "scroll" then
+        local scroll = (host._scrolls or {})[session.scrollIdentity]
+        local callback, source, position
+        if scroll then
+            local node = scroll.node
+            local interval = node and node.props.snapInterval or nil
+            if interval then
+                scroll.offset = math.max(0, math.min(scroll.extent,
+                    math.floor(scroll.offset / interval + 0.5) * interval))
+                scroll.velocity = 0
+                require("src.frogui.layout").arrangeScroll(node, host)
+                Motion.transformTree(host._tree)
+            end
+            callback = node and node.props.onScrollEnd or nil
+            -- A completion observer defines the release position as terminal,
+            -- even when it does not request interval snapping.
+            if callback then scroll.velocity = 0 end
+            source = node and node.source or nil
+            position = scroll.offset
+        end
+        host._interactionSession = nil
+        host._pressedIdentity = nil
+        if callback then
+            local ok, err = pcall(host._runCallback, host, function()
+                callback(position)
+            end, "Scroll:end", source)
+            if not ok then error(err, 0) end
+        end
     else
         local pressed
         if not session.claimed and session.distance < interaction.CLAIM_DISTANCE
