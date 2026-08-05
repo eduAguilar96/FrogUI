@@ -224,7 +224,8 @@ The actor/message guide and production examples start at
 `src/presentation/hud/connected.lua` is the application-facing bottom
 navigation layer. Its sibling `hud.lua` owns placement and `button.lua` owns
 the icon face. Mount the connected component once after the current screen so
-Book and Settings occupy the same place on every route:
+Book and Settings occupy the same lower-left/lower-right corners on every
+route, leaving the center available to scene controls:
 
 ```lua
 Frog.Overlay {
