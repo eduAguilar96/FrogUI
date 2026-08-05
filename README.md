@@ -182,6 +182,73 @@ The callable-table trick is ordinary Lua metatable behavior implemented in
 [`element.lua`](element.lua). FrogUI uses it only to make component trees read
 like tags without adding a template language or compiler.
 
+## Committed geometry refs
+
+Effects sometimes need the exact arranged rectangle of a visible primitive.
+Create one stable handle while its semantic owner renders, then attach it to
+that exact primitive:
+
+```lua
+local Fighter = Frog.component("Fighter", function(props)
+    local root = Frog.useRef()
+
+    return Frog.Box {
+        ref = root,
+        width = props.width,
+        height = props.height,
+        CharacterFigure { character = props.character },
+    }
+end)
+```
+
+A newly mounted `root.current` is nil during its first candidate render. A
+retained handle continues to expose its previous committed rectangle while a
+later candidate builds. After the Host successfully measures, arranges, and
+commits the whole tree, the read-only `current` property returns a detached
+rectangle copy:
+
+```lua
+local rect = root.current
+-- { x = ..., y = ..., width = ..., height = ... }
+```
+
+A failed render, arrange, or resize leaves the previous rectangle untouched.
+Removing the attachment, removing its owner, or unmounting the Host clears it
+back to nil. Mutating the returned copy never changes FrogUI. A handle may be
+attached to only one exact primitive; putting `ref` on a component, actor, or
+view rejects loudly, so a reusable component forwards named anchor props to
+the primitives it owns. Refs report stable arranged layout geometry; a
+transient `Frog.Motion` paint transform does not rewrite them.
+
+Host-owned retained layout changes do update refs without rerendering the
+component. Scroll drag, snap, wheel, momentum, keyboard focus reveal, and
+rollback restore each republish the newly arranged descendant rectangles before
+their observers run. A failed surrounding transaction restores the previous
+Scroll position and ref rectangles together.
+
+For dynamic authored atoms, call one keyed hook instead of looping over
+`useRef`:
+
+```lua
+local badgeRefs = Frog.useKeyedRefs(view.badgeKeys)
+
+return Frog.each(view.badges, function(badge)
+    return Frog.Box {
+        key = badge.authoredIndex,
+        ref = badgeRefs[badge.authoredIndex],
+        Badge { badge = badge },
+    }
+end)
+```
+
+Retained scalar keys keep the same handle through reorders and resizes. Removed
+keys clear their old handles; a later re-add receives a new handle. Ref hooks
+are positional and unconditional, so put each hook call on its own line and do
+not branch, reorder, or loop around calls. Hook count, kind, and same-callback
+source reorder fail loudly rather than binding the wrong identity. A compatible
+hot-reloaded render callback may move source lines while preserving count and
+kind; structural hook edits require restarting the gallery.
+
 ## State is a separate concept
 
 `Frog.component` is stateless. `Frog.actor` defines a stateful component with
@@ -208,6 +275,8 @@ The current public vocabulary is:
 | `Frog.on`, `Frog.go`, `Frog.prop`, `Frog.oneOf` | Declarative actor transition helpers |
 | `Frog.each` | Render a keyed array without losing item identity |
 | `Frog.useViewport` | Read responsive viewport values while rendering |
+| `Frog.useRef` | Retain one exact arranged primitive rectangle |
+| `Frog.useKeyedRefs` | Retain exact primitive refs by authored scalar key |
 | `Frog.host` | Create the one application tree owner |
 | `Frog.clock` | Create a deterministic explicitly advanced clock |
 | `Frog.tween` / `spring` / `shake` | Declare reusable visual recipes |
@@ -679,3 +748,8 @@ or a static component under `src/presentation/spell_card/`, `spellbook/`, or
 `SpellbookOverlay` and shared bag surface, but not the stateful Spellbook actor.
 A bad reload keeps the last good tree. Stateful actor modules and framework
 core require a restart.
+
+The generic committed-ref story appears between SpellCard motion and the
+foundation story. Reverse its three keyed boxes with R, switch Row/Column with
+F7, and use F6 to verify that each authored key keeps its ref id while its
+arranged rectangle follows the new position.

@@ -115,6 +115,7 @@ function interaction.restore(host, state)
             require("src.frogui.layout").arrangeScroll(scroll.node, host)
         end
     end
+    host:_refreshCommittedRefs()
 end
 
 local function localInside(node, x, y)
@@ -493,6 +494,7 @@ function interaction.pointerMove(host, x, y, pointerId)
             if scroll.node then
                 require("src.frogui.layout").arrangeScroll(scroll.node, host)
                 Motion.transformTree(host._tree)
+                host:_refreshCommittedRefs()
             end
         end
     elseif session.claimed == "drag" then
@@ -547,6 +549,7 @@ function interaction.pointerUp(host, x, y, pointerId, button)
                 scroll.velocity = 0
                 require("src.frogui.layout").arrangeScroll(node, host)
                 Motion.transformTree(host._tree)
+                host:_refreshCommittedRefs()
             end
             callback = node and node.props.onScrollEnd or nil
             -- A completion observer defines the release position as terminal,
@@ -651,6 +654,7 @@ function interaction.wheelMoved(host, dx, dy)
     scroll.velocity = 0
     require("src.frogui.layout").arrangeScroll(node, host)
     Motion.transformTree(host._tree)
+    host:_refreshCommittedRefs()
     return true
 end
 
@@ -680,6 +684,7 @@ function interaction.revealFocus(host, identity)
         end
     end
     Motion.transformTree(host._tree)
+    host:_refreshCommittedRefs()
 end
 
 function interaction.keyBack(host)

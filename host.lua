@@ -9,6 +9,7 @@ local Message = require("src.frogui.message")
 local Clock = require("src.frogui.clock")
 local Motion = require("src.frogui.motion")
 local Interaction = require("src.frogui.interaction")
+local Ref = require("src.frogui.ref")
 
 local host = {}
 host.__index = host
@@ -28,7 +29,7 @@ local DEFAULT_FONT_SIZES = { title = 28, heading = 22, body = 18, caption = 13 }
 local COMMON_PROPS = {
     key = true, width = true, height = true, grow = true,
     opacity = true, offset = true, testId = true,
-    juice = true, reactions = true,
+    juice = true, reactions = true, ref = true,
 }
 local CONTAINER_PROPS = {
     padding = true, background = true, border = true, borderWidth = true,
@@ -113,7 +114,7 @@ local function deepCopy(value, seen)
     if type(value) ~= "table" then return value end
     if Message.isAddress(value) or value.__frogMessageToken
             or value.__frogBinding or value.__frogTransition
-            or Clock.isClock(value) then
+            or Clock.isClock(value) or Ref.isRef(value) then
         return value
     end
     seen = seen or {}
@@ -344,6 +345,12 @@ local function validatePrimitiveProps(self, name, props)
     for key in pairs(props) do
         assert(COMMON_PROPS[key] or allowed[key],
             "unknown prop " .. tostring(key) .. " on " .. name)
+    end
+    if props.ref ~= nil then
+        assert(Ref.isRef(props.ref),
+            name .. " ref must come from Frog.useRef/useKeyedRefs")
+        assert(Ref.belongsTo(props.ref, self),
+            name .. " ref belongs to a different Host")
     end
     validateSize(props.width, name .. " width")
     validateSize(props.height, name .. " height")
@@ -667,6 +674,7 @@ local function nodeEntry(node, depth, visibleBounds)
             velocity = node._scroll.velocity,
         }
     end
+    if node._ref then entry.ref = Ref.inspect(node._ref) end
     if node.actor then entry.actor = deepCopy(node.actor) end
     if node.view then entry.view = deepCopy(node.view) end
     return entry
@@ -747,6 +755,22 @@ local function findIdentity(node, identity)
     return nil
 end
 
+-- Collects exact arranged rectangles from the one currently committed tree.
+local function collectCommittedRefRectangles(node, rectangles)
+    if not node then return end
+    if node._ref then
+        rectangles[node._ref] = {
+            x = node.x,
+            y = node.y,
+            width = node.width,
+            height = node.height,
+        }
+    end
+    for _, child in ipairs(node.children or {}) do
+        collectCommittedRefRectangles(child, rectangles)
+    end
+end
+
 local function collectButtons(node, output, spent)
     if node.type == "Button" and not node.props.disabled
             and not spent[node.identity] then
@@ -814,6 +838,10 @@ local function snapshotHost(self)
         actors = self._actors,
         addresses = self._addresses,
         semanticTokens = self._semanticTokens,
+        hookOwners = self._hookOwners,
+        refs = self._refs,
+        refRectangles = Ref.snapshot(self._refs),
+        nextRefId = self._nextRefId,
         motions = Motion.snapshot(self._motions),
         modals = self._modals,
         modal = self._modal,
@@ -846,6 +874,7 @@ end
 
 -- Restores a checkpoint without rerendering application components.
 local function restoreHost(self, snapshot)
+    Ref.restore(self._refs, snapshot.refs, snapshot.refRectangles)
     if self._viewport.physicalWidth ~= snapshot.physicalWidth
             or self._viewport.physicalHeight ~= snapshot.physicalHeight then
         self._viewport:resize(snapshot.physicalWidth, snapshot.physicalHeight)
@@ -855,6 +884,9 @@ local function restoreHost(self, snapshot)
     self._actors = snapshot.actors
     self._addresses = snapshot.addresses
     self._semanticTokens = snapshot.semanticTokens
+    self._hookOwners = snapshot.hookOwners
+    self._refs = snapshot.refs
+    self._nextRefId = snapshot.nextRefId
     self._motions = snapshot.motions
     self._modals = snapshot.modals
     self._modal = snapshot.modal
@@ -867,6 +899,7 @@ local function restoreHost(self, snapshot)
     Interaction.restore(self, snapshot.interaction)
     Motion.bindAll(self._motions)
     Motion.transformTree(self._tree)
+    self:_refreshCommittedRefs()
     self._motionStartSequence = snapshot.motionStartSequence
     self._feedbackQueue = snapshot.feedbackQueue
     self._generation = snapshot.generation
@@ -925,6 +958,9 @@ function host.new(options)
     self._actors = {}
     self._addresses = {}
     self._semanticTokens = {}
+    self._hookOwners = {}
+    self._refs = {}
+    self._nextRefId = 0
     self._messageQueue = {}
     self._messageTrace = {}
     self._messageSequence = 0
@@ -981,6 +1017,145 @@ function host.currentViewport()
     return renderingHost._viewport:snapshot()
 end
 
+-- Captures the application call site so reordered positional hooks fail at the
+-- owning component instead of silently receiving another hook's identity.
+local function hookSource()
+    if not debug or not debug.getinfo then return nil end
+    for level = 2, 14 do
+        local info = debug.getinfo(level, "Sl")
+        if not info then break end
+        local path = info.short_src or info.source
+        if path and not path:find("src/frogui/", 1, true) then
+            return { path = path, line = info.currentline }
+        end
+    end
+    return nil
+end
+
+-- Formats one hook call site for direct, actionable diagnostics.
+local function hookSourceLabel(source)
+    if not source then return "unknown source" end
+    return (source.path or "?") .. ":" .. tostring(source.line or "?")
+end
+
+-- Consumes the next positional slot and validates its committed kind/site.
+function host:_consumeHook(kind, source)
+    local session = assert(self._renderHook,
+        "Frog." .. kind .. " may only run while a component, actor, or view renders")
+    session.index = session.index + 1
+    local previous = session.previous and session.previous.hooks[session.index]
+    if session.previous then
+        assert(previous,
+            session.label .. " changed its hook count; FrogUI hooks are positional"
+                .. " and unconditional")
+        assert(previous.kind == kind,
+            session.label .. " changed hook " .. session.index .. " from "
+                .. previous.kind .. " to " .. kind)
+        if not session.refreshSources and previous.source and source then
+            assert(previous.source.path == source.path
+                    and previous.source.line == source.line,
+                session.label .. " reordered hook " .. session.index .. " from "
+                    .. hookSourceLabel(previous.source) .. " to "
+                    .. hookSourceLabel(source))
+        end
+    end
+    return session, previous
+end
+
+-- Allocates a stable read-only handle for one newly mounted hook/key.
+function host:_newRef(key)
+    self._nextRefId = self._nextRefId + 1
+    return Ref.new(self, "ref-" .. tostring(self._nextRefId), key)
+end
+
+-- Publishes every arranged ref as the final step of a successful Host commit.
+function host:_publishRefs(context)
+    local previous = self._refs
+    self._hookOwners = context.hookOwners
+    self._refs = context.refs
+    Ref.publish(previous, self._refs, context.refRectangles)
+end
+
+-- Republishes geometry after retained layout mutates the committed tree, such
+-- as Scroll drag, snap, wheel, momentum, focus reveal, or rollback restore.
+function host:_refreshCommittedRefs()
+    local rectangles = {}
+    collectCommittedRefRectangles(self._tree, rectangles)
+    Ref.publish(self._refs, self._refs, rectangles)
+end
+
+-- Implements the public positional single-ref hook.
+function host.useRef()
+    assert(renderingHost,
+        "Frog.useRef() may only run while a component, actor, or view renders")
+    local source = hookSource()
+    local session, previous = renderingHost:_consumeHook("useRef", source)
+    local handle = previous and previous.handle or renderingHost:_newRef(nil)
+    session.hooks[session.index] = {
+        kind = "useRef",
+        source = source,
+        handle = handle,
+    }
+    session.context.refs[handle] = true
+    return handle
+end
+
+-- Validates and copies the dense scalar key list accepted by keyed refs.
+local function keyedRefKeys(keys)
+    assert(type(keys) == "table" and getmetatable(keys) == nil,
+        "Frog.useKeyedRefs(keys) expects a plain dense array")
+    local indexes = {}
+    for index in pairs(keys) do
+        assert(type(index) == "number" and index >= 1 and index % 1 == 0,
+            "Frog.useKeyedRefs(keys) expects a plain dense array")
+        indexes[#indexes + 1] = index
+    end
+    table.sort(indexes)
+    local copied, seen = {}, {}
+    for expected, index in ipairs(indexes) do
+        assert(index == expected,
+            "Frog.useKeyedRefs(keys) expects a plain dense array")
+        local key = keys[index]
+        local kind = type(key)
+        assert(kind == "string" or kind == "number" or kind == "boolean",
+            "Frog.useKeyedRefs key " .. index .. " must be a scalar")
+        if kind == "number" then
+            assert(finite(key),
+                "Frog.useKeyedRefs key " .. index .. " must be finite")
+        end
+        assert(not seen[key],
+            "Frog.useKeyedRefs has duplicate key " .. tostring(key))
+        seen[key] = true
+        copied[index] = key
+    end
+    return copied
+end
+
+-- Implements the public keyed-ref hook while returning an ordinary readable
+-- key-to-handle table. Only handles for retained keys preserve identity.
+function host.useKeyedRefs(keys)
+    assert(renderingHost,
+        "Frog.useKeyedRefs(keys) may only run while a component, actor, or view renders")
+    local copied = keyedRefKeys(keys)
+    local source = hookSource()
+    local session, previous = renderingHost:_consumeHook(
+        "useKeyedRefs", source)
+    local previousHandles = previous and previous.handles or {}
+    local handles, public = {}, {}
+    for _, key in ipairs(copied) do
+        local handle = previousHandles[key] or renderingHost:_newRef(key)
+        handles[key] = handle
+        public[key] = handle
+        session.context.refs[handle] = true
+    end
+    session.hooks[session.index] = {
+        kind = "useKeyedRefs",
+        source = source,
+        handles = handles,
+    }
+    return public
+end
+
 function host:mount(root)
     assert(Element.isDescriptor(root), "Host:mount expects a FrogUI element/component")
     assert(not self._mounted, "Host is already mounted")
@@ -988,10 +1163,12 @@ function host:mount(root)
         "FrogUI permits only one mounted Host")
     local feedbackMark = #self._feedbackQueue
     local motionSequence = self._motionStartSequence
+    local refSequence = self._nextRefId
     local ok, candidate, context = pcall(self._build, self, root)
     if not ok then
         self:_trimFeedback(feedbackMark)
         self._motionStartSequence = motionSequence
+        self._nextRefId = refSequence
         error(candidate, 0)
     end
     activeHost = self
@@ -1008,6 +1185,7 @@ function host:mount(root)
     self._chrome = context.chrome
     reconcileModalFocus(self, {}, nil)
     self._generation = self._generation + 1
+    self:_publishRefs(context)
     self:_commitFeedback()
     return candidate
 end
@@ -1018,6 +1196,45 @@ function host:_withRender(label, callback, ...)
     local results = { pcall(callback, ...) }
     renderingHost = previous
     if not results[1] then error(label .. " render failed: " .. tostring(results[2]), 0) end
+    table.remove(results, 1)
+    return unpack(results)
+end
+
+-- Reconciles one semantic render owner's positional hooks. Owners are keyed by
+-- logical component/actor/view identity, independent of primitive layout.
+function host:_withOwnerRender(label, token, logicalPath, context, callback, ...)
+    assert(not self._renderHook,
+        "FrogUI render owners may not render another owner synchronously")
+    assert(not context.hookOwners[logicalPath],
+        "duplicate FrogUI render-owner identity " .. logicalPath)
+    local previous = self._hookOwners[logicalPath]
+    assert(not previous or previous.token == token,
+        label .. " replaced a retained hook owner with a different token")
+    local session = {
+        label = label,
+        token = token,
+        logicalPath = logicalPath,
+        context = context,
+        previous = previous,
+        refreshSources = previous and previous.renderCallback ~= callback or false,
+        hooks = {},
+        index = 0,
+    }
+    self._renderHook = session
+    local results = { pcall(self._withRender, self, label, callback, ...) }
+    self._renderHook = nil
+    if not results[1] then error(results[2], 0) end
+    if previous then
+        assert(session.index == #previous.hooks,
+            label .. " changed its hook count from " .. #previous.hooks
+                .. " to " .. session.index .. "; FrogUI hooks are positional"
+                .. " and unconditional")
+    end
+    context.hookOwners[logicalPath] = {
+        token = token,
+        renderCallback = callback,
+        hooks = session.hooks,
+    }
     table.remove(results, 1)
     return unpack(results)
 end
@@ -1107,8 +1324,9 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
 
     local stateForRender = deepCopy(instance.state)
     local before = deepCopy(stateForRender)
-    local rendered = self:_withRender(token.name,
-        token.definition.render, props, stateForRender, self:_actorSend(instance))
+    local rendered = self:_withOwnerRender(token.name, token, logicalPath,
+        context, token.definition.render, props, stateForRender,
+        self:_actorSend(instance))
     assert(deepEqual(before, stateForRender),
         token.name .. " mutated its state during render; return state from an action/reaction")
     if rendered == nil or rendered == false then return nil end
@@ -1154,7 +1372,8 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
     status._host = self
     local stateForRender = instance and deepCopy(instance.state) or nil
     local before = deepCopy(stateForRender)
-    local rendered = self:_withRender(token.name, token.render, props, stateForRender,
+    local rendered = self:_withOwnerRender(token.name, token, logicalPath,
+        context, token.render, props, stateForRender,
         self:_addressSend(address), status)
     assert(deepEqual(before, stateForRender),
         token.name .. " mutated observed actor state during render")
@@ -1177,6 +1396,12 @@ end
 function host:_resolve(descriptor, owner, path, descendantPath, context,
         logicalPath)
     local token = descriptor.token
+    if token.kind ~= "primitive" then
+        assert(descriptor.props.ref == nil,
+            token.name .. " is a semantic " .. token.kind
+                .. "; ref attaches only to an exact FrogUI primitive"
+                .. " (forward a named anchor prop explicitly)")
+    end
     if token.kind == "component" or token.kind == "actor" or token.kind == "view" then
         local semanticName = token.kind .. ":" .. token.name
         local candidate = context.semanticTokens[semanticName]
@@ -1192,7 +1417,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     if token.kind == "component" then
         local props = shallowCopy(descriptor.props)
         props.children = descriptor.children
-        local rendered = self:_withRender(token.name, token.render, props)
+        local rendered = self:_withOwnerRender(token.name, token, logicalPath,
+            context, token.render, props)
         if rendered == nil or rendered == false then return nil end
         assert(Element.isDescriptor(rendered),
             token.name .. " must return one FrogUI element or nil")
@@ -1222,6 +1448,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     validatePrimitive(token.name, descriptor.children)
     validatePrimitiveProps(self, token.name, descriptor.props)
     if (context.previewDepth or 0) > 0 then
+        assert(descriptor.props.ref == nil,
+            "DragSource preview cannot attach committed refs")
         assert(token.name ~= "Pressable" and token.name ~= "Scroll"
                 and token.name ~= "Modal" and token.name ~= "Chrome"
                 and token.name ~= "DragSource"
@@ -1241,6 +1469,16 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         props = shallowCopy(descriptor.props),
         children = {},
     }
+    local attachedRef = descriptor.props.ref
+    if attachedRef then
+        assert(context.refs[attachedRef],
+            token.name .. " ref is not live in the current render tree")
+        assert(not context.refAttachments[attachedRef],
+            "FrogUI ref " .. Ref.inspect(attachedRef).id
+                .. " is attached to more than one primitive")
+        context.refAttachments[attachedRef] = node
+        node._ref = attachedRef
+    end
     if token.name == "Scroll" then
         local instance = Interaction.reconcileScroll(
             self._scrolls[logicalPath], node, node.props, logicalPath)
@@ -1308,6 +1546,10 @@ function host:_build(root)
         addresses = {},
         addressNames = {},
         semanticTokens = {},
+        hookOwners = {},
+        refs = {},
+        refAttachments = {},
+        refRectangles = {},
         nextOrder = 1,
         motions = {},
         scrolls = {},
@@ -1334,6 +1576,14 @@ function host:_build(root)
     end
     candidate = Layout.run(candidate,
         self._viewport.width, self._viewport.height, self)
+    for handle, node in pairs(context.refAttachments) do
+        context.refRectangles[handle] = {
+            x = node.x,
+            y = node.y,
+            width = node.width,
+            height = node.height,
+        }
+    end
     Motion.transformTree(candidate)
     context.modals, context.chrome = Interaction.planesFromTree(candidate)
     context.modal = context.modals[#context.modals]
@@ -1386,6 +1636,7 @@ function host:render(root)
                     self._selectedIdentity) then
             self._selectedIdentity = nil
         end
+        self:_publishRefs(context)
         Interaction.afterCommit(self, previous)
         commitFinished = true
     end
@@ -1936,6 +2187,7 @@ function host:update(dt)
         Interaction.update(self, dt)
         _, completions = Motion.updateAll(self._motions, self)
         Motion.transformTree(self._tree)
+        self:_refreshCommittedRefs()
     end)
     if not ok then
         self._rawClock:reset(time)
@@ -1944,6 +2196,7 @@ function host:update(dt)
         self._feedbackQueue = feedback
         Motion.bindAll(self._motions)
         Motion.transformTree(self._tree)
+        self:_refreshCommittedRefs()
         error(err, 0)
     end
     local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
@@ -2005,6 +2258,7 @@ function host:resize(width, height)
                     self._selectedIdentity) then
             self._selectedIdentity = nil
         end
+        self:_publishRefs(context)
         Interaction.cancel(self, "resize")
         Interaction.afterCommit(self, previous)
         commitFinished = true
@@ -2253,6 +2507,10 @@ function host:unmount()
     self._actors = {}
     self._addresses = {}
     self._semanticTokens = {}
+    local committedRefs = self._refs
+    self._hookOwners = {}
+    self._refs = {}
+    Ref.publish(committedRefs, self._refs, {})
     self._motions = {}
     self._scrolls = {}
     self._modals = {}

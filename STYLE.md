@@ -181,7 +181,35 @@ projections, companion style files, or geometry files.
   local emphasis and keep the multiplier beside its component owner; change the
   theme role only when every semantic user should change.
 
-## 7. Motion and feedback stay declarative
+## 7. Committed refs name exact geometry
+
+- Create geometry handles only with `Frog.useRef()` or one
+  `Frog.useKeyedRefs(keys)` call inside a component, actor, or addressed-view
+  render. Never construct a ref table or inspect a test id/path at runtime.
+- Hooks are positional and unconditional. Keep every hook call on its own line,
+  in the same order, outside branches and loops. Use `useKeyedRefs` when a
+  dynamic authored collection needs handles; do not loop over `useRef`.
+- Attach one handle to exactly one primitive with `ref = handle`. Never attach
+  it to a component, actor, or view; those owners forward a specifically named
+  anchor prop to the exact primitive they own. The public read-only `current`
+  property returns a detached copy of that primitive's exact arranged
+  `{ x, y, width, height }`, or nil while unattached/unmounted. Mutating the
+  returned copy never changes FrogUI.
+- Refs describe committed layout, not transient `Frog.Motion` paint transforms.
+  Effects consume the stable arranged anchor and apply presentation motion in
+  their own explicit layer.
+- A candidate render, arrange, or resize never publishes partial rectangles.
+  All current handles update together after Host commit; removal and unmount
+  clear them together. Host-owned retained Scroll arrangements republish their
+  descendant rectangles before observers run and restore them with a failed
+  transaction. Do not use a ref to decide simulation or ordinary component
+  layout.
+- Source sites make same-callback hook reorder fail loudly. Replacing a render
+  callback during hot reload may refresh those sites only when count and kind
+  still match; a structural hook edit keeps the last good tree and requires a
+  gallery restart.
+
+## 8. Motion and feedback stay declarative
 
 - Components attach named `juice` recipes or wrap content in `Frog.Motion`;
   they do not add per-frame update/draw functions for micro-interactions.
@@ -212,7 +240,7 @@ projections, companion style files, or geometry files.
 - A new cue updates the provider catalog, its component owner, the code-reading
   guide, and a focused semantic-cue regression in the same change.
 
-## 8. Component and folder ownership
+## 9. Component and folder ownership
 
 - One ordinary visible concept has one directly named file.
 - A component with subcomponents owns one folder, such as
@@ -293,7 +321,7 @@ projections, companion style files, or geometry files.
   owner elsewhere or project its state through screen callbacks or generic
   render slots.
 
-## 9. Updating this guide
+## 10. Updating this guide
 
 When review creates or changes a convention:
 

@@ -28,6 +28,19 @@ local Interaction = require("src.frogui.interaction")
 ---@alias FrogUISoundCue string|false
 ---A semantic cue id, or `false` to disable that primitive's default sound.
 
+---@alias FrogUIRefKey string|number|boolean
+---A stable authored key retained by `Frog.useKeyedRefs`.
+
+---@class FrogUIRect
+---@field x number Committed arranged left edge in logical viewport pixels.
+---@field y number Committed arranged top edge in logical viewport pixels.
+---@field width number Committed arranged width in logical viewport pixels.
+---@field height number Committed arranged height in logical viewport pixels.
+
+---@class FrogUIRef
+---@field current? FrogUIRect Read-only property returning a detached rectangle copy, or nil while unattached/unmounted; mutating the copy never changes FrogUI.
+---A stable handle created by a render hook and attached to one primitive.
+
 ---@class FrogUIOffset
 ---@field x? number Horizontal logical-pixel offset applied after layout.
 ---@field y? number Vertical logical-pixel offset applied after layout.
@@ -64,6 +77,7 @@ local Interaction = require("src.frogui.interaction")
 
 ---@class FrogUIBaseProps
 ---@field key? string|number Stable identity among reordered siblings.
+---@field ref? FrogUIRef Exact primitive rectangle published after arrange commits.
 ---@field width? FrogUISize Explicit width; otherwise measure naturally.
 ---@field height? FrogUISize Explicit height; otherwise measure naturally.
 ---@field grow? number Non-negative share of remaining Row/Column space.
@@ -436,5 +450,30 @@ end
 function Frog.useViewport()
     return Host.currentViewport()
 end
+
+--- Creates one stable geometry handle in the current component, actor, or
+--- addressed-view render owner. Attach it with `ref = handle` on exactly one
+--- primitive, never to a semantic component/actor/view descriptor.
+--- `handle.current` publishes after a successful tree commit and after a
+--- Host-owned retained rearrangement such as Scroll; failed transactions keep
+--- the previous rectangle. It is nil before attachment or after
+--- removal/unmount. Every read returns a detached copy, so mutating that
+--- rectangle never changes FrogUI.
+---
+--- Hooks are positional and unconditional: keep each call on its own line and
+--- never place it behind a branch. A structural hook edit during hot reload
+--- preserves the last good tree; restart the gallery after that edit.
+---@return FrogUIRef
+Frog.useRef = Host.useRef
+
+--- Creates a readable key-to-ref table for a dense array of stable scalar
+--- authored keys. Retained keys keep their handle through reorder and resize;
+--- removed keys clear their former handle, and newly added keys get new ones.
+---
+--- This is one positional hook regardless of key count. Attach every returned
+--- handle that needs geometry to one exact primitive via its `ref` prop.
+---@param keys FrogUIRefKey[]
+---@return table<FrogUIRefKey, FrogUIRef>
+Frog.useKeyedRefs = Host.useKeyedRefs
 
 return Frog

@@ -460,6 +460,8 @@ local function defaultInspector(host, entry, selected)
     if selected then
         local font = host:_font("caption")
         if font then g.setFont(font) end
+        local lineHeight = font and font:getHeight() + 2 or 15
+        local detailLine = 1
         local source = entry.source
         local sourceLabel = source and ((source.path or "?") .. ":"
             .. tostring(source.line or "?")) or "source unknown"
@@ -474,6 +476,18 @@ local function defaultInspector(host, entry, selected)
         g.print((entry.owner or "?") .. " / " .. entry.type .. actorLabel
                 .. " / " .. sourceLabel,
             bounds.x + 3, bounds.y + 2)
+        if entry.ref then
+            local current = entry.ref.current
+            local key = entry.ref.key == nil and ""
+                or (" key=" .. tostring(entry.ref.key))
+            local rectangle = current
+                and (" @ %.1f,%.1f %.1fx%.1f"):format(
+                    current.x, current.y, current.width, current.height)
+                or " @ unattached"
+            g.print("ref " .. entry.ref.id .. key .. rectangle,
+                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
+            detailLine = detailLine + 1
+        end
         if entry.motion then
             local declared = {}
             for _, recipe in ipairs(entry.motion.declared or {}) do
@@ -501,8 +515,8 @@ local function defaultInspector(host, entry, selected)
                     or "idle")
                 .. " / reactions " .. tostring(entry.motion.reactionCount or 0)
                 .. (entry.motion.reducedMotion and " / reduced" or "")
-            local lineHeight = font and font:getHeight() + 2 or 15
-            g.print(motionLabel, bounds.x + 3, bounds.y + 2 + lineHeight)
+            g.print(motionLabel,
+                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
         end
     end
 end
