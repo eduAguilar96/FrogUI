@@ -257,6 +257,10 @@ projections, companion style files, or geometry files.
   method call. Keep messages/navigation in `onResult`; a successful commit
   spends that exact control even if the follow-up fails. Ordinary Buttons use
   `onPress`.
+- A reusable scene-exit component may expose mutually exclusive shapes for
+  those two meanings: `onPress` for plain route navigation, or
+  `onCommit`/`onResult` when leaving must consume an exact domain capability.
+  Do not manufacture a successful commit receipt just to reuse the visual.
 - Compose drag and Scroll directly. Gesture thresholds and arbitration are
   framework constants, not component props or per-screen recognizer tables.
 - When one actor replaces one visible region, mount it at that region and pass
