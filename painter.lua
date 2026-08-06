@@ -1,6 +1,8 @@
 -- Paints the committed resolved tree with generic primitive rendering and
 -- optional application painter overrides.
 
+local Effect = require("src.frogui.effects.runtime")
+
 local painter = {}
 
 local DEFAULTS = {
@@ -224,6 +226,67 @@ local function defaultText(host, node, style, clipState)
     end
 end
 
+-- Draws one image frame at an effect-owned center/pivot and authored size.
+local function drawEffectFrame(asset, center, props, rotation, tint)
+    local g = graphics()
+    if not g or not asset or not center then return false end
+    local imageWidth, imageHeight = asset:getDimensions()
+    local height = props.height or Effect.defaults.frameHeight
+    local width = props.width or height * imageWidth / imageHeight
+    local anchor = props.anchor or { x = 0.5, y = 0.5 }
+    local scaleX = width / imageWidth
+    if props.mirror then scaleX = -scaleX end
+    setColor(tint)
+    g.draw(asset, center.x, center.y, rotation or 0,
+        scaleX, height / imageHeight,
+        imageWidth * anchor.x, imageHeight * anchor.y)
+    return true
+end
+
+-- Paints an animated or primitive projectile head plus fading point trail.
+local function defaultProjectile(host, node, state, style)
+    local g = graphics()
+    if not g or not state or not state.visible or not state.head then return end
+    local props = node.props
+    local color = style.color
+    local radius = props.radius or Effect.defaults.projectileRadius
+    local trailDuration = props.trailDuration or Effect.defaults.trailDuration
+    if trailDuration > 0 then
+        for _, sample in ipairs(state.trail) do
+            local life = math.max(0, 1 - sample.age / trailDuration)
+            setColor({ color[1], color[2], color[3],
+                color[4] * (props.trailAlpha
+                    or Effect.defaults.trailAlpha) * life * life })
+            g.circle("fill", sample.x, sample.y,
+                radius * (0.35 + 0.55 * life))
+        end
+    end
+    local frames = props.frames or {}
+    local source = state.frame and frames[state.frame]
+    local asset = source and host:_asset(source) or nil
+    local rotation = props.rotate == false and 0 or state.rotation
+    if drawEffectFrame(asset, state.head, props, rotation, style.tint) then return end
+    setColor(color)
+    g.circle("fill", state.head.x, state.head.y, radius)
+    setColor({ 1, 1, 1, color[4] })
+    g.circle("fill", state.head.x, state.head.y,
+        radius * (props.coreRatio or Effect.defaults.projectileCoreRatio))
+end
+
+-- Paints the retained frame or a clear missing-art contact ring fallback.
+local function defaultFlipbook(host, node, state, style)
+    local g = graphics()
+    if not g or not state or not state.visible or not state.center then return end
+    local source = node.props.frames[state.frame]
+    local asset = source and host:_asset(source) or nil
+    if drawEffectFrame(asset, state.center, node.props,
+            node.props.rotation or 0, style.tint) then return end
+    local radius = (node.props.height or Effect.defaults.frameHeight) / 2
+    setColor(style.tint)
+    g.setLineWidth(3)
+    g.circle("line", state.center.x, state.center.y, radius)
+end
+
 local function imageGeometry(node, asset, fit, sourceRect)
     local imageWidth = sourceRect and sourceRect.width or asset:getWidth()
     local imageHeight = sourceRect and sourceRect.height or asset:getHeight()
@@ -395,7 +458,30 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
         defaultBox(host, node, style)
     end
 
-    if node.type == "Text" or node.type == "PopupText" then
+    if node.type == "Projectile" then
+        local effectStyle = {
+            color = faded(tinted(host:_color(node.props.color, "text"),
+                style.tint), style.opacity),
+            tint = faded(tinted(host:_color(node.props.tint, nil,
+                node.props.color and host:_color(node.props.color)
+                    or { 1, 1, 1, 1 }), style.tint), style.opacity),
+        }
+        if custom then
+            customCall(custom, "projectile", node, node._effect, effectStyle)
+        else
+            defaultProjectile(host, node, node._effect, effectStyle)
+        end
+    elseif node.type == "Flipbook" then
+        local effectStyle = {
+            tint = faded(tinted(host:_color(node.props.tint, nil,
+                { 1, 1, 1, 1 }), style.tint), style.opacity),
+        }
+        if custom then
+            customCall(custom, "flipbook", node, node._effect, effectStyle)
+        else
+            defaultFlipbook(host, node, node._effect, effectStyle)
+        end
+    elseif node.type == "Text" or node.type == "PopupText" then
         local textStyle = {
             color = faded(tinted(host:_color(node.props.color, "text"),
                 style.tint), style.opacity),
@@ -535,11 +621,22 @@ local function defaultInspector(host, entry, selected)
                 bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
             detailLine = detailLine + 1
         elseif entry.effect then
-            local at = entry.effect.at
-            g.print(("popup %s @ %.1f,%.1f / %.2fs / rise %.1f"):format(
-                    tostring(entry.effect.variant), at.x, at.y,
-                    entry.effect.duration, entry.effect.distance),
-                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
+            local effect = entry.effect
+            local label
+            if effect.kind then
+                local head = effect.head or { x = 0, y = 0 }
+                label = ("%s @ %.1f,%.1f / %.2f/%.2fs / frame %s/%d"):format(
+                    effect.kind:lower(), head.x, head.y,
+                    effect.elapsed, effect.duration,
+                    tostring(effect.frame or "-"), effect.frameCount)
+            else
+                local at = effect.at
+                label = ("popup %s @ %.1f,%.1f / %.2fs / rise %.1f"):format(
+                    tostring(effect.variant), at.x, at.y,
+                    effect.duration, effect.distance)
+            end
+            g.print(label, bounds.x + 3,
+                bounds.y + 2 + detailLine * lineHeight)
             detailLine = detailLine + 1
         end
         if entry.motion then

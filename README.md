@@ -86,6 +86,10 @@ the Host, so unknown props fail loudly.
 | `Frog.Motion` | Animate one child's paint/input presentation without changing layout | zero or one |
 | `Frog.Pressable` | Add pointer tap, hold, and mouse-hover to one child | exactly one |
 | `Frog.Scroll` | Retain clipped wheel/touch scrolling on one axis | exactly one |
+| `Frog.EffectLayer` | Paint ordered transient feedback without accepting input | many effect leaves |
+| `Frog.PopupText` | Run one finite rising/fading text lifetime | none |
+| `Frog.Projectile` | Travel once between committed refs or authored points | none |
+| `Frog.Flipbook` | Play one finite frame sequence with an optional contact beat | none |
 | `Frog.Chrome` | Root-host the one persistent application navigation surface | exactly one |
 | `Frog.Modal` | Root-host one focus/input-isolated surface | exactly one |
 | `Frog.DragSource` | Own a plain payload, preview, and domain drop callback | exactly one |
@@ -303,14 +307,14 @@ see its stable resource id, frame id, and mounted state. The generic gallery
 story demonstrates pause, resize retention, snapshot publication, and explicit
 resource reset without importing game code.
 
-## Transient effect text
+## Transient effects
 
 `Frog.EffectLayer` is a dedicated paint plane for finite visual effects. Put it
 after the stable surface it decorates. It paints children in source order and
 is always input-transparent, so a popup can cross a Button, drag target, or
 scroll area without stealing that interaction.
 
-`Frog.PopupText` owns the complete pop/rise/fade recipe. Application code owns
+`Frog.PopupText` owns the complete rise/fade recipe. Application code owns
 only a small keyed collection and removes an entry when its lifetime completes:
 
 ```lua
@@ -384,6 +388,94 @@ callbacks. The simulation or playback owner creates plain display entries from
 already-authoritative events. Sample committed refs when creating/reprojecting
 those entries; PopupText only displays the resulting layer-local point.
 
+### Travel and frame effects
+
+`Frog.Projectile` and `Frog.Flipbook` are direct EffectLayer leaves. A
+Projectile travels once from `from` to `to`; either anchor may be a committed
+ref or a point local to the layer. A Flipbook plays a finite ordered frame list
+at one ref or local point:
+
+```lua
+local source = Frog.useRef()
+local target = Frog.useRef()
+
+return Frog.Overlay {
+    Frog.Row {
+        Frog.Box { ref = source, SourceFace() },
+        Frog.Box { ref = target, TargetFace() },
+    },
+    Frog.EffectLayer {
+        width = "100%",
+        height = "100%",
+        Frog.Projectile {
+            key = effect.id,
+            from = source,
+            to = target,
+            duration = effect.travelTime,
+            clock = props.executionClock,
+            feedbackClock = props.feedbackClock,
+            frames = effect.projectileFrames,
+            onComplete = function()
+                send(Arrived { id = effect.id })
+            end,
+        },
+        impact and Frog.Flipbook {
+            key = impact.id,
+            at = target,
+            frames = impact.frames,
+            fps = impact.fps,
+            clock = props.executionClock,
+            contactAt = impact.contactAt,
+            onContact = function()
+                send(Contacted { id = impact.id })
+            end,
+            onComplete = function()
+                send(Removed { id = impact.id })
+            end,
+        },
+    },
+}
+```
+
+The actor or playback owner keeps the small keyed collections. `onComplete`
+normally sends the action that removes the exact entry; Projectile arrival may
+instead replace it with a keyed Flipbook. `Flipbook.onContact` marks a visible
+beat such as slash contact, while `onComplete` removes the artwork. If contact
+removes the effect immediately, its now-stale completion is deliberately
+canceled.
+
+A stable key also retains the effect's timing contract. Change the key when a
+Projectile's duration/FPS/frames or a Flipbook's FPS/frames/contact point must
+change; FrogUI rejects those changes on an active key instead of silently
+warping its visible lifetime. Endpoint refs, offsets, callbacks, dimensions,
+and paint props may update while that lifetime remains mounted.
+
+Projectile `clock` owns travel and arrival. Its optional `feedbackClock` owns
+animated skin frames and trail aging, so visual feedback can remain readable
+while execution is paused or accelerated according to the caller's explicit
+policy. Flipbook has one `clock` for frame, contact, and completion timing.
+Omitting a clock uses Host raw time; production playback should pass the named
+policy whose meaning owns the beat.
+
+Refs resolve to their committed primitive centers. When layout reflows, a live
+Projectile preserves its current physical head, resolves the new semantic
+target, and travels the remaining duration from there; its trail samples are
+reprojected too. A Flipbook follows its ref while keeping its current frame and
+already-fired contact bit. Rerender and resize never replay either callback.
+Removing or replacing a key cancels stale callbacks. A ref must be attached to
+one primitive when its effect first mounts; an unattached handle fails loudly.
+If that primitive leaves later, an already-visible effect finishes at its last
+resolved point instead of jumping or disappearing.
+
+`frames` contain ordinary semantic asset tokens. Projectile frames loop while
+it travels; Flipbook frames run once. Explicit `width`, `height`, `anchor`,
+rotation/mirroring, and tint props style the art. Missing art keeps the same
+timing and paints a primitive head or contact-ring fallback, so presentation
+assets cannot stall playback. Reduced motion settles at the target/final frame
+on the next Host update and delivers each still-mounted callback once. Hold F6
+to inspect elapsed time, progress, frame, head/target, trail count, contact,
+completion, and reduced-motion state.
+
 ## State is a separate concept
 
 `Frog.component` is stateless. `Frog.actor` defines a stateful component with
@@ -416,6 +508,8 @@ The current public vocabulary is:
 | `Frog.useFrame` | Advance that process once per Host update |
 | `Frog.EffectLayer` | Paint ordered effects without accepting input |
 | `Frog.PopupText` | Run one keyed finite text effect |
+| `Frog.Projectile` | Travel one keyed effect between refs or points |
+| `Frog.Flipbook` | Run one keyed frame sequence with a contact beat |
 | `Frog.host` | Create the one application tree owner |
 | `Frog.clock` | Create a deterministic explicitly advanced clock |
 | `Frog.tween` / `spring` / `shake` | Declare reusable visual recipes |

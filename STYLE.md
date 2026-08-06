@@ -241,6 +241,9 @@ projections, companion style files, or geometry files.
 - Keep `EffectLayer` after the stable surface it decorates. It is a feedback
   plane, never a replacement owner for cards, figures, status, controls, or
   scene layout.
+- EffectLayer children are direct `PopupText`, `Projectile`, or `Flipbook`
+  leaves. Every generated child has a stable authored/event key; later children
+  paint above earlier ones and none participate in input.
 - Give every `PopupText` a stable authored/event key and one layer-local center
   point. The popup owns its finite recipe; the actor or playback owner owns the
   keyed collection and removes an entry through `onComplete`.
@@ -253,15 +256,26 @@ projections, companion style files, or geometry files.
 - Use the `impact` treatment for large result numbers before restating its rim,
   shadow, and top-band shine in an application component. Numeric treatment
   props may be set to zero when a specific surface deliberately needs plain ink.
+- Anchor Projectile travel and Flipbook contact art to committed semantic refs
+  when the owner can move or reflow. Use layer-local points only for deliberately
+  detached feedback. Never query a test id or inspect the tree at runtime.
+- Projectile `clock` owns arrival; `feedbackClock` owns its looping skin and
+  trail. Flipbook `clock` owns frames, contact, and completion. Production
+  playback names these policies explicitly instead of inheriting wall time by
+  accident.
+- Use `Flipbook.onContact` for the one visible contact beat and `onComplete` for
+  keyed artwork removal. If contact intentionally removes the effect, its stale
+  completion is canceled. Neither callback calculates a game result.
+- Treat each effect key as one immutable timing contract. A changed duration,
+  FPS, frame catalog, or contact point gets a new key; moving refs and ordinary
+  paint props retain the current key and lifetime.
 - EffectLayer is input-transparent and accepts no interactive descendants. Do
-  not wrap a popup in Button/Pressable or add a parallel hit-test tree.
+  not wrap an effect in Button/Pressable or add a parallel hit-test tree.
 - Effects display authoritative event results. They never calculate damage,
   targets, modifiers, rewards, or other simulation state.
-- Convert committed refs into layer-local effect points at the playback owner.
-  Detached popups preserve/reproject their trajectory on resize; they do not
-  query component test ids or inspect the tree.
-- Do not add a per-effect update/draw callback. Smooth lifetime sampling belongs
-  to PopupText/Motion; the owner publishes only collection changes.
+- Do not add a per-effect update/draw callback. Smooth lifetime sampling,
+  resize reprojection, missing-art fallback, and reduced-motion settlement
+  belong to the three effect primitives; owners publish only collection changes.
 
 ## 10. Motion and feedback stay declarative
 

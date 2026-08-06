@@ -47,6 +47,9 @@ local Interaction = require("src.frogui.interaction")
 ---@field current? FrogUIRect Read-only property returning a detached rectangle copy, or nil while unattached/unmounted; mutating the copy never changes FrogUI.
 ---A stable handle created by a render hook and attached to one primitive.
 
+---@alias FrogUIEffectAnchor FrogUIRef|FrogUIPoint
+---A committed primitive center or a point local to the owning EffectLayer.
+
 ---@class FrogUIOffset
 ---@field x? number Horizontal logical-pixel offset applied after layout.
 ---@field y? number Vertical logical-pixel offset applied after layout.
@@ -150,12 +153,16 @@ local Interaction = require("src.frogui.interaction")
 ---@field padding? FrogUIPadding Inner origin for every child `at` point.
 ---@field clip? boolean Clip effects to the layer's content rectangle.
 ---@field overflow? FrogUIOverflow Explicit clipping policy.
----@field [integer] FrogUIElementDescription Ordered PopupText children; later
---- children paint above earlier ones.
+---@field [integer] FrogUIElementDescription Ordered PopupText, Projectile, or
+--- Flipbook children; later children paint above earlier ones.
 
 ---@class FrogUIPoint
 ---@field x number Horizontal position from the EffectLayer content's left edge.
 ---@field y number Vertical position from the EffectLayer content's top edge.
+
+---@class FrogUIPivot
+---@field x number Normalized horizontal image pivot from 0 through 1.
+---@field y number Normalized vertical image pivot from 0 through 1.
 
 ---@class FrogPopupTextProps
 ---@field key string|number Required stable transient identity; a new key starts one lifetime.
@@ -187,6 +194,53 @@ local Interaction = require("src.frogui.interaction")
 ---@field shine? number Top-band highlight strength from 0 (off) to 1 (white).
 ---@field shineSplit? number Highlighted fraction from the text box's top,
 --- between 0 and 1.
+---@field testId? string Readable development/test identity shown by F6.
+
+---@class FrogProjectileProps
+---@field key string|number Required stable lifetime identity.
+---@field from FrogUIEffectAnchor Source ref center or layer-local point.
+---@field to FrogUIEffectAnchor Target ref center or layer-local point.
+---@field fromOffset? FrogUIOffset Optional source-center nudge.
+---@field toOffset? FrogUIOffset Optional target-center nudge.
+---@field duration number Positive travel duration owned by the caller's pace.
+---@field clock? FrogUIClock Travel/arrival clock; omitted uses Host raw time.
+---@field feedbackClock? FrogUIClock Trail and animated-skin clock; defaults to
+--- the travel clock.
+---@field onComplete? fun() Exactly-once arrival callback; normally publishes
+--- the semantic commit/removal action.
+---@field color? FrogUIColor Primitive head/trail color and default skin tint.
+---@field radius? number Positive primitive-head radius.
+---@field coreRatio? number White-core radius fraction between 0 and 1.
+---@field trailDuration? number Non-negative trail lifetime; zero disables it.
+---@field trailAlpha? number Trail opacity between 0 and 1.
+---@field frames? FrogUIAssetSource[] Optional looping animated skin frames.
+---@field fps? number Positive animated-skin frame rate; defaults to 24.
+---@field width? number Optional positive drawn skin width, not layout participation.
+---@field height? number Optional positive drawn skin height; defaults to 64.
+---@field anchor? FrogUIPivot Normalized skin pivot; defaults to its center.
+---@field rotate? boolean Rotate the skin along travel; defaults to true.
+---@field tint? FrogUIColor Explicit animated-skin tint.
+---@field opacity? number Static opacity from 0 through 1.
+---@field testId? string Readable development/test identity shown by F6.
+
+---@class FrogFlipbookProps
+---@field key string|number Required stable lifetime identity.
+---@field frames FrogUIAssetSource[] Non-empty ordered frame asset tokens.
+---@field at FrogUIEffectAnchor Owner ref center or layer-local point.
+---@field atOffset? FrogUIOffset Optional owner-center nudge.
+---@field fps? number Positive frame rate; defaults to 24.
+---@field clock? FrogUIClock Frame/contact clock; omitted uses Host raw time.
+---@field contactAt? number Normalized contact point between 0 and 1;
+--- defaults to the final frame.
+---@field onContact? fun() Exactly-once callback at `contactAt`.
+---@field onComplete? fun() Exactly-once callback when the final frame settles.
+---@field width? number Optional positive drawn frame width.
+---@field height? number Optional positive drawn frame height; defaults to 64.
+---@field rotation? number Rotation in radians.
+---@field mirror? boolean Flip the frame horizontally.
+---@field anchor? FrogUIPivot Normalized frame pivot; defaults to its center.
+---@field tint? FrogUIColor Frame multiply tint.
+---@field opacity? number Static opacity from 0 through 1.
 ---@field testId? string Readable development/test identity shown by F6.
 
 ---@class FrogTextProps:FrogUIElementProps
@@ -376,8 +430,9 @@ Frog.Overlay = Element.primitive("Overlay")
 
 --- Paints ordered transient effects without ever participating in input.
 ---
---- Keep it above the surface it decorates. Popup `at` coordinates are measured
---- from this layer's content origin; later children paint above earlier ones.
+--- Keep it above the surface it decorates. Authored point coordinates are
+--- measured from this layer's content origin; refs use their committed center.
+--- Later children paint above earlier ones.
 ---@type fun(input?: FrogEffectLayerProps):FrogUIElementDescription
 Frog.EffectLayer = require("src.frogui.effects.effect_layer")
 
@@ -389,6 +444,20 @@ Frog.EffectLayer = require("src.frogui.effects.effect_layer")
 --- an `onComplete` callback that sends the owner's typed removal action.
 ---@type fun(input:FrogPopupTextProps):FrogUIElementDescription
 Frog.PopupText = require("src.frogui.effects.popup_text")
+
+--- Travels once between refs/points and reports arrival exactly once.
+---
+--- Geometry is reprojected across resize without restarting elapsed time.
+--- Supply an explicit `clock` when arrival gates a playback process.
+---@type fun(input:FrogProjectileProps):FrogUIElementDescription
+Frog.Projectile = require("src.frogui.effects.projectile")
+
+--- Plays one finite ordered frame sequence with an optional contact beat.
+---
+--- Frame and callback state survive rerender/resize. Missing declared art keeps
+--- the same timing and paints a simple ring fallback.
+---@type fun(input:FrogFlipbookProps):FrogUIElementDescription
+Frog.Flipbook = require("src.frogui.effects.flipbook")
 
 --- Draws one text leaf. `role` selects a semantic theme size; `fontScale`
 --- changes only this use while preserving responsive role changes. `fitDown`

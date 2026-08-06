@@ -170,12 +170,14 @@ local function measure(node, maxWidth, maxHeight, host)
         end
     elseif node.type == "EffectLayer" then
         for _, child in ipairs(node.children) do
-            measure(child, innerMaxWidth, innerMaxHeight, host)
-            local at = child.props.at
-            naturalWidth = math.max(naturalWidth,
-                at.x + child.measuredWidth / 2)
-            naturalHeight = math.max(naturalHeight,
-                at.y + child.measuredHeight / 2)
+            if child.type == "PopupText" then
+                measure(child, innerMaxWidth, innerMaxHeight, host)
+                local at = child.props.at
+                naturalWidth = math.max(naturalWidth,
+                    at.x + child.measuredWidth / 2)
+                naturalHeight = math.max(naturalHeight,
+                    at.y + child.measuredHeight / 2)
+            end
         end
     elseif node.type == "Scroll" then
         local child = node.children[1]
@@ -398,16 +400,27 @@ function layout.arrange(node, x, y, width, height, host)
         for _, child in ipairs(node.children) do childBox(node, child, host) end
     elseif node.type == "EffectLayer" then
         for _, child in ipairs(node.children) do
-            measure(child, node.contentWidth, node.contentHeight, host)
-            local width = resolveSize(child.props.width, node.contentWidth)
-                or child.measuredWidth
-            local height = resolveSize(child.props.height, node.contentHeight)
-                or child.measuredHeight
-            local at = child.props.at
-            layout.arrange(child,
-                node.contentX + at.x - width / 2,
-                node.contentY + at.y - height / 2,
-                width, height, host)
+            if child.type == "PopupText" then
+                measure(child, node.contentWidth, node.contentHeight, host)
+                local width = resolveSize(child.props.width, node.contentWidth)
+                    or child.measuredWidth
+                local height = resolveSize(child.props.height, node.contentHeight)
+                    or child.measuredHeight
+                local at = child.props.at
+                layout.arrange(child,
+                    node.contentX + at.x - width / 2,
+                    node.contentY + at.y - height / 2,
+                    width, height, host)
+            else
+                layout.arrange(child, node.contentX, node.contentY,
+                    node.contentWidth, node.contentHeight, host)
+                child._effectLayerRect = {
+                    x = node.contentX,
+                    y = node.contentY,
+                    width = node.contentWidth,
+                    height = node.contentHeight,
+                }
+            end
         end
     elseif node.type == "Scroll" then
         layout.arrangeScroll(node, host)

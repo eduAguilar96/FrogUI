@@ -8,6 +8,7 @@ local Element = require("src.frogui.element")
 local Message = require("src.frogui.message")
 local Clock = require("src.frogui.clock")
 local Motion = require("src.frogui.motion")
+local Effect = require("src.frogui.effects.runtime")
 local Interaction = require("src.frogui.interaction")
 local Ref = require("src.frogui.ref")
 
@@ -19,7 +20,7 @@ local renderingHost = nil
 
 local PRIMITIVES = {
     Box = true, Row = true, Column = true, Overlay = true,
-    EffectLayer = true, PopupText = true,
+    EffectLayer = true, PopupText = true, Projectile = true, Flipbook = true,
     Text = true, Image = true, Icon = true, Button = true, Motion = true,
     Pressable = true, Scroll = true, Modal = true, Chrome = true,
     DragSource = true, DropTarget = true,
@@ -69,6 +70,18 @@ local TYPE_PROPS = {
         shadowOffset = true, shadowColor = true,
         shine = true, shineSplit = true,
         x = true, y = true, scale = true,
+    },
+    Projectile = {
+        from = true, to = true, fromOffset = true, toOffset = true,
+        duration = true, clock = true, feedbackClock = true,
+        onComplete = true, color = true, radius = true, coreRatio = true,
+        trailDuration = true, trailAlpha = true,
+        frames = true, fps = true, anchor = true, rotate = true, tint = true,
+    },
+    Flipbook = {
+        frames = true, at = true, atOffset = true, fps = true, clock = true,
+        contactAt = true, onContact = true, onComplete = true,
+        rotation = true, mirror = true, anchor = true, tint = true,
     },
     Text = {
         text = true, role = true, fontScale = true,
@@ -247,6 +260,7 @@ local function validatePrimitive(name, children)
             or name == "DragSource" or name == "DropTarget" then
         assert(#children == 1, "Frog." .. name .. " accepts exactly one child")
     elseif name == "Text" or name == "PopupText"
+            or name == "Projectile" or name == "Flipbook"
             or name == "Image" or name == "Icon" then
         assert(#children == 0, "Frog." .. name .. " does not accept children")
     end
@@ -384,6 +398,79 @@ local function validateOffset(value)
             "unknown offset axis " .. tostring(axis))
         validateNumber(amount, "offset " .. axis)
     end
+end
+
+-- Validates one effect endpoint as either a live Host ref or a layer point.
+local function validateEffectAnchor(self, value, label)
+    if Ref.isRef(value) then
+        assert(Ref.belongsTo(value, self), label .. " belongs to a different Host")
+        return
+    end
+    assert(type(value) == "table" and getmetatable(value) == nil,
+        label .. " must be a FrogUI ref or plain { x, y } point")
+    for axis, amount in pairs(value) do
+        assert(axis == "x" or axis == "y",
+            label .. " has unknown field " .. tostring(axis))
+        validateNumber(amount, label .. "." .. axis)
+    end
+    assert(finite(value.x) and finite(value.y),
+        label .. ".x/.y must be finite numbers")
+end
+
+-- Validates an optional local nudge without requiring both axes.
+local function validateEffectOffset(value, label)
+    if value == nil then return end
+    assert(type(value) == "table" and getmetatable(value) == nil,
+        label .. " must be a plain { x?, y? } offset")
+    for axis, amount in pairs(value) do
+        assert(axis == "x" or axis == "y",
+            label .. " has unknown field " .. tostring(axis))
+        validateNumber(amount, label .. "." .. axis)
+    end
+end
+
+-- Validates a dense frame catalog while allowing absent assets at draw time.
+local function validateEffectFrames(self, value, label, required)
+    if value == nil then
+        assert(not required, label .. " is required")
+        return
+    end
+    assert(type(value) == "table" and getmetatable(value) == nil,
+        label .. " must be a plain dense asset-token array")
+    local count = 0
+    for key in pairs(value) do
+        assert(type(key) == "number" and key >= 1 and key % 1 == 0,
+            label .. " must be a plain dense asset-token array")
+        count = math.max(count, key)
+    end
+    if required then assert(count > 0, label .. " must not be empty") end
+    for index = 1, count do
+        local source = value[index]
+        assert(source ~= nil, label .. " must be dense")
+        if type(source) == "string" then
+            local declared = self.assets[source]
+            assert(declared ~= nil,
+                "unknown FrogUI asset token " .. tostring(source))
+            assert(type(declared) == "string" or assetObject(declared),
+                "malformed FrogUI asset " .. tostring(source))
+        else
+            assert(assetObject(source), label .. " has malformed direct asset")
+        end
+    end
+end
+
+-- Validates a normalized image pivot used by animated projectile skins.
+local function validateEffectPivot(value, label)
+    if value == nil then return end
+    assert(type(value) == "table" and getmetatable(value) == nil,
+        label .. " must be a plain { x, y } point")
+    for axis, amount in pairs(value) do
+        assert(axis == "x" or axis == "y",
+            label .. " has unknown field " .. tostring(axis))
+        validateNumber(amount, label .. "." .. axis, 0, 1)
+    end
+    assert(value.x ~= nil and value.y ~= nil,
+        label .. " needs normalized x and y")
 end
 
 local function oneOf(value, accepted, label)
@@ -606,6 +693,69 @@ local function validatePrimitiveProps(self, name, props)
             validateNumber(props.duration, "PopupText duration", 0)
             validateNumber(props.distance, "PopupText distance", 0)
         end
+    elseif name == "Projectile" then
+        assert(props.ref == nil and props.offset == nil and props.grow == nil
+                and props.juice == nil and props.reactions == nil,
+            "Projectile position/lifecycle belongs to its effect props")
+        assert(type(props.key) == "string" or type(props.key) == "number",
+            "Projectile requires a stable string/number key")
+        validateEffectAnchor(self, props.from, "Projectile from")
+        validateEffectAnchor(self, props.to, "Projectile to")
+        assert(props.width == nil or finite(props.width) and props.width > 0,
+            "Projectile width must be a positive number")
+        assert(props.height == nil or finite(props.height) and props.height > 0,
+            "Projectile height must be a positive number")
+        validateEffectOffset(props.fromOffset, "Projectile fromOffset")
+        validateEffectOffset(props.toOffset, "Projectile toOffset")
+        validateNumber(props.duration, "Projectile duration")
+        assert(props.duration and props.duration > 0,
+            "Projectile duration must be positive")
+        assert(props.clock == nil or Clock.isClock(props.clock),
+            "Projectile clock must come from Frog.clock")
+        assert(props.feedbackClock == nil or Clock.isClock(props.feedbackClock),
+            "Projectile feedbackClock must come from Frog.clock")
+        assert(props.onComplete == nil or type(props.onComplete) == "function",
+            "Projectile onComplete must be a function")
+        validateNumber(props.radius, "Projectile radius")
+        assert(props.radius == nil or props.radius > 0,
+            "Projectile radius must be positive")
+        validateNumber(props.coreRatio, "Projectile coreRatio", 0, 1)
+        validateNumber(props.trailDuration, "Projectile trailDuration", 0)
+        validateNumber(props.trailAlpha, "Projectile trailAlpha", 0, 1)
+        validateEffectFrames(self, props.frames, "Projectile frames", false)
+        validateNumber(props.fps, "Projectile fps")
+        assert(props.fps == nil or props.fps > 0,
+            "Projectile fps must be positive")
+        validateEffectPivot(props.anchor, "Projectile anchor")
+        assert(props.rotate == nil or type(props.rotate) == "boolean",
+            "Projectile rotate must be a boolean")
+    elseif name == "Flipbook" then
+        assert(props.ref == nil and props.offset == nil and props.grow == nil
+                and props.juice == nil and props.reactions == nil,
+            "Flipbook position/lifecycle belongs to its effect props")
+        assert(type(props.key) == "string" or type(props.key) == "number",
+            "Flipbook requires a stable string/number key")
+        validateEffectFrames(self, props.frames, "Flipbook frames", true)
+        validateEffectAnchor(self, props.at, "Flipbook at")
+        assert(props.width == nil or finite(props.width) and props.width > 0,
+            "Flipbook width must be a positive number")
+        assert(props.height == nil or finite(props.height) and props.height > 0,
+            "Flipbook height must be a positive number")
+        validateEffectOffset(props.atOffset, "Flipbook atOffset")
+        validateNumber(props.fps, "Flipbook fps")
+        assert(props.fps == nil or props.fps > 0,
+            "Flipbook fps must be positive")
+        assert(props.clock == nil or Clock.isClock(props.clock),
+            "Flipbook clock must come from Frog.clock")
+        validateNumber(props.contactAt, "Flipbook contactAt", 0, 1)
+        assert(props.onContact == nil or type(props.onContact) == "function",
+            "Flipbook onContact must be a function")
+        assert(props.onComplete == nil or type(props.onComplete) == "function",
+            "Flipbook onComplete must be a function")
+        validateNumber(props.rotation, "Flipbook rotation")
+        assert(props.mirror == nil or type(props.mirror) == "boolean",
+            "Flipbook mirror must be a boolean")
+        validateEffectPivot(props.anchor, "Flipbook anchor")
     elseif name == "Motion" then
         assert(props.reactions == nil or #props.reactions == 0 or props.juice ~= nil,
             "Frog.Motion reactions require named juice recipes")
@@ -755,6 +905,8 @@ local function nodeEntry(node, depth, visibleBounds)
                 shineSplit = node.props.shineSplit,
             },
         }
+    elseif node.type == "Projectile" or node.type == "Flipbook" then
+        entry.effect = Effect.inspect(node._effect)
     end
     if node._scroll then
         entry.scroll = {
@@ -830,6 +982,7 @@ end
 -- wrappers may fall through so the developer can reach visible content below.
 local function concreteInspectionHit(node)
     if node.type == "Text" or node.type == "PopupText"
+            or node.type == "Projectile" or node.type == "Flipbook"
             or node.type == "Image" or node.type == "Icon"
             or node.type == "Button" or node.type == "Pressable"
             or node.type == "Scroll" or node.type == "DragSource"
@@ -941,6 +1094,7 @@ local function snapshotHost(self)
         refRectangles = Ref.snapshot(self._refs),
         nextRefId = self._nextRefId,
         motions = Motion.snapshot(self._motions),
+        effects = Effect.snapshot(self._effects),
         modals = self._modals,
         modal = self._modal,
         chrome = self._chrome,
@@ -995,6 +1149,7 @@ local function restoreHost(self, snapshot)
     self._refs = snapshot.refs
     self._nextRefId = snapshot.nextRefId
     self._motions = snapshot.motions
+    self._effects = snapshot.effects
     self._modals = snapshot.modals
     self._modal = snapshot.modal
     self._chrome = snapshot.chrome
@@ -1005,7 +1160,9 @@ local function restoreHost(self, snapshot)
     self._lastInputText = snapshot.lastInputText
     Interaction.restore(self, snapshot.interaction)
     Motion.bindAll(self._motions)
+    Effect.bindAll(self._effects)
     Motion.transformTree(self._tree)
+    Effect.updateBounds(self._effects, self)
     self:_refreshCommittedRefs()
     self._motionStartSequence = snapshot.motionStartSequence
     self._feedbackQueue = snapshot.feedbackQueue
@@ -1098,6 +1255,7 @@ function host.new(options)
     self._callbackDepth = 0
     self._rawClock = Clock.new()
     self._motions = {}
+    self._effects = {}
     self._scrolls = {}
     self._interactionSession = nil
     self._modals = {}
@@ -1410,6 +1568,7 @@ function host:mount(root)
     self._addresses = context.addresses
     self._semanticTokens = context.semanticTokens
     self._motions = context.motions
+    self._effects = context.effects
     self._scrolls = context.scrolls
     self._modals = context.modals
     self._modal = context.modal
@@ -1735,6 +1894,12 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         context.nextReceiverOrder = context.nextReceiverOrder + 1
         context.motions[logicalPath] = instance
     end
+    if token.name == "Projectile" or token.name == "Flipbook" then
+        local instance = Effect.reconcile(self._effects[logicalPath], node,
+            logicalPath, context.nextEffectOrder, self)
+        context.nextEffectOrder = context.nextEffectOrder + 1
+        context.effects[logicalPath] = instance
+    end
     local childrenPath = descendantPath or path
     for index, child in ipairs(descriptor.children) do
         local resolved = self:_resolve(child, owner,
@@ -1744,8 +1909,10 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     end
     if token.name == "EffectLayer" then
         for _, child in ipairs(node.children) do
-            assert(child.type == "PopupText",
-                "Frog.EffectLayer currently accepts only Frog.PopupText children")
+            assert(child.type == "PopupText" or child.type == "Projectile"
+                    or child.type == "Flipbook",
+                "Frog.EffectLayer accepts only PopupText, Projectile,"
+                    .. " or Flipbook children")
         end
     end
     if token.name == "DragSource" then
@@ -1775,12 +1942,13 @@ function host:_resolveDeferred(node, context)
     return node
 end
 
--- Rejects detached popup leaves so `at` always has one unambiguous coordinate
--- owner. EffectLayer child validation already prevents interactive descendants.
+-- Rejects detached effect leaves so every point has one coordinate owner.
+-- EffectLayer child validation already prevents interactive descendants.
 local function validateEffectOwnership(node, insideLayer)
-    if node.type == "PopupText" then
+    if node.type == "PopupText" or node.type == "Projectile"
+            or node.type == "Flipbook" then
         assert(insideLayer,
-            "Frog.PopupText must be a direct Frog.EffectLayer child")
+            "Frog." .. node.type .. " must be a direct Frog.EffectLayer child")
     elseif node.type == "EffectLayer" then
         assert(not insideLayer, "Frog.EffectLayer cannot be nested")
         insideLayer = true
@@ -1820,9 +1988,11 @@ function host:_build(root)
         refRectangles = {},
         nextOrder = 1,
         motions = {},
+        effects = {},
         scrolls = {},
         previewDepth = 0,
         nextReceiverOrder = 1,
+        nextEffectOrder = 1,
     }
     local function buildCandidate()
         local rootPath = childPath("root", root, 1)
@@ -1855,7 +2025,9 @@ function host:_build(root)
                 height = node.height,
             }
         end
+        Effect.arrangeAll(context.effects, context.refRectangles, self)
         Motion.transformTree(candidate)
+        Effect.updateBounds(context.effects, self)
         context.modals, context.chrome = Interaction.planesFromTree(candidate)
         context.modal = context.modals[#context.modals]
         return candidate
@@ -1902,6 +2074,7 @@ function host:render(root)
         self._addresses = context.addresses
         self._semanticTokens = context.semanticTokens
         self._motions = context.motions
+        self._effects = context.effects
         self._scrolls = context.scrolls
         self._modals = context.modals
         self._modal = context.modal
@@ -2554,35 +2727,52 @@ function host:update(dt)
     assert(type(dt) == "number" and dt >= 0, "Host:update dt must be non-negative")
     self:_runFrames(dt)
     local time = self._rawClock:now()
-    local instances = Motion.snapshot(self._motions)
+    local motionInstances = Motion.snapshot(self._motions)
+    local effectInstances = Effect.snapshot(self._effects)
     local interactionState = Interaction.snapshot(self)
     local feedback = deepCopy(self._feedbackQueue)
-    local completions
+    local motionCompletions, effectCompletions
     local ok, err = pcall(function()
         self._rawClock:advance(dt)
         Interaction.update(self, dt)
-        _, completions = Motion.updateAll(self._motions, self)
+        _, motionCompletions = Motion.updateAll(self._motions, self)
         Motion.transformTree(self._tree)
         self:_refreshCommittedRefs()
+        Effect.refreshAll(self._effects, self)
+        effectCompletions = Effect.updateAll(self._effects)
+        Effect.updateBounds(self._effects, self)
     end)
     if not ok then
         self._rawClock:reset(time)
-        self._motions = instances
+        self._motions = motionInstances
+        self._effects = effectInstances
         Interaction.restore(self, interactionState)
         self._feedbackQueue = feedback
         Motion.bindAll(self._motions)
+        Effect.bindAll(self._effects)
         Motion.transformTree(self._tree)
         self:_refreshCommittedRefs()
+        Effect.updateBounds(self._effects, self)
         error(err, 0)
     end
     local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
     local firstError = not feedbackOk and feedbackError or nil
-    for _, completion in ipairs(completions or {}) do
+    for _, completion in ipairs(motionCompletions or {}) do
         if self._mounted
                 and Motion.completionIsMounted(self._motions, completion) then
             local delivered, deliveryError = pcall(
                 self._runTerminalCallback, self, completion.callback,
                 "juice:" .. completion.identity .. ":" .. completion.name,
+                completion.source)
+            if not delivered and not firstError then firstError = deliveryError end
+        end
+    end
+    for _, completion in ipairs(effectCompletions or {}) do
+        if self._mounted
+                and Effect.completionIsMounted(self._effects, completion) then
+            local delivered, deliveryError = pcall(
+                self._runTerminalCallback, self, completion.callback,
+                "effect:" .. completion.identity .. ":" .. completion.kind,
                 completion.source)
             if not delivered and not firstError then firstError = deliveryError end
         end
@@ -2625,6 +2815,7 @@ function host:resize(width, height)
         self._addresses = context.addresses
         self._semanticTokens = context.semanticTokens
         self._motions = context.motions
+        self._effects = context.effects
         self._scrolls = context.scrolls
         self._modals = context.modals
         self._modal = context.modal
@@ -2900,6 +3091,7 @@ function host:unmount()
     self._refs = {}
     Ref.publish(committedRefs, self._refs, {})
     self._motions = {}
+    self._effects = {}
     self._scrolls = {}
     self._modals = {}
     self._modal = nil
