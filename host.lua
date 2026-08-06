@@ -19,6 +19,7 @@ local renderingHost = nil
 
 local PRIMITIVES = {
     Box = true, Row = true, Column = true, Overlay = true,
+    EffectLayer = true, PopupText = true,
     Text = true, Image = true, Icon = true, Button = true, Motion = true,
     Pressable = true, Scroll = true, Modal = true, Chrome = true,
     DragSource = true, DropTarget = true,
@@ -48,6 +49,18 @@ local TYPE_PROPS = {
         padding = true, background = true, border = true, borderWidth = true,
         radius = true, clip = true, overflow = true,
         align = true, justify = true,
+    },
+    EffectLayer = {
+        padding = true, clip = true, overflow = true,
+    },
+    PopupText = {
+        text = true, at = true, variant = true,
+        duration = true, distance = true,
+        role = true, fontScale = true,
+        color = true, wrap = true, maxLines = true,
+        align = true, fitDown = true,
+        outlineWidth = true, outlineColor = true,
+        x = true, y = true, scale = true,
     },
     Text = {
         text = true, role = true, fontScale = true,
@@ -225,7 +238,8 @@ local function validatePrimitive(name, children)
             or name == "Chrome"
             or name == "DragSource" or name == "DropTarget" then
         assert(#children == 1, "Frog." .. name .. " accepts exactly one child")
-    elseif name == "Text" or name == "Image" or name == "Icon" then
+    elseif name == "Text" or name == "PopupText"
+            or name == "Image" or name == "Icon" then
         assert(#children == 0, "Frog." .. name .. " does not accept children")
     end
 end
@@ -389,7 +403,7 @@ local function validatePrimitiveProps(self, name, props)
     validatePadding(props.padding)
     validateNumber(props.borderWidth, name .. " borderWidth", 0)
     validateNumber(props.radius, name .. " radius", 0)
-    if name ~= "Motion" then
+    if name ~= "Motion" and name ~= "PopupText" then
         validateNumber(props.opacity, name .. " opacity", 0, 1)
     end
     if props.juice ~= nil then
@@ -547,7 +561,7 @@ local function validatePrimitiveProps(self, name, props)
                 end
             end
         end
-    elseif name == "Text" then
+    elseif name == "Text" or name == "PopupText" then
         assert(type(props.text or "") == "string", "Text text must be a string")
         assert(props.role == nil or type(props.role) == "string", "Text role must be a string")
         validateNumber(props.fontScale, "Text fontScale")
@@ -563,6 +577,21 @@ local function validatePrimitiveProps(self, name, props)
         validateNumber(props.outlineWidth, "Text outlineWidth", 0)
         oneOf(props.align, { "left", "center", "right", "start", "end" },
             "Text align")
+        if name == "PopupText" then
+            assert(type(props.at) == "table" and getmetatable(props.at) == nil,
+                "PopupText at must be a plain { x, y } point")
+            for field, value in pairs(props.at) do
+                assert(field == "x" or field == "y",
+                    "PopupText at has unknown field " .. tostring(field))
+                validateNumber(value, "PopupText at." .. field)
+            end
+            assert(finite(props.at.x) and finite(props.at.y),
+                "PopupText at.x/at.y must be finite numbers")
+            oneOf(props.variant, { "float", "impact", "notice" },
+                "PopupText variant")
+            validateNumber(props.duration, "PopupText duration", 0)
+            validateNumber(props.distance, "PopupText distance", 0)
+        end
     elseif name == "Motion" then
         assert(props.reactions == nil or #props.reactions == 0 or props.juice ~= nil,
             "Frog.Motion reactions require named juice recipes")
@@ -696,6 +725,16 @@ local function nodeEntry(node, depth, visibleBounds)
             reducedMotion = inspected.reducedMotion,
         }
     end
+    if node.type == "EffectLayer" then
+        entry.effectLayer = { count = #node.children, input = "transparent" }
+    elseif node.type == "PopupText" then
+        entry.effect = {
+            variant = node.props.variant,
+            at = deepCopy(node.props.at),
+            duration = node.props.duration,
+            distance = node.props.distance,
+        }
+    end
     if node._scroll then
         entry.scroll = {
             axis = node._scroll.axis,
@@ -769,7 +808,8 @@ end
 -- layout wrapper. Top-plane concrete hits preserve z-order; transparent
 -- wrappers may fall through so the developer can reach visible content below.
 local function concreteInspectionHit(node)
-    if node.type == "Text" or node.type == "Image" or node.type == "Icon"
+    if node.type == "Text" or node.type == "PopupText"
+            or node.type == "Image" or node.type == "Icon"
             or node.type == "Button" or node.type == "Pressable"
             or node.type == "Scroll" or node.type == "DragSource"
             or node.type == "DropTarget" then
@@ -1455,12 +1495,17 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
     local props = shallowCopy(descriptor.props)
     props.children = descriptor.children
     local old = self._actors[logicalPath]
+    local retainedState
+    if old and old.token == token then
+        retainedState = deepCopy(old.state)
+    else
+        retainedState = self:_initialState(token, props)
+    end
     local instance = {
         token = token,
         identity = logicalPath,
         props = props,
-        state = old and old.token == token and deepCopy(old.state)
-            or self:_initialState(token, props),
+        state = retainedState,
         order = context.nextOrder,
         source = token.source or descriptor.source,
         mountSource = descriptor.source,
@@ -1676,6 +1721,12 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             logicalChildPath(logicalPath, child, index))
         if resolved then node.children[#node.children + 1] = resolved end
     end
+    if token.name == "EffectLayer" then
+        for _, child in ipairs(node.children) do
+            assert(child.type == "PopupText",
+                "Frog.EffectLayer currently accepts only Frog.PopupText children")
+        end
+    end
     if token.name == "DragSource" then
         context.previewDepth = (context.previewDepth or 0) + 1
         local preview = descriptor.props.preview
@@ -1701,6 +1752,21 @@ function host:_resolveDeferred(node, context)
     end
     node.children = children
     return node
+end
+
+-- Rejects detached popup leaves so `at` always has one unambiguous coordinate
+-- owner. EffectLayer child validation already prevents interactive descendants.
+local function validateEffectOwnership(node, insideLayer)
+    if node.type == "PopupText" then
+        assert(insideLayer,
+            "Frog.PopupText must be a direct Frog.EffectLayer child")
+    elseif node.type == "EffectLayer" then
+        assert(not insideLayer, "Frog.EffectLayer cannot be nested")
+        insideLayer = true
+    end
+    for _, child in ipairs(node.children or {}) do
+        validateEffectOwnership(child, insideLayer)
+    end
 end
 
 local function assignEventOrder(node, nextOrder)
@@ -1744,6 +1810,7 @@ function host:_build(root)
             rootLogicalPath)
         candidate = self:_resolveDeferred(candidate, context)
         assert(candidate, "Host root component returned nil")
+        validateEffectOwnership(candidate, false)
         local nextEventOrder = assignEventOrder(candidate, 1)
         local hiddenActors = {}
         for _, instance in pairs(context.actors) do

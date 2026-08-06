@@ -141,6 +141,7 @@ local POINTER_TYPES = {
 }
 
 local function hitPath(node, x, y, predicate)
+    if node.type == "EffectLayer" then return nil end
     local contained = localInside(node, x, y)
     if clipped(node) and (not contained or not insideContent(node, x, y)) then
         return nil

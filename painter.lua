@@ -87,7 +87,7 @@ end
 local function styleFor(host, node, inheritedOpacity, inheritedTint)
     local props = node.props
     local presentation = node.presentation or {}
-    local authoredOpacity = node.type ~= "Motion"
+    local authoredOpacity = node.type ~= "Motion" and node.type ~= "PopupText"
         and type(props.opacity) == "number" and props.opacity or 1
     local opacity = inheritedOpacity * authoredOpacity * (presentation.opacity or 1)
     local tint = tinted(inheritedTint or { 1, 1, 1, 1 }, presentation.tint)
@@ -371,7 +371,7 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
         defaultBox(host, node, style)
     end
 
-    if node.type == "Text" then
+    if node.type == "Text" or node.type == "PopupText" then
         local textStyle = {
             color = faded(tinted(host:_color(node.props.color, "text"),
                 style.tint), style.opacity),
@@ -497,6 +497,19 @@ local function defaultInspector(host, entry, selected)
             end
             g.print("process " .. process.owner .. ": "
                     .. table.concat(hooks, " / "),
+                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
+            detailLine = detailLine + 1
+        end
+        if entry.effectLayer then
+            g.print("effect layer / " .. entry.effectLayer.input
+                    .. " / " .. tostring(entry.effectLayer.count) .. " children",
+                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
+            detailLine = detailLine + 1
+        elseif entry.effect then
+            local at = entry.effect.at
+            g.print(("popup %s @ %.1f,%.1f / %.2fs / rise %.1f"):format(
+                    tostring(entry.effect.variant), at.x, at.y,
+                    entry.effect.duration, entry.effect.distance),
                 bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
             detailLine = detailLine + 1
         end

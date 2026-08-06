@@ -303,6 +303,79 @@ see its stable resource id, frame id, and mounted state. The generic gallery
 story demonstrates pause, resize retention, snapshot publication, and explicit
 resource reset without importing game code.
 
+## Transient effect text
+
+`Frog.EffectLayer` is a dedicated paint plane for finite visual effects. Put it
+after the stable surface it decorates. It paints children in source order and
+is always input-transparent, so a popup can cross a Button, drag target, or
+scroll area without stealing that interaction.
+
+`Frog.PopupText` owns the complete pop/rise/fade recipe. Application code owns
+only a small keyed collection and removes an entry when its lifetime completes:
+
+```lua
+local PopupRemoved = Frog.action("PopupRemoved")
+
+local function removePopup(state, key)
+    local popups = {}
+    for _, popup in ipairs(state.popups) do
+        if popup.key ~= key then popups[#popups + 1] = popup end
+    end
+    return { popups = popups }
+end
+
+local Effects = Frog.actor("Effects", {
+    initial = function(props) return { popups = props.popups or {} } end,
+    actions = {
+        [PopupRemoved] = function(state, action)
+            return removePopup(state, action.key)
+        end,
+    },
+    render = function(_, state, send)
+        return Frog.EffectLayer {
+            width = "100%",
+            height = "100%",
+            Frog.each(state.popups, function(popup)
+                return Frog.PopupText {
+                    key = popup.key,
+                    text = popup.text,
+                    at = popup.at,
+                    variant = popup.variant,
+                    color = popup.color,
+                    onComplete = function()
+                        send(PopupRemoved { key = popup.key })
+                    end,
+                }
+            end),
+        }
+    end,
+})
+```
+
+`at` is the popup box's center measured from the EffectLayer content's top-left
+origin. A layer may use padding to move that origin. PopupText must be a direct
+EffectLayer child, and the layer accepts only effect children; this is what
+makes accidental interactive descendants impossible. Stable keys preserve
+source ordering and guarantee one finite lifetime per entry.
+
+The public variants are `float`, `impact`, and `notice`. Their defaults live in
+[`effects/popup_text.lua`](effects/popup_text.lua); component code may override
+`duration`, upward `distance`, or `delay` without rebuilding the recipe. Text
+styling uses the same roles, colors, fitting, wrapping, and outline props as
+`Frog.Text`.
+
+Omitting `clock` uses Host raw time. Supplying a `Frog.clock` makes the caller's
+time policy explicit; the Host samples it but never advances it. Reduced motion
+settles the popup immediately and delivers `onComplete` on the next Host update.
+Resize recomputes the layer position without restarting the relative lifetime.
+F6 shows layer count/input policy plus each popup's point, variant, trajectory,
+clock, elapsed time, and progress.
+
+Popups do not compute simulation results and do not run custom update/draw
+callbacks. The simulation or playback owner creates plain display entries from
+already-authoritative events. Sample committed refs when creating/reprojecting
+those entries; PopupText only displays the resulting layer-local point.
+
 ## State is a separate concept
 
 `Frog.component` is stateless. `Frog.actor` defines a stateful component with
@@ -333,6 +406,8 @@ The current public vocabulary is:
 | `Frog.useKeyedRefs` | Retain exact primitive refs by authored scalar key |
 | `Frog.useResource` | Own one disposable value for a semantic mount |
 | `Frog.useFrame` | Advance that process once per Host update |
+| `Frog.EffectLayer` | Paint ordered effects without accepting input |
+| `Frog.PopupText` | Run one keyed finite text effect |
 | `Frog.host` | Create the one application tree owner |
 | `Frog.clock` | Create a deterministic explicitly advanced clock |
 | `Frog.tween` / `spring` / `shake` | Declare reusable visual recipes |
@@ -769,7 +844,7 @@ Some visual noise is Lua rather than FrogUI:
 |---|---|
 | `{ name = value, childA, childB }` | named props plus ordered children in one Lua table |
 | `condition and child` | include `child` when true; FrogUI ignores `false` children |
-| `condition and a or b` | Lua's compact conditional expression |
+| `condition and a or b` | Lua's compact conditional expression; safe only when `a` cannot be `false`/`nil` |
 | `props.value or default` | use the prop, otherwise the default |
 | `#items` | array length |
 | `ipairs(items)` | ordered array iteration |

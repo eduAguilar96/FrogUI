@@ -105,8 +105,8 @@ local function construct(token, input)
                 or token.name == "Motion" then
             assert(#children <= 1,
                 "Frog." .. token.name .. " accepts at most one child")
-    elseif token.name == "Text" or token.name == "Image"
-            or token.name == "Icon" then
+    elseif token.name == "Text" or token.name == "PopupText"
+            or token.name == "Image" or token.name == "Icon" then
         assert(#children == 0,
             "Frog." .. token.name .. " does not accept children")
         end

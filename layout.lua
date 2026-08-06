@@ -133,7 +133,7 @@ local function measure(node, maxWidth, maxHeight, host)
     if (node.type == "Modal" or node.type == "Chrome")
             and not node._portalLayout then
         naturalWidth, naturalHeight = 0, 0
-    elseif node.type == "Text" then
+    elseif node.type == "Text" or node.type == "PopupText" then
         naturalWidth, naturalHeight = textSize(node, innerMaxWidth, innerMaxHeight, host)
     elseif node.type == "Image" or node.type == "Icon" then
         naturalWidth, naturalHeight = imageSize(node, host)
@@ -167,6 +167,15 @@ local function measure(node, maxWidth, maxHeight, host)
             measure(child, innerMaxWidth, innerMaxHeight, host)
             naturalWidth = math.max(naturalWidth, child.measuredWidth)
             naturalHeight = math.max(naturalHeight, child.measuredHeight)
+        end
+    elseif node.type == "EffectLayer" then
+        for _, child in ipairs(node.children) do
+            measure(child, innerMaxWidth, innerMaxHeight, host)
+            local at = child.props.at
+            naturalWidth = math.max(naturalWidth,
+                at.x + child.measuredWidth / 2)
+            naturalHeight = math.max(naturalHeight,
+                at.y + child.measuredHeight / 2)
         end
     elseif node.type == "Scroll" then
         local child = node.children[1]
@@ -387,6 +396,19 @@ function layout.arrange(node, x, y, width, height, host)
         arrangeFlow(node, false, host)
     elseif node.type == "Overlay" then
         for _, child in ipairs(node.children) do childBox(node, child, host) end
+    elseif node.type == "EffectLayer" then
+        for _, child in ipairs(node.children) do
+            measure(child, node.contentWidth, node.contentHeight, host)
+            local width = resolveSize(child.props.width, node.contentWidth)
+                or child.measuredWidth
+            local height = resolveSize(child.props.height, node.contentHeight)
+                or child.measuredHeight
+            local at = child.props.at
+            layout.arrange(child,
+                node.contentX + at.x - width / 2,
+                node.contentY + at.y - height / 2,
+                width, height, host)
+        end
     elseif node.type == "Scroll" then
         layout.arrangeScroll(node, host)
     elseif node.children[1] then

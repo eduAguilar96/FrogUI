@@ -17,6 +17,13 @@ local SPRINGS = {
     bouncy = { frequency = 11, damping = 0.55 },
 }
 
+-- Motion and PopupText both declare presentation targets directly. Other
+-- primitives may own named juice without turning their static props into
+-- animated targets.
+local function ownsMotionTargets(node)
+    return node.type == "Motion" or node.type == "PopupText"
+end
+
 local function finite(value)
     return type(value) == "number" and value == value
         and value > -math.huge and value < math.huge
@@ -528,7 +535,7 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host)
     -- First-mount Motion props are the authored entrance base. Establish them
     -- before keyed recipes snapshot `instance.values`; compatible rerenders
     -- deliberately keep recipe restart-before-target reconciliation semantics.
-    if node.type == "Motion" and not compatible then
+    if ownsMotionTargets(node) and not compatible then
         reconcileMotionTargets(instance, props, host, true)
     end
 
@@ -562,7 +569,7 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host)
             node.type .. " reaction " .. index .. " plays undeclared juice recipe "
                 .. tostring(recipeName))
     end
-    if node.type == "Motion" and compatible then
+    if ownsMotionTargets(node) and compatible then
         local targetsChanged = reconcileMotionTargets(instance, props, host,
             false)
         if targetsChanged and composeActive then

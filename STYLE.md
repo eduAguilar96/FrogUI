@@ -144,6 +144,8 @@ projections, companion style files, or geometry files.
   immediately obvious.
 - Conditional children may use `condition and Child { ... }`; FrogUI ignores
   `false` and `nil` children.
+- Use `condition and a or b` only when `a` cannot be `false` or `nil`. Prefer an
+  explicit `if` when retaining boolean state or other legitimately falsy data.
 - Lua forwards every return value from a final function call. When one value is
   intended inside a child table or another call, assign it to a named local or
   parenthesize it. For example, write `(name:gsub(...))` in `Frog.Text` and do
@@ -234,7 +236,28 @@ projections, companion style files, or geometry files.
   Split the process implementation itself only when it is an independently
   named concept such as `BattlePlayback`.
 
-## 9. Motion and feedback stay declarative
+## 9. Transient effects stay declarative
+
+- Keep `EffectLayer` after the stable surface it decorates. It is a feedback
+  plane, never a replacement owner for cards, figures, status, controls, or
+  scene layout.
+- Give every `PopupText` a stable authored/event key and one layer-local center
+  point. The popup owns its finite recipe; the actor or playback owner owns the
+  keyed collection and removes an entry through `onComplete`.
+- Use `float`, `impact`, or `notice` before adding custom motion. Override the
+  public duration, distance, delay, text styling, or explicit clock only when
+  the visible meaning requires it.
+- EffectLayer is input-transparent and accepts no interactive descendants. Do
+  not wrap a popup in Button/Pressable or add a parallel hit-test tree.
+- Effects display authoritative event results. They never calculate damage,
+  targets, modifiers, rewards, or other simulation state.
+- Convert committed refs into layer-local effect points at the playback owner.
+  Detached popups preserve/reproject their trajectory on resize; they do not
+  query component test ids or inspect the tree.
+- Do not add a per-effect update/draw callback. Smooth lifetime sampling belongs
+  to PopupText/Motion; the owner publishes only collection changes.
+
+## 10. Motion and feedback stay declarative
 
 - Components attach named `juice` recipes or wrap content in `Frog.Motion`;
   they do not add per-frame update/draw functions for micro-interactions.
@@ -265,7 +288,7 @@ projections, companion style files, or geometry files.
 - A new cue updates the provider catalog, its component owner, the code-reading
   guide, and a focused semantic-cue regression in the same change.
 
-## 10. Component and folder ownership
+## 11. Component and folder ownership
 
 - One ordinary visible concept has one directly named file.
 - A component with subcomponents owns one folder, such as
@@ -346,7 +369,7 @@ projections, companion style files, or geometry files.
   owner elsewhere or project its state through screen callbacks or generic
   render slots.
 
-## 11. Updating this guide
+## 12. Updating this guide
 
 When review creates or changes a convention:
 

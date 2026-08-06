@@ -23,6 +23,7 @@ local Interaction = require("src.frogui.interaction")
 ---@alias FrogUIImageFit 'contain'|'cover'|'stretch'
 ---@alias FrogUIScrollAxis 'vertical'|'horizontal'
 ---@alias FrogUIModalDismiss 'back'|'outside'|'both'|'none'
+---@alias FrogUIPopupVariant 'float'|'impact'|'notice'
 ---@alias FrogUIButtonResultStatus 'committed'|'rejected'
 ---@alias FrogUIDragStatus 'committed'|'rejected'|'cancelled'
 ---@alias FrogUISoundCue string|false
@@ -36,6 +37,11 @@ local Interaction = require("src.frogui.interaction")
 ---@field y number Committed arranged top edge in logical viewport pixels.
 ---@field width number Committed arranged width in logical viewport pixels.
 ---@field height number Committed arranged height in logical viewport pixels.
+
+---@class FrogUIClock
+---@field advance fun(self:FrogUIClock, dt:number):number Advance by a finite non-negative duration.
+---@field now fun(self:FrogUIClock):number Read the current deterministic time.
+---@field reset fun(self:FrogUIClock, time?:number):number Reset to a finite non-negative time.
 
 ---@class FrogUIRef
 ---@field current? FrogUIRect Read-only property returning a detached rectangle copy, or nil while unattached/unmounted; mutating the copy never changes FrogUI.
@@ -139,6 +145,43 @@ local Interaction = require("src.frogui.interaction")
 ---@field align? FrogUIAlign Horizontal placement shared by every child.
 ---@field justify? FrogUIBoxJustify Vertical placement shared by every child.
 ---@field [integer] FrogUIElementDescription Children paint back-to-front.
+
+---@class FrogEffectLayerProps:FrogUIElementProps
+---@field padding? FrogUIPadding Inner origin for every child `at` point.
+---@field clip? boolean Clip effects to the layer's content rectangle.
+---@field overflow? FrogUIOverflow Explicit clipping policy.
+---@field [integer] FrogUIElementDescription Ordered PopupText children; later
+--- children paint above earlier ones.
+
+---@class FrogUIPoint
+---@field x number Horizontal position from the EffectLayer content's left edge.
+---@field y number Vertical position from the EffectLayer content's top edge.
+
+---@class FrogPopupTextProps
+---@field key string|number Required stable transient identity; a new key starts one lifetime.
+---@field text string Required visible text.
+---@field at FrogUIPoint Center point inside the owning EffectLayer.
+---@field variant? FrogUIPopupVariant `float` gently rises, `impact` starts
+--- large, and `notice` moves least.
+---@field duration? number Non-negative animation duration; defaults are owned
+--- by the chosen variant.
+---@field distance? number Non-negative upward travel override.
+---@field delay? number Non-negative hold before animation begins.
+---@field clock? FrogUIClock Explicit Frog.clock; omitted popups use Host raw time.
+---@field onComplete? fun() Exactly-once callback after the keyed lifetime
+--- settles; normally sends a typed removal action.
+---@field width? FrogUISize Optional centered text box width.
+---@field height? FrogUISize Optional centered text box height.
+---@field role? string Semantic theme font role; defaults to `body`.
+---@field fontScale? number Positive local multiplier for the current role size.
+---@field color? FrogUIColor
+---@field wrap? boolean Wrap within the resolved width.
+---@field maxLines? integer Positive visible-line cap, normally paired with wrap.
+---@field align? FrogUITextAlign Horizontal text alignment; defaults to center.
+---@field fitDown? boolean Shrink until bounds/line cap fit; never grow.
+---@field outlineWidth? number Non-negative outline thickness.
+---@field outlineColor? FrogUIColor
+---@field testId? string Readable development/test identity shown by F6.
 
 ---@class FrogTextProps:FrogUIElementProps
 ---@field text? string Text content; a lone positional string/number is shorthand.
@@ -325,6 +368,21 @@ Frog.Column = Element.primitive("Column")
 ---@type fun(input?: FrogOverlayProps):FrogUIElementDescription
 Frog.Overlay = Element.primitive("Overlay")
 
+--- Paints ordered transient effects without ever participating in input.
+---
+--- Keep it above the surface it decorates. Popup `at` coordinates are measured
+--- from this layer's content origin; later children paint above earlier ones.
+---@type fun(input?: FrogEffectLayerProps):FrogUIElementDescription
+Frog.EffectLayer = require("src.frogui.effects.effect_layer")
+
+--- Animates one finite text effect and reports when it may be removed.
+---
+--- `variant` accepts `float`, `impact`, or `notice`. Supply a stable `key`, a
+--- center point inside an EffectLayer, and normally an `onComplete` callback
+--- that sends the owning actor's typed removal action.
+---@type fun(input:FrogPopupTextProps):FrogUIElementDescription
+Frog.PopupText = require("src.frogui.effects.popup_text")
+
 --- Draws one text leaf. `role` selects a semantic theme size; `fontScale`
 --- changes only this use while preserving responsive role changes. `fitDown`
 --- may shrink that requested size to fit explicit bounds. Hover this symbol or
@@ -441,6 +499,7 @@ Frog.parallel = Juice.parallel
 Frog.loop = Juice.loop
 Frog.withClock = Juice.withClock
 Frog.play = Juice.play
+---@type fun(time?:number):FrogUIClock
 Frog.clock = Clock.new
 
 function Frog.host(options)
