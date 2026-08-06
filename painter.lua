@@ -48,6 +48,16 @@ local function tinted(color, tint)
     }
 end
 
+-- Mixes one resolved text color toward white for the impact highlight pass.
+local function brightened(color, amount)
+    return {
+        color[1] + (1 - color[1]) * amount,
+        color[2] + (1 - color[2]) * amount,
+        color[3] + (1 - color[3]) * amount,
+        color[4],
+    }
+end
+
 local function beginClip(state, drawShape)
     local g = graphics()
     if not g or not state then return end
@@ -170,7 +180,7 @@ local function defaultBox(host, node, style)
     end
 end
 
-local function defaultText(host, node, style)
+local function defaultText(host, node, style, clipState)
     local g = graphics()
     if not g then return end
     local font = node._resolvedFont or host:_font(node.props.role)
@@ -182,6 +192,10 @@ local function defaultText(host, node, style)
     local function stamp(dx, dy)
         g.printf(value, node.x + (dx or 0), node.y + (dy or 0),
             math.max(0, node.width), align)
+    end
+    if style.shadowOffset > 0 then
+        setColor(style.shadowColor)
+        stamp(style.shadowOffset, style.shadowOffset)
     end
     if style.outlineWidth > 0 then
         local width = style.outlineWidth
@@ -198,6 +212,16 @@ local function defaultText(host, node, style)
     end
     setColor(style.color)
     stamp(0, 0)
+    if style.shine > 0 and style.shineSplit > 0 then
+        local shineShape = function()
+            g.rectangle("fill", node.x, node.y,
+                node.width, node.height * style.shineSplit)
+        end
+        beginClip(clipState, shineShape)
+        setColor(brightened(style.color, style.shine))
+        stamp(0, 0)
+        endClip(clipState, shineShape)
+    end
 end
 
 local function imageGeometry(node, asset, fit, sourceRect)
@@ -380,13 +404,18 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             outlineWidth = node.props.outlineWidth or 0,
             outlineColor = faded(tinted(host:_color(node.props.outlineColor, nil,
                 { 0, 0, 0, 1 }), style.tint), style.opacity),
+            shadowOffset = node.props.shadowOffset or 0,
+            shadowColor = faded(tinted(host:_color(node.props.shadowColor, nil,
+                { 0, 0, 0, 1 }), style.tint), style.opacity),
+            shine = node.props.shine or 0,
+            shineSplit = node.props.shineSplit or 0.5,
         }
         if custom then
             customCall(custom, "text", node, node.props.text or "", textStyle)
         else
             local shape = nodeShape(node, false)
             if node.props.maxLines and g then beginClip(clipState, shape) end
-            defaultText(host, node, textStyle)
+            defaultText(host, node, textStyle, clipState)
             if node.props.maxLines and g then endClip(clipState, shape) end
         end
     elseif node.type == "Image" then

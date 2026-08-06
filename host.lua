@@ -25,7 +25,13 @@ local PRIMITIVES = {
     DragSource = true, DropTarget = true,
 }
 
-local DEFAULT_FONT_SIZES = { title = 28, heading = 22, body = 18, caption = 13 }
+local DEFAULT_FONT_SIZES = {
+    title = 28,
+    heading = 22,
+    body = 18,
+    caption = 13,
+    impact = 34,
+}
 
 local COMMON_PROPS = {
     key = true, width = true, height = true, grow = true,
@@ -60,6 +66,8 @@ local TYPE_PROPS = {
         color = true, wrap = true, maxLines = true,
         align = true, fitDown = true,
         outlineWidth = true, outlineColor = true,
+        shadowOffset = true, shadowColor = true,
+        shine = true, shineSplit = true,
         x = true, y = true, scale = true,
     },
     Text = {
@@ -433,6 +441,7 @@ local function validatePrimitiveProps(self, name, props)
 
     for _, colorProp in ipairs({
         "background", "border", "color", "tint", "outlineColor",
+        "shadowColor",
         "hoverBackground", "hoverBorder",
         "pressedBackground", "pressedBorder",
         "focusedBackground", "focusedBorder",
@@ -575,6 +584,11 @@ local function validatePrimitiveProps(self, name, props)
                 and props.maxLines % 1 == 0, "Text maxLines must be a positive integer")
         end
         validateNumber(props.outlineWidth, "Text outlineWidth", 0)
+        if name == "PopupText" then
+            validateNumber(props.shadowOffset, "PopupText shadowOffset", 0)
+            validateNumber(props.shine, "PopupText shine", 0, 1)
+            validateNumber(props.shineSplit, "PopupText shineSplit", 0, 1)
+        end
         oneOf(props.align, { "left", "center", "right", "start", "end" },
             "Text align")
         if name == "PopupText" then
@@ -733,6 +747,13 @@ local function nodeEntry(node, depth, visibleBounds)
             at = deepCopy(node.props.at),
             duration = node.props.duration,
             distance = node.props.distance,
+            treatment = {
+                role = node.props.role,
+                outlineWidth = node.props.outlineWidth or 0,
+                shadowOffset = node.props.shadowOffset or 0,
+                shine = node.props.shine or 0,
+                shineSplit = node.props.shineSplit,
+            },
         }
     end
     if node._scroll then

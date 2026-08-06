@@ -7,9 +7,30 @@ local Juice = require("src.frogui.juice")
 local PopupTextLeaf = Element.primitive("PopupText")
 
 local VARIANTS = {
-    float = { duration = 0.75, distance = 36, scale = 1 },
-    impact = { duration = 0.62, distance = 44, scale = 1.35 },
-    notice = { duration = 0.9, distance = 12, scale = 1.05 },
+    float = {
+        duration = 0.75,
+        distance = 36,
+        scale = 1,
+        role = "body",
+    },
+    impact = {
+        duration = 0.62,
+        distance = 44,
+        scale = 1.35,
+        role = "impact",
+        outlineWidth = 1,
+        outlineColor = { 0, 0, 0, 0.95 },
+        shadowOffset = 3,
+        shadowColor = { 0, 0, 0, 0.95 },
+        shine = 0.55,
+        shineSplit = 0.46,
+    },
+    notice = {
+        duration = 0.9,
+        distance = 12,
+        scale = 1.05,
+        role = "heading",
+    },
 }
 
 local ALLOWED_PROPS = {
@@ -33,6 +54,10 @@ local ALLOWED_PROPS = {
     fitDown = true,
     outlineWidth = true,
     outlineColor = true,
+    shadowOffset = true,
+    shadowColor = true,
+    shine = true,
+    shineSplit = true,
     testId = true,
     children = true,
 }
@@ -62,10 +87,17 @@ local function validateProps(props)
         "Frog.PopupText at.x/at.y must be finite numbers")
     assert(props.variant == nil or VARIANTS[props.variant],
         "Frog.PopupText variant must be float, impact, or notice")
-    for _, name in ipairs({ "duration", "distance", "delay" }) do
+    for _, name in ipairs({
+        "duration", "distance", "delay", "shadowOffset",
+    }) do
         local value = props[name]
         assert(value == nil or finite(value) and value >= 0,
             "Frog.PopupText " .. name .. " must be finite and non-negative")
+    end
+    for _, name in ipairs({ "shine", "shineSplit" }) do
+        local value = props[name]
+        assert(value == nil or finite(value) and value >= 0 and value <= 1,
+            "Frog.PopupText " .. name .. " must be between 0 and 1")
     end
     assert(props.clock == nil or Clock.isClock(props.clock),
         "Frog.PopupText clock must come from Frog.clock")
@@ -75,7 +107,7 @@ local function validateProps(props)
         "Frog.PopupText accepts text, not element children")
 end
 
--- Builds the complete pop/rise/fade recipe from one named visual variant.
+-- Builds the complete rise/fade recipe from one named visual variant.
 local function lifetimeRecipe(props, variant)
     local duration = props.duration or variant.duration
     local distance = props.distance or variant.distance
@@ -84,11 +116,6 @@ local function lifetimeRecipe(props, variant)
         Juice.tween {
             to = { y = -distance },
             duration = duration,
-            ease = "out_quad",
-        },
-        Juice.tween {
-            to = { scale = 1 },
-            duration = duration * 0.28,
             ease = "out_quad",
         },
         Juice.sequence {
@@ -123,15 +150,22 @@ local PopupText = Element.component("PopupText", function(props)
         distance = distance,
         width = props.width,
         height = props.height,
-        role = props.role,
+        role = props.role or variant.role,
         fontScale = props.fontScale,
         color = props.color,
         wrap = props.wrap,
         maxLines = props.maxLines,
         align = props.align or "center",
         fitDown = props.fitDown,
-        outlineWidth = props.outlineWidth,
-        outlineColor = props.outlineColor,
+        outlineWidth = props.outlineWidth == nil
+            and variant.outlineWidth or props.outlineWidth,
+        outlineColor = props.outlineColor or variant.outlineColor,
+        shadowOffset = props.shadowOffset == nil
+            and variant.shadowOffset or props.shadowOffset,
+        shadowColor = props.shadowColor or variant.shadowColor,
+        shine = props.shine == nil and variant.shine or props.shine,
+        shineSplit = props.shineSplit == nil
+            and variant.shineSplit or props.shineSplit,
         scale = variant.scale,
         juice = {
             lifetime = {

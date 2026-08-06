@@ -247,6 +247,12 @@ projections, companion style files, or geometry files.
 - Use `float`, `impact`, or `notice` before adding custom motion. Override the
   public duration, distance, delay, text styling, or explicit clock only when
   the visible meaning requires it.
+- Keep a popup's glyph scale fixed for its whole flight. Use its semantic role
+  or `fontScale` to choose size at spawn time; continuously rescaling rasterized
+  text shimmers when several independent popups overlap in time.
+- Use the `impact` treatment for large result numbers before restating its rim,
+  shadow, and top-band shine in an application component. Numeric treatment
+  props may be set to zero when a specific surface deliberately needs plain ink.
 - EffectLayer is input-transparent and accepts no interactive descendants. Do
   not wrap a popup in Button/Pressable or add a parallel hit-test tree.
 - Effects display authoritative event results. They never calculate damage,

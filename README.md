@@ -362,14 +362,22 @@ The public variants are `float`, `impact`, and `notice`. Their defaults live in
 [`effects/popup_text.lua`](effects/popup_text.lua); component code may override
 `duration`, upward `distance`, or `delay` without rebuilding the recipe. Text
 styling uses the same roles, colors, fitting, wrapping, and outline props as
-`Frog.Text`.
+`Frog.Text`. The `impact` default also owns the shipped combat-number treatment:
+an impact font role, dark rim, drop shadow, and a brighter band across the top
+of the glyph. `shadowOffset`, `shadowColor`, `shine`, and `shineSplit` are
+explicit overrides; set the numeric treatment props to zero to disable them.
+
+Popup glyph scale is fixed for its lifetime. Motion moves and fades the whole
+rendered word, so rapidly inserted siblings cannot make older rasterized text
+appear to vibrate through independent scale resampling. Choose `fontScale` once
+when authoring the entry if one result needs more visual weight.
 
 Omitting `clock` uses Host raw time. Supplying a `Frog.clock` makes the caller's
 time policy explicit; the Host samples it but never advances it. Reduced motion
 settles the popup immediately and delivers `onComplete` on the next Host update.
 Resize recomputes the layer position without restarting the relative lifetime.
-F6 shows layer count/input policy plus each popup's point, variant, trajectory,
-clock, elapsed time, and progress.
+F6 shows layer count/input policy plus each popup's point, variant, treatment,
+trajectory, clock, elapsed time, and progress.
 
 Popups do not compute simulation results and do not run custom update/draw
 callbacks. The simulation or playback owner creates plain display entries from

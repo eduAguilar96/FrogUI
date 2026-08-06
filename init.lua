@@ -161,8 +161,8 @@ local Interaction = require("src.frogui.interaction")
 ---@field key string|number Required stable transient identity; a new key starts one lifetime.
 ---@field text string Required visible text.
 ---@field at FrogUIPoint Center point inside the owning EffectLayer.
----@field variant? FrogUIPopupVariant `float` gently rises, `impact` starts
---- large, and `notice` moves least.
+---@field variant? FrogUIPopupVariant `float` gently rises, `impact` uses the
+--- large shipped number treatment, and `notice` moves least.
 ---@field duration? number Non-negative animation duration; defaults are owned
 --- by the chosen variant.
 ---@field distance? number Non-negative upward travel override.
@@ -172,7 +172,7 @@ local Interaction = require("src.frogui.interaction")
 --- settles; normally sends a typed removal action.
 ---@field width? FrogUISize Optional centered text box width.
 ---@field height? FrogUISize Optional centered text box height.
----@field role? string Semantic theme font role; defaults to `body`.
+---@field role? string Semantic theme font role; defaults by variant.
 ---@field fontScale? number Positive local multiplier for the current role size.
 ---@field color? FrogUIColor
 ---@field wrap? boolean Wrap within the resolved width.
@@ -181,6 +181,12 @@ local Interaction = require("src.frogui.interaction")
 ---@field fitDown? boolean Shrink until bounds/line cap fit; never grow.
 ---@field outlineWidth? number Non-negative outline thickness.
 ---@field outlineColor? FrogUIColor
+---@field shadowOffset? number Non-negative down-right drop-shadow distance;
+--- the `impact` variant defaults to the shipped impact-number treatment.
+---@field shadowColor? FrogUIColor Drop-shadow ink.
+---@field shine? number Top-band highlight strength from 0 (off) to 1 (white).
+---@field shineSplit? number Highlighted fraction from the text box's top,
+--- between 0 and 1.
 ---@field testId? string Readable development/test identity shown by F6.
 
 ---@class FrogTextProps:FrogUIElementProps
@@ -377,9 +383,10 @@ Frog.EffectLayer = require("src.frogui.effects.effect_layer")
 
 --- Animates one finite text effect and reports when it may be removed.
 ---
---- `variant` accepts `float`, `impact`, or `notice`. Supply a stable `key`, a
---- center point inside an EffectLayer, and normally an `onComplete` callback
---- that sends the owning actor's typed removal action.
+--- `variant` accepts `float`, `impact`, or `notice`. `impact` includes the
+--- dark rim, drop shadow, and bright top band used by shipped impact numbers.
+--- Supply a stable `key`, a center point inside an EffectLayer, and normally
+--- an `onComplete` callback that sends the owner's typed removal action.
 ---@type fun(input:FrogPopupTextProps):FrogUIElementDescription
 Frog.PopupText = require("src.frogui.effects.popup_text")
 
