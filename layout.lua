@@ -135,7 +135,8 @@ local function measure(node, maxWidth, maxHeight, host)
         naturalWidth, naturalHeight = 0, 0
     elseif node.type == "Text" or node.type == "PopupText" then
         naturalWidth, naturalHeight = textSize(node, innerMaxWidth, innerMaxHeight, host)
-    elseif node.type == "Image" or node.type == "Icon" then
+    elseif node.type == "Image" or node.type == "TiledImage"
+            or node.type == "Icon" then
         naturalWidth, naturalHeight = imageSize(node, host)
     elseif node.type == "Row" or node.type == "Column" then
         local gap = node.props.gap or 0

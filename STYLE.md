@@ -277,7 +277,33 @@ projections, companion style files, or geometry files.
   resize reprojection, missing-art fallback, and reduced-motion settlement
   belong to the three effect primitives; owners publish only collection changes.
 
-## 10. Motion and feedback stay declarative
+## 10. Tiled art and shaders remain ordinary composition
+
+- Use `Frog.TiledImage` for repeated authored art. The component declares its
+  semantic asset token, arranged rectangle, tile size, repeat axis, phase,
+  filter, and—when moving—an explicit clock plus velocity.
+- Use `nearest` for the pixel-authored daylight forest. FrogUI snaps the shared
+  phase once and keeps adjacent tiles exact; do not independently round tile
+  copies or mutate a cached Image's filter from application code.
+- The application owns clock meaning. Raw ambience may continue while paused;
+  feedback/execution clocks may stop or scale. TiledImage and ShaderImage sample
+  clocks but never advance them and never infer reduced-motion behavior.
+- Wrap one `Image`, `TiledImage`, or empty `Box` in `Frog.ShaderImage`. Keep the
+  unwrapped leaf readable in the same tree; do not create an all-in-one forest
+  renderer or pass a custom draw callback.
+- Shader source lives under a semantic token in `theme.shaders`. Components
+  declare only that token, explicit uniforms, blend, and fallback. Never embed
+  shader source, filenames, Battle event names, or hidden timing in a component.
+- Use `fallback = "plain"` when the base art is meaningful without its shader.
+  Use `hidden` only for optional shader-only decoration. A GPU failure must not
+  remove essential world art, stop playback, or change a domain result.
+- Use additive blend only for authored light. Ordinary wind, sway, dim, and
+  color work remains alpha-composited unless its visible owner says otherwise.
+- Build a background from small named visible components/layers whose source
+  order is its paint order. Anchors, depth, parallax, and event reactions belong
+  to the application composition; tiling and shader mechanics belong to FrogUI.
+
+## 11. Motion and feedback stay declarative
 
 - Components attach named `juice` recipes or wrap content in `Frog.Motion`;
   they do not add per-frame update/draw functions for micro-interactions.
@@ -308,7 +334,7 @@ projections, companion style files, or geometry files.
 - A new cue updates the provider catalog, its component owner, the code-reading
   guide, and a focused semantic-cue regression in the same change.
 
-## 11. Component and folder ownership
+## 12. Component and folder ownership
 
 - One ordinary visible concept has one directly named file.
 - A component with subcomponents owns one folder, such as
@@ -389,7 +415,7 @@ projections, companion style files, or geometry files.
   owner elsewhere or project its state through screen callbacks or generic
   render slots.
 
-## 12. Updating this guide
+## 13. Updating this guide
 
 When review creates or changes a convention:
 

@@ -9,6 +9,7 @@ local Message = require("src.frogui.message")
 local Clock = require("src.frogui.clock")
 local Motion = require("src.frogui.motion")
 local Effect = require("src.frogui.effects.runtime")
+local Shader = require("src.frogui.shader")
 local Interaction = require("src.frogui.interaction")
 local Ref = require("src.frogui.ref")
 
@@ -21,7 +22,8 @@ local renderingHost = nil
 local PRIMITIVES = {
     Box = true, Row = true, Column = true, Overlay = true,
     EffectLayer = true, PopupText = true, Projectile = true, Flipbook = true,
-    Text = true, Image = true, Icon = true, Button = true, Motion = true,
+    Text = true, Image = true, TiledImage = true, ShaderImage = true,
+    Icon = true, Button = true, Motion = true,
     Pressable = true, Scroll = true, Modal = true, Chrome = true,
     DragSource = true, DropTarget = true,
 }
@@ -82,6 +84,14 @@ local TYPE_PROPS = {
         frames = true, at = true, atOffset = true, fps = true, clock = true,
         contactAt = true, onContact = true, onComplete = true,
         rotation = true, mirror = true, anchor = true, tint = true,
+    },
+    TiledImage = {
+        source = true, tileWidth = true, tileHeight = true,
+        phase = true, velocity = true, clock = true,
+        repeatAxis = true, filter = true, tint = true,
+    },
+    ShaderImage = {
+        shader = true, uniforms = true, fallback = true, blend = true,
     },
     Text = {
         text = true, role = true, fontScale = true,
@@ -259,9 +269,12 @@ local function validatePrimitive(name, children)
             or name == "Chrome"
             or name == "DragSource" or name == "DropTarget" then
         assert(#children == 1, "Frog." .. name .. " accepts exactly one child")
+    elseif name == "ShaderImage" then
+        assert(#children == 1, "Frog.ShaderImage accepts exactly one child")
     elseif name == "Text" or name == "PopupText"
             or name == "Projectile" or name == "Flipbook"
-            or name == "Image" or name == "Icon" then
+            or name == "Image" or name == "TiledImage"
+            or name == "Icon" then
         assert(#children == 0, "Frog." .. name .. " does not accept children")
     end
 end
@@ -307,6 +320,15 @@ local function validateTheme(theme)
     for token, color in pairs(theme.colors or {}) do
         assert(type(token) == "string", "theme color tokens must be strings")
         validateColorTable(color, "theme color " .. token)
+    end
+    assert(theme.shaders == nil or (type(theme.shaders) == "table"
+            and getmetatable(theme.shaders) == nil),
+        "theme.shaders must be a plain semantic-source table")
+    for token, source in pairs(theme.shaders or {}) do
+        assert(type(token) == "string" and token ~= "",
+            "theme shader tokens must be non-empty strings")
+        assert(type(source) == "string" and source ~= "",
+            "theme shader " .. token .. " must be non-empty source text")
     end
     local button = ((theme.controls or {}).button or {})
     local colorKeys = {
@@ -367,6 +389,20 @@ local function validateSize(value, label)
     assert(value >= 0, label .. " must be non-negative")
 end
 
+-- Validates one semantic token or direct LÖVE image object.
+local function validateAssetSource(self, source, label)
+    assert(source ~= nil, label .. " source token is required")
+    if type(source) == "string" then
+        local declared = self.assets[source]
+        assert(declared ~= nil,
+            "unknown FrogUI asset token " .. tostring(source))
+        assert(type(declared) == "string" or assetObject(declared),
+            "malformed FrogUI asset " .. tostring(source))
+    else
+        assert(assetObject(source), "malformed direct FrogUI asset")
+    end
+end
+
 local function validateNumber(value, label, low, high)
     if value == nil then return end
     assert(finite(value), label .. " must be finite")
@@ -417,8 +453,8 @@ local function validateEffectAnchor(self, value, label)
         label .. ".x/.y must be finite numbers")
 end
 
--- Validates an optional local nudge without requiring both axes.
-local function validateEffectOffset(value, label)
+-- Validates an optional point-like value without requiring both axes.
+local function validateOptionalPoint(value, label)
     if value == nil then return end
     assert(type(value) == "table" and getmetatable(value) == nil,
         label .. " must be a plain { x?, y? } offset")
@@ -426,6 +462,27 @@ local function validateEffectOffset(value, label)
         assert(axis == "x" or axis == "y",
             label .. " has unknown field " .. tostring(axis))
         validateNumber(amount, label .. "." .. axis)
+    end
+end
+
+-- Validates one scalar/vector/clock shader uniform value.
+local function validateShaderUniform(value, label)
+    if finite(value) or type(value) == "boolean" or Clock.isClock(value) then
+        return
+    end
+    assert(type(value) == "table" and getmetatable(value) == nil,
+        label .. " must be a number, boolean, Frog.clock, or numeric vector")
+    local count = 0
+    for key, amount in pairs(value) do
+        assert(type(key) == "number" and key >= 1 and key % 1 == 0,
+            label .. " must be a dense numeric vector")
+        assert(finite(amount), label .. " vector values must be finite")
+        count = math.max(count, key)
+    end
+    assert(count >= 2 and count <= 4,
+        label .. " vector must contain two through four numbers")
+    for index = 1, count do
+        assert(value[index] ~= nil, label .. " must be a dense numeric vector")
     end
 end
 
@@ -598,16 +655,7 @@ local function validatePrimitiveProps(self, name, props)
             end
         end
     elseif name == "Image" or name == "Icon" then
-        assert(props.source ~= nil, name .. " source token is required")
-        if type(props.source) == "string" then
-            local declared = self.assets[props.source]
-            assert(declared ~= nil,
-                "unknown FrogUI asset token " .. tostring(props.source))
-            assert(type(declared) == "string" or assetObject(declared),
-                "malformed FrogUI asset " .. tostring(props.source))
-        else
-            assert(assetObject(props.source), "malformed direct FrogUI asset")
-        end
+        validateAssetSource(self, props.source, name)
         assert(props.fit == nil or props.fit == "contain" or props.fit == "cover"
             or props.fit == "stretch",
             name .. " fit must be contain, cover, or stretch")
@@ -705,8 +753,8 @@ local function validatePrimitiveProps(self, name, props)
             "Projectile width must be a positive number")
         assert(props.height == nil or finite(props.height) and props.height > 0,
             "Projectile height must be a positive number")
-        validateEffectOffset(props.fromOffset, "Projectile fromOffset")
-        validateEffectOffset(props.toOffset, "Projectile toOffset")
+        validateOptionalPoint(props.fromOffset, "Projectile fromOffset")
+        validateOptionalPoint(props.toOffset, "Projectile toOffset")
         validateNumber(props.duration, "Projectile duration")
         assert(props.duration and props.duration > 0,
             "Projectile duration must be positive")
@@ -741,7 +789,7 @@ local function validatePrimitiveProps(self, name, props)
             "Flipbook width must be a positive number")
         assert(props.height == nil or finite(props.height) and props.height > 0,
             "Flipbook height must be a positive number")
-        validateEffectOffset(props.atOffset, "Flipbook atOffset")
+        validateOptionalPoint(props.atOffset, "Flipbook atOffset")
         validateNumber(props.fps, "Flipbook fps")
         assert(props.fps == nil or props.fps > 0,
             "Flipbook fps must be positive")
@@ -756,6 +804,35 @@ local function validatePrimitiveProps(self, name, props)
         assert(props.mirror == nil or type(props.mirror) == "boolean",
             "Flipbook mirror must be a boolean")
         validateEffectPivot(props.anchor, "Flipbook anchor")
+    elseif name == "TiledImage" then
+        validateAssetSource(self, props.source, name)
+        validateNumber(props.tileWidth, "TiledImage tileWidth", 1)
+        validateNumber(props.tileHeight, "TiledImage tileHeight", 1)
+        validateOptionalPoint(props.phase, "TiledImage phase")
+        validateOptionalPoint(props.velocity, "TiledImage velocity")
+        assert(props.clock == nil or Clock.isClock(props.clock),
+            "TiledImage clock must come from Frog.clock")
+        assert(props.velocity == nil or props.clock ~= nil,
+            "TiledImage velocity requires an explicit Frog.clock")
+        oneOf(props.repeatAxis, { "x", "y", "both", "none" },
+            "TiledImage repeatAxis")
+        oneOf(props.filter, { "nearest", "linear" }, "TiledImage filter")
+    elseif name == "ShaderImage" then
+        assert(type(props.shader) == "string" and props.shader ~= "",
+            "ShaderImage shader must be a non-empty semantic token")
+        assert((self.theme.shaders or {})[props.shader] ~= nil,
+            "unknown FrogUI shader token " .. tostring(props.shader))
+        assert(props.uniforms == nil or (type(props.uniforms) == "table"
+                and getmetatable(props.uniforms) == nil),
+            "ShaderImage uniforms must be a plain name-to-value table")
+        for uniform, value in pairs(props.uniforms or {}) do
+            assert(type(uniform) == "string" and uniform ~= "",
+                "ShaderImage uniform names must be non-empty strings")
+            validateShaderUniform(value, "ShaderImage uniform " .. uniform)
+        end
+        oneOf(props.fallback, { "plain", "hidden" },
+            "ShaderImage fallback")
+        oneOf(props.blend, { "alpha", "add" }, "ShaderImage blend")
     elseif name == "Motion" then
         assert(props.reactions == nil or #props.reactions == 0 or props.juice ~= nil,
             "Frog.Motion reactions require named juice recipes")
@@ -907,6 +984,19 @@ local function nodeEntry(node, depth, visibleBounds)
         }
     elseif node.type == "Projectile" or node.type == "Flipbook" then
         entry.effect = Effect.inspect(node._effect)
+    elseif node.type == "TiledImage" then
+        entry.tiledImage = deepCopy(node._tileGeometry or {
+            repeatAxis = node.props.repeatAxis or "both",
+            filter = node.props.filter or "linear",
+            clock = node.props.clock and "explicit" or "none",
+        })
+    elseif node.type == "ShaderImage" then
+        entry.shaderImage = deepCopy(node._shaderInspection or {
+            token = node.props.shader,
+            status = "pending",
+            fallback = node.props.fallback or "plain",
+            blend = node.props.blend or "alpha",
+        })
     end
     if node._scroll then
         entry.scroll = {
@@ -983,7 +1073,8 @@ end
 local function concreteInspectionHit(node)
     if node.type == "Text" or node.type == "PopupText"
             or node.type == "Projectile" or node.type == "Flipbook"
-            or node.type == "Image" or node.type == "Icon"
+            or node.type == "Image" or node.type == "TiledImage"
+            or node.type == "Icon"
             or node.type == "Button" or node.type == "Pressable"
             or node.type == "Scroll" or node.type == "DragSource"
             or node.type == "DropTarget" then
@@ -1226,6 +1317,7 @@ function host.new(options)
     self._viewport = Viewport.new(viewportOptions)
     self._fontCache = {}
     self._assetCache = {}
+    Shader.clear(self)
     self._captures = {}
     self._inspectorVisible = options.inspectorActive == true
     self._lastInputText = nil
@@ -1915,6 +2007,13 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                     .. " or Flipbook children")
         end
     end
+    if token.name == "ShaderImage" then
+        local child = node.children[1]
+        assert(child.type == "Image" or child.type == "TiledImage"
+                or child.type == "Box" and #child.children == 0,
+            "Frog.ShaderImage child must resolve to Image, TiledImage,"
+                .. " or an empty Box")
+    end
     if token.name == "DragSource" then
         context.previewDepth = (context.previewDepth or 0) + 1
         local preview = descriptor.props.preview
@@ -2128,14 +2227,19 @@ function host:refreshTheme(theme, assets, root)
     validateTheme(theme)
     local previousTheme, previousAssets = self.theme, self.assets
     local previousFonts, previousAssetCache = self._fontCache, self._assetCache
+    local previousShaderCache, previousShaderFailures =
+        self._shaderCache, self._shaderFailures
     self.theme = theme
     self.assets = assets
     self._fontCache = {}
     self._assetCache = {}
+    Shader.clear(self)
     local ok, result = pcall(self.render, self, root)
     if not ok then
         self.theme, self.assets = previousTheme, previousAssets
         self._fontCache, self._assetCache = previousFonts, previousAssetCache
+        self._shaderCache, self._shaderFailures =
+            previousShaderCache, previousShaderFailures
         error(result, 0)
     end
     return result
@@ -3092,6 +3196,7 @@ function host:unmount()
     Ref.publish(committedRefs, self._refs, {})
     self._motions = {}
     self._effects = {}
+    Shader.clear(self)
     self._scrolls = {}
     self._modals = {}
     self._modal = nil

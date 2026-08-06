@@ -2,8 +2,12 @@
 -- optional application painter overrides.
 
 local Effect = require("src.frogui.effects.runtime")
+local Shader = require("src.frogui.shader")
 
 local painter = {}
+
+-- One malformed leaf must never turn a single frame into unbounded draw work.
+local MAX_TILE_COPIES = 4096
 
 local DEFAULTS = {
     clear = { 0.05, 0.06, 0.08, 1 },
@@ -430,6 +434,105 @@ local function defaultIcon(host, node, asset, style, clipState)
     if style.fit == "cover" then endClip(clipState, shape) end
 end
 
+local function modulo(value, size)
+    return ((value % size) + size) % size
+end
+
+-- Plans one repeated axis with bounded integer work and no floating while-loop.
+local function tilePlan(start, size, tileSize, phase, repeats, snap)
+    local origin = start + (repeats and modulo(phase, tileSize) or phase)
+    if snap then origin = math.floor(origin / snap + 0.5) * snap end
+    if not repeats then return origin, 1 end
+    local first = origin - math.ceil((origin - start) / tileSize) * tileSize
+    if first + tileSize <= start then first = first + tileSize end
+    local count = math.max(0,
+        math.ceil((start + size - first) / tileSize))
+    assert(count < math.huge,
+        "TiledImage repeat count must remain finite")
+    return first, count
+end
+
+-- Materializes one already-budgeted adjacent position list by integer index.
+local function tilePositions(first, tileSize, count)
+    local positions = {}
+    for index = 0, count - 1 do
+        positions[#positions + 1] = first + index * tileSize
+    end
+    return positions
+end
+
+-- Resolves repeat geometry from intrinsic art, authored phase, and one clock.
+local function tiledGeometry(node, asset)
+    local props = node.props
+    local imageWidth = asset and asset:getWidth() or 48
+    local imageHeight = asset and asset:getHeight() or 48
+    local tileWidth, tileHeight = props.tileWidth, props.tileHeight
+    if tileWidth and not tileHeight then
+        tileHeight = tileWidth * imageHeight / imageWidth
+    elseif tileHeight and not tileWidth then
+        tileWidth = tileHeight * imageWidth / imageHeight
+    else
+        tileWidth = tileWidth or imageWidth
+        tileHeight = tileHeight or imageHeight
+    end
+    local time = props.clock and props.clock:now() or 0
+    local phase, velocity = props.phase or {}, props.velocity or {}
+    local phaseX = (phase.x or 0) + (velocity.x or 0) * time
+    local phaseY = (phase.y or 0) + (velocity.y or 0) * time
+    local axis = props.repeatAxis or "both"
+    local snap = props.filter == "nearest" and 1 or nil
+    local columnFirst, columnCount = tilePlan(node.x, node.width, tileWidth,
+        phaseX, axis == "x" or axis == "both", snap)
+    local rowFirst, rowCount = tilePlan(node.y, node.height, tileHeight,
+        phaseY, axis == "y" or axis == "both", snap)
+    assert(columnCount * rowCount <= MAX_TILE_COPIES,
+        "TiledImage exceeds its per-leaf copy budget")
+    local columns = tilePositions(columnFirst, tileWidth, columnCount)
+    local rows = tilePositions(rowFirst, tileHeight, rowCount)
+    return {
+        phase = { x = phaseX, y = phaseY },
+        tileWidth = tileWidth,
+        tileHeight = tileHeight,
+        columns = columns,
+        rows = rows,
+        repeatAxis = axis,
+        filter = props.filter or "linear",
+        clock = props.clock and "explicit" or "none",
+    }
+end
+
+-- Clips tiles to one leaf while preserving any surrounding shader and filter.
+local function defaultTiledImage(node, asset, geometry, style, clipState)
+    local g = graphics()
+    if not g or not asset then return end
+    local previousMin, previousMag, previousAnisotropy
+    if asset.getFilter and asset.setFilter then
+        previousMin, previousMag, previousAnisotropy = asset:getFilter()
+        asset:setFilter(geometry.filter, geometry.filter)
+    end
+    local activeShader = g.getShader and g.getShader() or nil
+    if activeShader then g.setShader() end
+    beginClip(clipState, nodeShape(node, false))
+    if activeShader then g.setShader(activeShader) end
+    setColor(style.tint)
+    local ok, reason = pcall(function()
+        local scaleX = geometry.tileWidth / asset:getWidth()
+        local scaleY = geometry.tileHeight / asset:getHeight()
+        for _, y in ipairs(geometry.rows) do
+            for _, x in ipairs(geometry.columns) do
+                g.draw(asset, x, y, 0, scaleX, scaleY)
+            end
+        end
+    end)
+    if activeShader then g.setShader() end
+    endClip(clipState, nodeShape(node, false))
+    if activeShader then g.setShader(activeShader) end
+    if previousMin then
+        asset:setFilter(previousMin, previousMag, previousAnisotropy)
+    end
+    if not ok then error(reason, 0) end
+end
+
 local function customCall(custom, method, ...)
     if custom and custom[method] then custom[method](custom, ...) end
 end
@@ -504,6 +607,19 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             defaultText(host, node, textStyle, clipState)
             if node.props.maxLines and g then endClip(clipState, shape) end
         end
+    elseif node.type == "TiledImage" then
+        local imageStyle = {
+            tint = faded(tinted(host:_color(node.props.tint, nil,
+                { 1, 1, 1, 1 }), style.tint), style.opacity),
+        }
+        local asset = host:_asset(node.props.source)
+        local geometry = tiledGeometry(node, asset)
+        node._tileGeometry = geometry
+        if custom then
+            customCall(custom, "tiledImage", node, asset, geometry, imageStyle)
+        else
+            defaultTiledImage(node, asset, geometry, imageStyle, clipState)
+        end
     elseif node.type == "Image" then
         local imageStyle = {
             tint = faded(tinted(host:_color(node.props.tint, nil, { 1, 1, 1, 1 }),
@@ -538,9 +654,44 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
         or node.props.overflow == "clip"
     local contentShape = nodeShape(node, true)
     if clipped and not custom and g then beginClip(clipState, contentShape) end
-    for _, child in ipairs(node.children) do
-        drawNode(host, child, custom, style.opacity, style.tint,
-            clipState, portalRoot)
+    local function drawChildren()
+        for _, child in ipairs(node.children) do
+            drawNode(host, child, custom, style.opacity, style.tint,
+                clipState, portalRoot)
+        end
+    end
+    if node.type == "ShaderImage" then
+        if custom then
+            node._shaderInspection = Shader.inspect(host, node)
+            customCall(custom, "shaderImage", node, node._shaderInspection)
+            drawChildren()
+        else
+            local previousShader = g.getShader and g.getShader() or nil
+            local previousBlend, previousAlpha = g.getBlendMode()
+            local active = Shader.activate(host, node)
+            node._shaderInspection = Shader.inspect(host, node)
+            if active then
+                local ok, reason = pcall(drawChildren)
+                if not ok then
+                    -- The validated child is one paint leaf, so its unmatched
+                    -- drawNode push is the only graphics frame to unwind.
+                    g.pop()
+                    Shader.drawFailed(host, node, reason)
+                    g.setShader(previousShader)
+                    g.setBlendMode(previousBlend, previousAlpha)
+                    node._shaderInspection = Shader.inspect(host, node)
+                    if (node.props.fallback or "plain") == "plain" then
+                        drawChildren()
+                    end
+                end
+            elseif (node.props.fallback or "plain") == "plain" then
+                g.setShader(previousShader)
+                g.setBlendMode(previousBlend, previousAlpha)
+                drawChildren()
+            end
+        end
+    else
+        drawChildren()
     end
     if clipped and not custom and g then endClip(clipState, contentShape) end
     if node.type == "Scroll" and node.props.bar and node._scroll
@@ -637,6 +788,22 @@ local function defaultInspector(host, entry, selected)
             end
             g.print(label, bounds.x + 3,
                 bounds.y + 2 + detailLine * lineHeight)
+            detailLine = detailLine + 1
+        elseif entry.tiledImage then
+            local tile = entry.tiledImage
+            local phase = tile.phase or { x = 0, y = 0 }
+            g.print(("tiles %s / %s / phase %.1f,%.1f / %dx%d copies"):format(
+                    tostring(tile.repeatAxis), tostring(tile.clock),
+                    phase.x or 0, phase.y or 0,
+                    #(tile.columns or {}), #(tile.rows or {})),
+                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
+            detailLine = detailLine + 1
+        elseif entry.shaderImage then
+            local shaderState = entry.shaderImage
+            g.print(("shader %s / %s / fallback %s / blend %s"):format(
+                    tostring(shaderState.token), tostring(shaderState.status),
+                    tostring(shaderState.fallback), tostring(shaderState.blend)),
+                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
             detailLine = detailLine + 1
         end
         if entry.motion then

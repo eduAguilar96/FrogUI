@@ -21,6 +21,10 @@ local Interaction = require("src.frogui.interaction")
 ---@alias FrogUIFlowJustify 'start'|'center'|'end'|'space-between'
 ---@alias FrogUITextAlign 'left'|'center'|'right'|'start'|'end'
 ---@alias FrogUIImageFit 'contain'|'cover'|'stretch'
+---@alias FrogUITileRepeat 'x'|'y'|'both'|'none'
+---@alias FrogUIImageFilter 'nearest'|'linear'
+---@alias FrogUIShaderFallback 'plain'|'hidden'
+---@alias FrogUIShaderBlend 'alpha'|'add'
 ---@alias FrogUIScrollAxis 'vertical'|'horizontal'
 ---@alias FrogUIModalDismiss 'back'|'outside'|'both'|'none'
 ---@alias FrogUIPopupVariant 'float'|'impact'|'notice'
@@ -272,6 +276,34 @@ local Interaction = require("src.frogui.interaction")
 ---@field fit? FrogUIImageFit Sizing policy; defaults to `contain`.
 ---@field tint? FrogUIColor Optional multiplicative tint.
 
+---@class FrogTiledImageProps:FrogUIElementProps
+---@field source FrogUIAssetSource Required authored image source.
+---@field tileWidth? number Logical width of one tile, at least one pixel; intrinsic
+--- aspect ratio supplies tileHeight when only this dimension is provided.
+---@field tileHeight? number Logical height of one tile, at least one pixel; intrinsic
+--- aspect ratio supplies tileWidth when only this dimension is provided.
+---@field phase? FrogUIOffset Static logical-pixel phase before repetition.
+---@field velocity? FrogUIOffset Logical pixels per second sampled from clock;
+--- requires an explicit clock so the owning application chooses time semantics.
+---@field clock? FrogUIClock Explicit clock used only by velocity.
+---@field repeatAxis? FrogUITileRepeat Defaults to `both`.
+---@field filter? FrogUIImageFilter Defaults to `linear`; `nearest` also snaps
+--- the shared tile phase to whole logical pixels to prevent moving seams.
+---@field tint? FrogUIColor Optional multiplicative tint.
+
+---@alias FrogUIShaderUniform number|boolean|number[]|FrogUIClock
+---A scalar, boolean, two-to-four-number vector, or explicitly owned clock.
+
+---@class FrogShaderImageProps:FrogUIElementProps
+---@field shader string Required semantic token declared by `theme.shaders`.
+---@field uniforms? table<string,FrogUIShaderUniform> Explicit uniform values;
+--- clocks are sampled at paint time without forcing a component rerender.
+---@field fallback? FrogUIShaderFallback `plain` draws the child unshaded when
+--- compilation, uniform setup, or drawing fails; `hidden` omits it. Defaults plain.
+---@field blend? FrogUIShaderBlend Defaults to `alpha`; `add` is intended for light.
+---@field [integer] FrogUIElementDescription Exactly one Image, TiledImage, or
+--- empty Box paint leaf after component resolution.
+
 ---@class FrogIconOutline
 ---@field width? number Non-negative outline thickness.
 ---@field color? FrogUIColor
@@ -471,6 +503,20 @@ Frog.Text = Element.primitive("Text")
 --- `fit` accepts `contain`, `cover`, or `stretch`.
 ---@type fun(input:FrogImageProps):FrogUIElementDescription
 Frog.Image = Element.primitive("Image")
+
+--- Repeats one authored image across its arranged rectangle.
+---
+--- `repeatAxis` is `x`, `y`, `both`, or `none`. Give moving tiles an explicit
+--- Frog.clock plus `velocity`; the painter samples it without rerendering.
+---@type fun(input:FrogTiledImageProps):FrogUIElementDescription
+Frog.TiledImage = Element.primitive("TiledImage")
+
+--- Applies one theme-owned semantic shader to exactly one paint leaf.
+---
+--- Uniforms are explicit scalar/vector values or Frog.clock instances. The
+--- safe `plain` fallback preserves ordinary art when the GPU path is unavailable.
+---@type fun(input:FrogShaderImageProps):FrogUIElementDescription
+Frog.ShaderImage = Element.primitive("ShaderImage")
 
 --- Draws and recolors an alpha-silhouette asset.
 ---

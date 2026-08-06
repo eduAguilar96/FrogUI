@@ -81,6 +81,8 @@ the Host, so unknown props fail loudly.
 | `Frog.Overlay` | Give every child the same region; paint in listed order | many |
 | `Frog.Text` | Draw text using a theme font/color role | none |
 | `Frog.Image` | Draw an authored image while preserving its RGB | none |
+| `Frog.TiledImage` | Repeat authored art with explicit phase/clock motion | none |
+| `Frog.ShaderImage` | Apply a semantic shader and safe fallback to one paint leaf | exactly one |
 | `Frog.Icon` | Draw and recolor an alpha silhouette | none |
 | `Frog.Button` | Keyboard-focusable tap/hold box with visible theme states | zero or one |
 | `Frog.Motion` | Animate one child's paint/input presentation without changing layout | zero or one |
@@ -306,6 +308,77 @@ never put them behind a branch or loop. Hold F6 on the owner's visible root to
 see its stable resource id, frame id, and mounted state. The generic gallery
 story demonstrates pause, resize retention, snapshot publication, and explicit
 resource reset without importing game code.
+
+## Tiled images and shader wrappers
+
+`Frog.TiledImage` is a normal image leaf that repeats inside its arranged
+rectangle. It owns tile coverage, one shared seam-free phase, clipping, filter
+selection, and optional clock-sampled velocity. The application still owns the
+clock and decides when that clock advances:
+
+```lua
+Frog.TiledImage {
+    source = "forest-ground",
+    width = "100%",
+    height = 320,
+    tileWidth = 448,
+    repeatAxis = "x",
+    phase = { x = props.parallax },
+    velocity = { x = -4 },
+    clock = props.rawClock,
+    filter = "nearest",
+}
+```
+
+`repeatAxis` is `x`, `y`, `both`, or `none`. An explicit tile dimension is at
+least one logical pixel; supplying only one preserves the source aspect ratio.
+Every leaf has a framework-owned finite copy budget, so invalid tiling fails
+loudly instead of hanging a frame. `phase` is a static logical-pixel offset;
+`velocity` requires a `Frog.clock` and is sampled during paint, so smooth drift
+does not rerender the component tree. Nearest filtering snaps the shared phase
+once to whole logical pixels before placing adjacent tiles. It never rounds
+each copy independently, which would create moving seams.
+
+`Frog.ShaderImage` is a one-child wrapper, not another background renderer.
+The child resolves to an `Image`, `TiledImage`, or empty `Box`, so the visible
+tree remains literal:
+
+```lua
+Frog.ShaderImage {
+    shader = "background-sway",
+    uniforms = {
+        clock = props.rawClock,
+        strength = props.windStrength,
+        direction = { props.windDirection, 0 },
+    },
+    fallback = "plain",
+    Frog.TiledImage {
+        source = "forest-top",
+        width = "100%",
+        height = 320,
+        tileWidth = 448,
+        repeatAxis = "x",
+        filter = "nearest",
+    },
+}
+```
+
+The `shader` value is a semantic token in `theme.shaders`; component files do
+not embed GPU source. Uniforms are finite numbers, booleans, numeric vectors of
+two through four values, or explicit clocks. A clock is sampled at paint time.
+Use `blend = "add"` only for additive light; ordinary art defaults to alpha.
+
+`fallback = "plain"` preserves the child unshaded after compilation, uniform,
+or draw failure. This is the normal policy for forest wind and color effects.
+`fallback = "hidden"` omits shader-only decoration such as optional light.
+FrogUI logs the first failure for a semantic shader token, caches the failure,
+and keeps the Host usable. F6 shows tile coverage/phase/clock and shader token,
+status, uniforms, blend, and fallback.
+
+Reduced motion does not secretly stop a TiledImage or shader clock. The owner
+defines that policy by advancing or pausing its explicit clock in `useFrame`.
+This makes raw ambience, feedback time, and execution time visibly different
+choices instead of framework guesses.
 
 ## Transient effects
 
@@ -982,7 +1055,8 @@ or a static component under `src/presentation/spell_card/`, `spellbook/`, or
 A bad reload keeps the last good tree. Stateful actor modules and framework
 core require a restart.
 
-The generic committed-ref story appears between SpellCard motion and the
-foundation story. Reverse its three keyed boxes with R, switch Row/Column with
-F7, and use F6 to verify that each authored key keeps its ref id while its
-arranged rectangle follows the new position.
+The generic committed-ref, process, transient-text, travel/frame, and world-art
+stories appear before the foundation story. The world-art story composes the
+five daylight-forest assets from ordinary `TiledImage` leaves, wraps only its
+canopy in `ShaderImage`, pauses its explicit clock with 1, toggles the wrapper
+with 2, and reflows with F7. F6 shows both primitive contracts in the exact tree.
