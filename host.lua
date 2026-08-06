@@ -23,7 +23,7 @@ local PRIMITIVES = {
     Box = true, Row = true, Column = true, Overlay = true,
     EffectLayer = true, PopupText = true, Projectile = true, Flipbook = true,
     Text = true, Image = true, TiledImage = true, ShaderImage = true,
-    Icon = true, Button = true, Motion = true,
+    Icon = true, Canvas = true, Button = true, Motion = true,
     Pressable = true, Scroll = true, Modal = true, Chrome = true,
     DragSource = true, DropTarget = true,
 }
@@ -93,6 +93,7 @@ local TYPE_PROPS = {
     ShaderImage = {
         shader = true, uniforms = true, fallback = true, blend = true,
     },
+    Canvas = { draw = true },
     Text = {
         text = true, role = true, fontScale = true,
         color = true, wrap = true, maxLines = true,
@@ -274,7 +275,7 @@ local function validatePrimitive(name, children)
     elseif name == "Text" or name == "PopupText"
             or name == "Projectile" or name == "Flipbook"
             or name == "Image" or name == "TiledImage"
-            or name == "Icon" then
+            or name == "Icon" or name == "Canvas" then
         assert(#children == 0, "Frog." .. name .. " does not accept children")
     end
 end
@@ -705,6 +706,11 @@ local function validatePrimitiveProps(self, name, props)
                 end
             end
         end
+    elseif name == "Canvas" then
+        assert(type(props.draw) == "function",
+            "Canvas draw must be a function")
+        assert(props.width ~= nil and props.height ~= nil,
+            "Canvas requires explicit width and height")
     elseif name == "Text" or name == "PopupText" then
         assert(type(props.text or "") == "string", "Text text must be a string")
         assert(props.role == nil or type(props.role) == "string", "Text role must be a string")
@@ -997,6 +1003,19 @@ local function nodeEntry(node, depth, visibleBounds)
             fallback = node.props.fallback or "plain",
             blend = node.props.blend or "alpha",
         })
+    elseif node.type == "Canvas" then
+        entry.canvas = deepCopy(node._canvasInspection or {
+            status = "pending",
+            commandCount = 0,
+            transformDepth = 0,
+            clipped = true,
+            localBounds = {
+                x = 0, y = 0, width = node.width, height = node.height,
+            },
+            arrangedBounds = {
+                x = node.x, y = node.y, width = node.width, height = node.height,
+            },
+        })
     end
     if node._scroll then
         entry.scroll = {
@@ -1074,7 +1093,7 @@ local function concreteInspectionHit(node)
     if node.type == "Text" or node.type == "PopupText"
             or node.type == "Projectile" or node.type == "Flipbook"
             or node.type == "Image" or node.type == "TiledImage"
-            or node.type == "Icon"
+            or node.type == "Icon" or node.type == "Canvas"
             or node.type == "Button" or node.type == "Pressable"
             or node.type == "Scroll" or node.type == "DragSource"
             or node.type == "DropTarget" then
@@ -1276,6 +1295,8 @@ local function assertPresentationAllowed(self, operation)
     assert(not self._authorityCallbackActive,
         (self._authorityLabel or "authority callback") .. " may not " .. operation
             .. " presentation; return the domain result")
+    assert(not self._drawing,
+        "Host drawing phase may not " .. operation .. " presentation")
 end
 
 -- Frame subscribers publish typed messages; they never re-enter structural
@@ -2002,9 +2023,9 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     if token.name == "EffectLayer" then
         for _, child in ipairs(node.children) do
             assert(child.type == "PopupText" or child.type == "Projectile"
-                    or child.type == "Flipbook",
+                    or child.type == "Flipbook" or child.type == "Canvas",
                 "Frog.EffectLayer accepts only PopupText, Projectile,"
-                    .. " or Flipbook children")
+                    .. " Flipbook, or bounded Canvas children")
         end
     end
     if token.name == "ShaderImage" then
@@ -2055,6 +2076,20 @@ local function validateEffectOwnership(node, insideLayer)
     for _, child in ipairs(node.children or {}) do
         validateEffectOwnership(child, insideLayer)
     end
+end
+
+-- Marks the few branches that need Canvas preflight so ordinary trees do not
+-- allocate paint styles merely to discover that no draw callback exists.
+local function annotateCanvasBranches(node)
+    local contains = node.type == "Canvas"
+    for _, child in ipairs(node.children or {}) do
+        contains = annotateCanvasBranches(child) or contains
+    end
+    if node._dragPreview then
+        contains = annotateCanvasBranches(node._dragPreview) or contains
+    end
+    node._containsCanvas = contains
+    return contains
 end
 
 local function assignEventOrder(node, nextOrder)
@@ -2116,6 +2151,7 @@ function host:_build(root)
         end
         candidate = Layout.run(candidate,
             self._viewport.width, self._viewport.height, self)
+        annotateCanvasBranches(candidate)
         for handle, node in pairs(context.refAttachments) do
             context.refRectangles[handle] = {
                 x = node.x,
@@ -2265,6 +2301,8 @@ end
 
 function host:_enqueue(entry)
     assert(self._mounted and activeHost == self, "FrogUI has no mounted Host")
+    assert(not self._drawing,
+        "Host drawing phase may not enqueue FrogUI messages")
     assert(renderingHost == nil,
         "FrogUI messages may not be sent or emitted during render")
     assert(not self._authorityCallbackActive,
@@ -2791,6 +2829,8 @@ end
 function host.send(address, record)
     assert(renderingHost == nil, "FrogUI messages may not be sent during render")
     assert(activeHost, "Frog.send requires a mounted Host")
+    assert(not activeHost._drawing,
+        "Host drawing phase may not send FrogUI messages")
     assert(Message.isAddress(address), "Frog.send expects an Actor:address target")
     return activeHost:_enqueueAction(address, record, "Frog.send")
 end
@@ -2798,6 +2838,8 @@ end
 function host.emit(record)
     assert(renderingHost == nil, "FrogUI messages may not be emitted during render")
     assert(activeHost, "Frog.emit requires a mounted Host")
+    assert(not activeHost._drawing,
+        "Host drawing phase may not emit FrogUI messages")
     return activeHost:_enqueueEvent(record, "Frog.emit")
 end
 
@@ -2886,7 +2928,13 @@ end
 
 function host:draw(customPainter)
     assert(self._mounted, "Host is not mounted")
-    Painter.draw(self, customPainter or self._customPainter)
+    assert(not self._drawing, "Host:draw cannot re-enter its drawing phase")
+    assertInputBoundary(self)
+    self._drawing = true
+    local ok, reason = pcall(Painter.draw, self,
+        customPainter or self._customPainter)
+    self._drawing = nil
+    if not ok then error(reason, 0) end
 end
 
 function host:resize(width, height)

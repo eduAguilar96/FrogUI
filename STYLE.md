@@ -241,9 +241,10 @@ projections, companion style files, or geometry files.
 - Keep `EffectLayer` after the stable surface it decorates. It is a feedback
   plane, never a replacement owner for cards, figures, status, controls, or
   scene layout.
-- EffectLayer children are direct `PopupText`, `Projectile`, or `Flipbook`
-  leaves. Every generated child has a stable authored/event key; later children
-  paint above earlier ones and none participate in input.
+- EffectLayer children are direct `PopupText`, `Projectile`, `Flipbook`, or
+  bounded `Canvas` leaves. Every generated finite effect has a stable
+  authored/event key; later children paint above earlier ones and none
+  participate in input.
 - Give every `PopupText` a stable authored/event key and one layer-local center
   point. The popup owns its finite recipe; the actor or playback owner owns the
   keyed collection and removes an entry through `onComplete`.
@@ -303,7 +304,34 @@ projections, companion style files, or geometry files.
   order is its paint order. Anchors, depth, parallax, and event reactions belong
   to the application composition; tiling and shader mechanics belong to FrogUI.
 
-## 11. Motion and feedback stay declarative
+## 11. Canvas stays bounded and rare
+
+- Use `Frog.Canvas` only when changing vector geometry cannot be expressed as
+  ordinary primitives or the finite effect vocabulary. The accepted first use
+  is the physical DiceShow; a Canvas never replaces cards, figures, status,
+  controls, or background composition.
+- Give every Canvas explicit width and height. Its callback draws in local
+  coordinates and cannot participate in measurement, own children, or accept
+  input. Put it in the same readable tree as the surfaces around it.
+- Use only the record-only painter passed to the callback. Do not import
+  `love.graphics`, hide another painter module, or retain the ephemeral painter
+  after the callback returns.
+- Keep physics, clocks, sounds, reduced-motion decisions, and semantic state in
+  a plainly named owner outside Canvas. The draw callback reads that state and
+  returns nothing; it never sends messages or changes the Host.
+- Prefer semantic color tokens. Direct RGB[A] values are appropriate only for
+  genuinely local treatment such as a translucent shadow.
+- Keep `withTransform` scopes shallow and visible. Extract a lower camelCase
+  painter helper when one complete visible shape makes the callback easier to
+  scan. Do not create a companion painter/geometry file to hide a whole screen.
+- Treat Canvas clipping and geometry safety as separate contracts. Author raw
+  shape bounds, rounded corners, line widths, translations, and nested scale
+  within the leaf-relative/hard ceilings enforced by `canvas.lua`; never copy
+  those numeric ceilings into a component, story, test, or design document.
+- Curve tessellation is framework-owned and capped. Never add a `segments`
+  prop or hand-roll many tiny shapes to approximate an unbounded curve.
+
+## 12. Motion and feedback stay declarative
 
 - Components attach named `juice` recipes or wrap content in `Frog.Motion`;
   they do not add per-frame update/draw functions for micro-interactions.
@@ -334,7 +362,7 @@ projections, companion style files, or geometry files.
 - A new cue updates the provider catalog, its component owner, the code-reading
   guide, and a focused semantic-cue regression in the same change.
 
-## 12. Component and folder ownership
+## 13. Component and folder ownership
 
 - One ordinary visible concept has one directly named file.
 - A component with subcomponents owns one folder, such as
@@ -415,7 +443,7 @@ projections, companion style files, or geometry files.
   owner elsewhere or project its state through screen callbacks or generic
   render slots.
 
-## 13. Updating this guide
+## 14. Updating this guide
 
 When review creates or changes a convention:
 

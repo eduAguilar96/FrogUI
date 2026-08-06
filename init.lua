@@ -88,6 +88,61 @@ local Interaction = require("src.frogui.interaction")
 ---@field props table
 ---@field children FrogUIElementDescription[]
 
+---@class FrogUICanvasRect
+---@field x 0 Canvas-local left edge; drawing always begins at zero.
+---@field y 0 Canvas-local top edge; drawing always begins at zero.
+---@field width number Arranged width in logical pixels.
+---@field height number Arranged height in logical pixels.
+
+---@class FrogUICanvasRectShape
+---@field x number Local left edge.
+---@field y number Local top edge.
+---@field width number Non-negative logical width.
+---@field height number Non-negative logical height.
+---@field radius? number Non-negative corner radius no larger than half the smaller rectangle dimension.
+---@field color FrogUIColor Explicit fill color or semantic theme token.
+
+---@class FrogUICanvasStrokeRectShape:FrogUICanvasRectShape
+---@field lineWidth? number Positive outline width; defaults to one.
+
+---@class FrogUICanvasCircleShape
+---@field x number Local center x.
+---@field y number Local center y.
+---@field radius number Non-negative radius.
+---@field color FrogUIColor Explicit fill color or semantic theme token.
+
+---@class FrogUICanvasStrokeCircleShape:FrogUICanvasCircleShape
+---@field lineWidth? number Positive outline width; defaults to one.
+
+---@class FrogUICanvasEllipseShape
+---@field x number Local center x.
+---@field y number Local center y.
+---@field radiusX number Non-negative horizontal radius.
+---@field radiusY number Non-negative vertical radius.
+---@field color FrogUIColor Explicit fill color or semantic theme token.
+
+---@class FrogUICanvasTransform
+---@field x? number Local translation x; defaults to zero.
+---@field y? number Local translation y; defaults to zero.
+---@field rotation? number Clockwise rotation in radians; defaults to zero.
+---@field scale? number Non-negative uniform scale; defaults to one.
+
+---@class FrogUICanvasPainter
+---@field fillRect fun(self:FrogUICanvasPainter, shape:FrogUICanvasRectShape)
+---@field strokeRect fun(self:FrogUICanvasPainter, shape:FrogUICanvasStrokeRectShape)
+---@field fillCircle fun(self:FrogUICanvasPainter, shape:FrogUICanvasCircleShape)
+---@field strokeCircle fun(self:FrogUICanvasPainter, shape:FrogUICanvasStrokeCircleShape)
+---@field fillEllipse fun(self:FrogUICanvasPainter, shape:FrogUICanvasEllipseShape)
+---@field withTransform fun(self:FrogUICanvasPainter, transform:FrogUICanvasTransform, draw:fun(painter:FrogUICanvasPainter))
+---Ephemeral record-only painter. It is invalid after the draw callback ends.
+
+---@class FrogCanvasProps:FrogUIElementProps
+---@field width FrogUISize Required explicit bounded width.
+---@field height FrogUISize Required explicit bounded height.
+---@field draw fun(painter:FrogUICanvasPainter, rect:FrogUICanvasRect) Pure
+--- paint callback. It may read presentation state but cannot send, emit,
+--- rerender, resize, route input, or otherwise mutate the Host.
+
 ---@class FrogUIBaseProps
 ---@field key? string|number Stable identity among reordered siblings.
 ---@field ref? FrogUIRef Exact primitive rectangle published after arrange commits.
@@ -523,6 +578,15 @@ Frog.ShaderImage = Element.primitive("ShaderImage")
 --- Use this for icons; use Image when authored RGB colors must survive.
 ---@type fun(input:FrogIconProps):FrogUIElementDescription
 Frog.Icon = Element.primitive("Icon")
+
+--- Records a small clipped shape program inside one explicit rectangle.
+---
+--- Coordinates are local to the Canvas. Use the supplied painter's filled or
+--- outlined rectangles/circles, filled ellipse, and scoped `withTransform`;
+--- application code never receives LÖVE graphics. Canvas is input-transparent,
+--- accepts no children, and is reserved for bounded imperative visuals.
+---@type fun(input:FrogCanvasProps):FrogUIElementDescription
+Frog.Canvas = Element.primitive("Canvas")
 
 --- Owns focus, shortcuts, tap/hold, disabled/selected state, and interaction paint.
 ---

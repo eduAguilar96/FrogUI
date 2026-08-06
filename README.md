@@ -84,6 +84,7 @@ the Host, so unknown props fail loudly.
 | `Frog.TiledImage` | Repeat authored art with explicit phase/clock motion | none |
 | `Frog.ShaderImage` | Apply a semantic shader and safe fallback to one paint leaf | exactly one |
 | `Frog.Icon` | Draw and recolor an alpha silhouette | none |
+| `Frog.Canvas` | Record bounded local vector shapes for rare custom drawing | none |
 | `Frog.Button` | Keyboard-focusable tap/hold box with visible theme states | zero or one |
 | `Frog.Motion` | Animate one child's paint/input presentation without changing layout | zero or one |
 | `Frog.Pressable` | Add pointer tap, hold, and mouse-hover to one child | exactly one |
@@ -380,6 +381,75 @@ defines that policy by advancing or pausing its explicit clock in `useFrame`.
 This makes raw ambience, feedback time, and execution time visibly different
 choices instead of framework guesses.
 
+## Bounded Canvas drawing
+
+`Frog.Canvas` is the narrow escape hatch for a visual whose already-owned
+state must be painted as changing vector shapes. It is not a component model,
+layout system, input surface, physics owner, or replacement for normal FrogUI
+trees. Cards, characters, status, controls, and backgrounds remain ordinary
+components and primitives.
+
+A Canvas has explicit width and height, no children, and local coordinates
+from `(0, 0)` through its arranged size:
+
+```lua
+Frog.Canvas {
+    width = "100%",
+    height = 240,
+    draw = function(painter, rect)
+        painter:fillEllipse {
+            x = rect.width / 2,
+            y = rect.height / 2 + 20,
+            radiusX = 34,
+            radiusY = 9,
+            color = { 0, 0, 0, 0.3 },
+        }
+        painter:withTransform({
+            x = rect.width / 2,
+            y = rect.height / 2,
+            rotation = props.angle,
+            scale = props.scale,
+        }, function(scoped)
+            scoped:fillRect {
+                x = -18, y = -18, width = 36, height = 36,
+                radius = 7, color = "dieFace",
+            }
+            scoped:fillCircle {
+                x = 0, y = 0, radius = 4, color = "diePip",
+            }
+        end)
+    end,
+}
+```
+
+The callback receives only an ephemeral record-only painter and a detached
+local rectangle. Its vocabulary is `fillRect`, `strokeRect`, `fillCircle`,
+`strokeCircle`, `fillEllipse`, and scoped `withTransform` with translation,
+rotation, and uniform scale. Every shape declares a semantic theme token or
+exact RGB[A] color; stroke shapes may declare `lineWidth`. Commands outside the
+rectangle are clipped rather than changing layout.
+
+The callback is paint-only and returns nothing. It may read presentation state
+or an explicit application-owned clock, but it cannot send/emit, render,
+resize, update, route input, unmount, or recursively draw the Host. Canvas owns
+no clock and does not infer reduced-motion behavior: the state owner supplies a
+settled value when reduced motion requires one. Repainting does not rerender a
+component or advance time.
+
+FrogUI validates, copies, and budgets commands before touching the GPU. A
+malformed callback or replay restores color, line, transform, and stencil state
+before `Host:draw` fails loudly. Raw geometry, stroke widths, rounded corners,
+translations, and nested scale are bounded by one code-owned leaf-relative
+envelope plus a hard absolute backstop; clipping never authorizes huge finite
+GPU inputs. Rounded-rectangle radius is capped at half the smaller dimension.
+Curves use one internal capped tessellation count; Canvas exposes no segment
+control to application authors.
+F6 shows local bounds, clipping, command count, transform depth, and ready
+status. Failure metadata remains available to focused harnesses and recovery
+checks, but a persistent preflight failure aborts before the F6 overlay can
+paint. A custom Host painter receives detached commands and sanitized node
+metadata, never the application callback or a framework child/session graph.
+
 ## Transient effects
 
 `Frog.EffectLayer` is a dedicated paint plane for finite visual effects. Put it
@@ -431,8 +501,9 @@ local Effects = Frog.actor("Effects", {
 
 `at` is the popup box's center measured from the EffectLayer content's top-left
 origin. A layer may use padding to move that origin. PopupText must be a direct
-EffectLayer child, and the layer accepts only effect children; this is what
-makes accidental interactive descendants impossible. Stable keys preserve
+EffectLayer child. The layer accepts only effect leaves plus bounded Canvas;
+all are input-transparent, which makes accidental interactive descendants
+impossible. Stable keys preserve
 source ordering and guarantee one finite lifetime per entry.
 
 The public variants are `float`, `impact`, and `notice`. Their defaults live in
@@ -583,6 +654,7 @@ The current public vocabulary is:
 | `Frog.PopupText` | Run one keyed finite text effect |
 | `Frog.Projectile` | Travel one keyed effect between refs or points |
 | `Frog.Flipbook` | Run one keyed frame sequence with a contact beat |
+| `Frog.Canvas` | Record validated local shapes inside explicit bounds |
 | `Frog.host` | Create the one application tree owner |
 | `Frog.clock` | Create a deterministic explicitly advanced clock |
 | `Frog.tween` / `spring` / `shake` | Declare reusable visual recipes |
@@ -1055,8 +1127,10 @@ or a static component under `src/presentation/spell_card/`, `spellbook/`, or
 A bad reload keeps the last good tree. Stateful actor modules and framework
 core require a restart.
 
-The generic committed-ref, process, transient-text, travel/frame, and world-art
-stories appear before the foundation story. The world-art story composes the
+The generic committed-ref, process, transient-text, travel/frame, world-art,
+and bounded-Canvas stories appear before the foundation story. The world-art story composes the
 five daylight-forest assets from ordinary `TiledImage` leaves, wraps only its
 canopy in `ShaderImage`, pauses its explicit clock with 1, toggles the wrapper
-with 2, and reflows with F7. F6 shows both primitive contracts in the exact tree.
+with 2, and reflows with F7. The Canvas story paints a rotating abstract marker
+over a real Button, pauses its caller-owned clock with 1, and reflows with F7.
+F6 shows each primitive contract in the exact tree.

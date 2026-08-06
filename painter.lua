@@ -3,6 +3,7 @@
 
 local Effect = require("src.frogui.effects.runtime")
 local Shader = require("src.frogui.shader")
+local Canvas = require("src.frogui.canvas")
 
 local painter = {}
 
@@ -533,8 +534,162 @@ local function defaultTiledImage(node, asset, geometry, style, clipState)
     if not ok then error(reason, 0) end
 end
 
+-- Replays validated local shape commands beneath their scoped transforms.
+local function replayCanvasCommands(g, commands)
+    for _, command in ipairs(commands) do
+        if command.kind == "transform" then
+            g.push("all")
+            g.translate(command.x, command.y)
+            g.rotate(command.rotation)
+            g.scale(command.scale)
+            local ok, reason = pcall(replayCanvasCommands, g,
+                command.commands)
+            g.pop()
+            if not ok then error(reason, 0) end
+        else
+            setColor(command.color)
+            if command.kind == "fillRect" then
+                g.rectangle("fill", command.x, command.y,
+                    command.width, command.height,
+                    command.radius, command.radius, command._segments)
+            elseif command.kind == "strokeRect" then
+                g.setLineWidth(command.lineWidth)
+                g.rectangle("line", command.x, command.y,
+                    command.width, command.height,
+                    command.radius, command.radius, command._segments)
+            elseif command.kind == "fillCircle" then
+                g.circle("fill", command.x, command.y,
+                    command.radius, command._segments)
+            elseif command.kind == "strokeCircle" then
+                g.setLineWidth(command.lineWidth)
+                g.circle("line", command.x, command.y,
+                    command.radius, command._segments)
+            elseif command.kind == "fillEllipse" then
+                g.ellipse("fill", command.x, command.y,
+                    command.radiusX, command.radiusY, command._segments)
+            else
+                error("unknown validated Canvas command "
+                    .. tostring(command.kind), 0)
+            end
+        end
+    end
+end
+
+-- Clips and replays one recorded leaf while restoring state on GPU failure.
+local function defaultCanvas(node, commands, clipState)
+    local g = graphics()
+    if not g then return true end
+    local shape = nodeShape(node, false)
+    beginClip(clipState, shape)
+    g.push("all")
+    g.translate(node.x, node.y)
+    local ok, reason = pcall(replayCanvasCommands, g, commands)
+    g.pop()
+    endClip(clipState, shape)
+    return ok, reason
+end
+
+-- Records every visible Canvas before a frame clears or touches GPU state.
+local function preflightNode(host, node, inheritedOpacity, inheritedTint,
+        portalRoot)
+    if not node._containsCanvas then return nil end
+    if node._portal and node ~= portalRoot then return nil end
+    local session = host._interactionSession
+    if session and session.claimed == "drag"
+            and node.identity == session.sourceIdentity then return nil end
+    local style = styleFor(host, node, inheritedOpacity or 1, inheritedTint)
+    if node.type == "Canvas" then
+        local commands, inspection = Canvas.record(node.props.draw,
+            node.width, node.height, function(color)
+                return faded(tinted(host:_color(color, "text"),
+                    style.tint), style.opacity)
+            end)
+        inspection.arrangedBounds = {
+            x = node.x, y = node.y, width = node.width, height = node.height,
+        }
+        node._canvasCommands = commands
+        node._canvasInspection = inspection
+        if inspection.status == "failed" then return inspection.error end
+    end
+    for _, child in ipairs(node.children) do
+        local failure = preflightNode(host, child, style.opacity, style.tint,
+            portalRoot)
+        if failure then return failure end
+    end
+end
+
+-- Mirrors visible root-plane order so callbacks observe authored paint order.
+local function preflightCanvases(host)
+    local failure = preflightNode(host, host._tree)
+    if failure then return failure end
+    local chrome = host._chrome
+    local chromeAboveModal = chrome and host._modal
+        and host._modal.props.allowChrome == true
+    if chrome and not chromeAboveModal then
+        failure = preflightNode(host, chrome, nil, nil, chrome)
+        if failure then return failure end
+    end
+    for _, modal in ipairs(host._modals or {}) do
+        failure = preflightNode(host, modal, nil, nil, modal)
+        if failure then return failure end
+    end
+    if chromeAboveModal then
+        failure = preflightNode(host, chrome, nil, nil, chrome)
+        if failure then return failure end
+    end
+    local session = host._interactionSession
+    local preview = session and session.claimed == "drag"
+        and session.source and session.source._dragPreview or nil
+    if preview then return preflightNode(host, preview, nil, nil, preview) end
+end
+
 local function customCall(custom, method, ...)
     if custom and custom[method] then custom[method](custom, ...) end
+end
+
+-- Gives custom painters useful arranged data without exposing the committed
+-- tree, callbacks, actors, or a path back to a Canvas draw closure.
+local function safeCustomValue(value, seen)
+    local kind = type(value)
+    if kind == "string" or kind == "number" or kind == "boolean" then
+        return value
+    end
+    if kind ~= "table" or getmetatable(value) ~= nil then return nil end
+    seen = seen or {}
+    if seen[value] then return nil end
+    seen[value] = true
+    local copy = {}
+    for key, child in pairs(value) do
+        local safeKey = safeCustomValue(key, seen)
+        local safeChild = safeCustomValue(child, seen)
+        if safeKey ~= nil and safeChild ~= nil then copy[safeKey] = safeChild end
+    end
+    seen[value] = nil
+    return copy
+end
+
+local function customNode(node)
+    return {
+        type = node.type,
+        key = node.key,
+        identity = node.identity,
+        logicalIdentity = node.logicalIdentity,
+        owner = node.owner,
+        source = safeCustomValue(node.source),
+        x = node.x,
+        y = node.y,
+        width = node.width,
+        height = node.height,
+        contentX = node.contentX,
+        contentY = node.contentY,
+        contentWidth = node.contentWidth,
+        contentHeight = node.contentHeight,
+        measuredWidth = node.measuredWidth,
+        measuredHeight = node.measuredHeight,
+        _resolvedFontSize = node._resolvedFontSize,
+        presentation = safeCustomValue(node.presentation),
+        props = safeCustomValue(node.props) or {},
+    }
 end
 
 local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
@@ -555,13 +710,34 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
         g.translate(-centerX, -centerY)
     end
     local style = styleFor(host, node, inheritedOpacity or 1, inheritedTint)
+    local customDescriptor = custom and customNode(node) or nil
     if custom then
-        customCall(custom, "box", node, style)
+        customCall(custom, "box", customDescriptor, style)
     else
         defaultBox(host, node, style)
     end
 
-    if node.type == "Projectile" then
+    if node.type == "Canvas" then
+        local commands = assert(node._canvasCommands,
+            "Canvas commands were not preflighted")
+        local inspection = assert(node._canvasInspection,
+            "Canvas inspection was not preflighted")
+        if custom then
+            customCall(custom, "canvas", customDescriptor,
+                Canvas.detached(commands), Canvas.detached(inspection))
+        elseif inspection.status == "ready" then
+            local ok, reason = defaultCanvas(node, commands, clipState)
+            if not ok then
+                inspection.status = "failed"
+                inspection.commandCount = 0
+                inspection.transformDepth = 0
+                inspection.error = tostring(reason)
+                if not host._paintFailure then
+                    host._paintFailure = inspection.error
+                end
+            end
+        end
+    elseif node.type == "Projectile" then
         local effectStyle = {
             color = faded(tinted(host:_color(node.props.color, "text"),
                 style.tint), style.opacity),
@@ -570,7 +746,8 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
                     or { 1, 1, 1, 1 }), style.tint), style.opacity),
         }
         if custom then
-            customCall(custom, "projectile", node, node._effect, effectStyle)
+            customCall(custom, "projectile", customDescriptor,
+                node._effect, effectStyle)
         else
             defaultProjectile(host, node, node._effect, effectStyle)
         end
@@ -580,7 +757,8 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
                 { 1, 1, 1, 1 }), style.tint), style.opacity),
         }
         if custom then
-            customCall(custom, "flipbook", node, node._effect, effectStyle)
+            customCall(custom, "flipbook", customDescriptor,
+                node._effect, effectStyle)
         else
             defaultFlipbook(host, node, node._effect, effectStyle)
         end
@@ -600,7 +778,8 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             shineSplit = node.props.shineSplit or 0.5,
         }
         if custom then
-            customCall(custom, "text", node, node.props.text or "", textStyle)
+            customCall(custom, "text", customDescriptor,
+                node.props.text or "", textStyle)
         else
             local shape = nodeShape(node, false)
             if node.props.maxLines and g then beginClip(clipState, shape) end
@@ -616,7 +795,8 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
         local geometry = tiledGeometry(node, asset)
         node._tileGeometry = geometry
         if custom then
-            customCall(custom, "tiledImage", node, asset, geometry, imageStyle)
+            customCall(custom, "tiledImage", customDescriptor,
+                asset, geometry, imageStyle)
         else
             defaultTiledImage(node, asset, geometry, imageStyle, clipState)
         end
@@ -628,7 +808,8 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             sourceRect = node.props.sourceRect,
         }
         local asset = host:_asset(node.props.source)
-        if custom then customCall(custom, "image", node, asset, imageStyle)
+        if custom then
+            customCall(custom, "image", customDescriptor, asset, imageStyle)
         else defaultImage(host, node, asset, imageStyle, clipState) end
     elseif node.type == "Icon" then
         local outline = node.props.outline
@@ -646,7 +827,8 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             } or nil,
         }
         local asset = host:_asset(node.props.source)
-        if custom then customCall(custom, "icon", node, asset, iconStyle)
+        if custom then
+            customCall(custom, "icon", customDescriptor, asset, iconStyle)
         else defaultIcon(host, node, asset, iconStyle, clipState) end
     end
 
@@ -663,7 +845,8 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
     if node.type == "ShaderImage" then
         if custom then
             node._shaderInspection = Shader.inspect(host, node)
-            customCall(custom, "shaderImage", node, node._shaderInspection)
+            customCall(custom, "shaderImage", customDescriptor,
+                node._shaderInspection)
             drawChildren()
         else
             local previousShader = g.getShader and g.getShader() or nil
@@ -788,6 +971,18 @@ local function defaultInspector(host, entry, selected)
             end
             g.print(label, bounds.x + 3,
                 bounds.y + 2 + detailLine * lineHeight)
+            detailLine = detailLine + 1
+        elseif entry.canvas then
+            local state = entry.canvas
+            local localBounds = state.localBounds or {
+                width = bounds.width, height = bounds.height,
+            }
+            g.print(("canvas %s / %d commands / depth %d / "
+                    .. "local %.1fx%.1f / clipped"):format(
+                    tostring(state.status), state.commandCount or 0,
+                    state.transformDepth or 0,
+                    localBounds.width or 0, localBounds.height or 0),
+                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
             detailLine = detailLine + 1
         elseif entry.tiledImage then
             local tile = entry.tiledImage
@@ -928,6 +1123,11 @@ end
 
 function painter.draw(host, custom)
     if not host._tree then return end
+    host._paintFailure = nil
+    local preflightFailure = preflightCanvases(host)
+    if preflightFailure then
+        error("FrogUI Canvas draw failed: " .. preflightFailure, 0)
+    end
     local g = graphics()
     local snapshot = host._viewport:snapshot()
     customCall(custom, "begin", snapshot)
@@ -956,7 +1156,15 @@ function painter.draw(host, custom)
     local preview = session and session.claimed == "drag"
         and session.source and session.source._dragPreview or nil
     if preview then
-        customCall(custom, "dragPreview", preview, session)
+        customCall(custom, "dragPreview", customNode(preview), {
+            x = session.x,
+            y = session.y,
+            pointerId = session.pointerId,
+            claimed = session.claimed,
+            press = session.pressIdentity,
+            distance = session.distance,
+            payloadKind = session.payload and session.payload.kind or nil,
+        })
         if not custom and g then
             g.push("all")
             g.translate(session.x - preview.width / 2,
@@ -982,6 +1190,9 @@ function painter.draw(host, custom)
     end
     if not custom and g then g.pop() end
     customCall(custom, "finish")
+    local failure = host._paintFailure
+    host._paintFailure = nil
+    if failure then error("FrogUI Canvas draw failed: " .. failure, 0) end
 end
 
 painter.defaults = DEFAULTS

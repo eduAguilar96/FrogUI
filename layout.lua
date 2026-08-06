@@ -138,6 +138,9 @@ local function measure(node, maxWidth, maxHeight, host)
     elseif node.type == "Image" or node.type == "TiledImage"
             or node.type == "Icon" then
         naturalWidth, naturalHeight = imageSize(node, host)
+    elseif node.type == "Canvas" then
+        -- Canvas is explicit-size; drawing cannot participate in measurement.
+        naturalWidth, naturalHeight = 0, 0
     elseif node.type == "Row" or node.type == "Column" then
         local gap = node.props.gap or 0
         assert(type(gap) == "number" and gap >= 0, "gap must be non-negative")
@@ -411,6 +414,15 @@ function layout.arrange(node, x, y, width, height, host)
                 layout.arrange(child,
                     node.contentX + at.x - width / 2,
                     node.contentY + at.y - height / 2,
+                    width, height, host)
+            elseif child.type == "Canvas" then
+                local width = assert(resolveSize(child.props.width,
+                    node.contentWidth),
+                    "Canvas needs an explicit EffectLayer width")
+                local height = assert(resolveSize(child.props.height,
+                    node.contentHeight),
+                    "Canvas needs an explicit EffectLayer height")
+                layout.arrange(child, node.contentX, node.contentY,
                     width, height, host)
             else
                 layout.arrange(child, node.contentX, node.contentY,
