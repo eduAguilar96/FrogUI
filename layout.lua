@@ -193,7 +193,8 @@ local function measure(node, maxWidth, maxHeight, host)
             measure(child, childMaxWidth, childMaxHeight, host)
             naturalWidth, naturalHeight = child.measuredWidth, child.measuredHeight
         end
-    else -- Box, Button, Pressable, DragSource, and DropTarget
+    else -- One-child wrappers: Box, Button, Pressable, HorizontalSwipe,
+         -- DragSource, and DropTarget.
         local child = node.children[1]
         if child then
             measure(child, innerMaxWidth, innerMaxHeight, host)

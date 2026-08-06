@@ -88,6 +88,7 @@ the Host, so unknown props fail loudly.
 | `Frog.Button` | Keyboard-focusable tap/hold box with visible theme states | zero or one |
 | `Frog.Motion` | Animate one child's paint/input presentation without changing layout | zero or one |
 | `Frog.Pressable` | Add pointer tap, hold, and mouse-hover to one child | exactly one |
+| `Frog.HorizontalSwipe` | Arbitrate a broad horizontal swipe against descendant tap/hold | exactly one |
 | `Frog.Scroll` | Retain clipped wheel/touch scrolling on one axis | exactly one |
 | `Frog.EffectLayer` | Paint ordered transient feedback without accepting input | many effect leaves |
 | `Frog.PopupText` | Run one finite rising/fading text lifetime | none |
@@ -746,14 +747,40 @@ Button is focused. This prevents a screen-level default from stealing an
 accessible component's activation.
 
 `Pressable` remains pointer-only for a surface that deliberately must not enter
-keyboard focus order. `Scroll`, `Modal`, `DragSource`, and `DropTarget` own
-generic mechanics; they never import Run, Reward, Spellbook, or another game
-concept. A drag source alone calls the domain operation after FrogUI supplies
-the deepest matching `{ address, key }` target.
+keyboard focus order. `HorizontalSwipe`, `Scroll`, `Modal`, `DragSource`, and
+`DropTarget` own generic mechanics; they never import Run, Reward, Spellbook,
+or another game concept. A drag source alone calls the domain operation after
+FrogUI supplies the deepest matching `{ address, key }` target.
+
+`HorizontalSwipe` is the narrow broad-surface exception needed by the Battle
+arena and similar paging regions. Its child stays completely readable:
+
+```lua
+Frog.HorizontalSwipe {
+    onPress = props.dismissInspection,
+    onSwipe = props.stepPage, -- receives "left" or "right" once
+    Frog.Overlay {
+        Background {},
+        InspectableItems {},
+    },
+}
+```
+
+A descendant Button or Pressable remains the provisional tap/hold candidate.
+Horizontal motion may claim the ancestor before either action completes; this
+is Host arbitration before claim, not an ownership transfer. A claimed
+swipe/drag/scroll/hold never transfers. The shorter claim band and longer
+semantic completion band are one private code policy, so a small accidental
+move can suppress inspection without changing application state. An active
+Scroll or DragSource claims through the existing earlier policy and cannot
+hand the gesture to HorizontalSwipe. Nesting selects the deepest swipe surface
+deterministically. Keep named controls outside the broad surface when they must
+never compete with it. HorizontalSwipe is pointer-only; keyboard actions still
+use visible Buttons.
 
 Inside a Scroll, movement along its axis scrolls while cross-axis movement
-drags. The fixed 8px/1.25-bias rule is Host-owned, so components never assemble
-recognizers or receive raw pointer coordinates. Ordinary lists omit
+drags. Claim distance and directional bias are Host-owned, so components never
+assemble recognizers or receive raw pointer coordinates. Ordinary lists omit
 `scrollPosition` and retain their current offset. A selection carousel can set
 `scrollPosition`, `snapInterval`, and `onScrollEnd`: arrows declaratively move
 the selected item, a completed touch swipe snaps to one interval, and the

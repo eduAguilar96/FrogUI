@@ -433,6 +433,14 @@ local Interaction = require("src.frogui.interaction")
 ---@field hoverSound? FrogUISoundCue Mouse-entry cue; defaults to theme `hover`.
 ---@field [integer] FrogUIElementDescription Exactly one child.
 
+---@class FrogHorizontalSwipeProps:FrogUIElementProps
+---@field onSwipe fun(direction:'left'|'right')
+--- Called once on a qualifying release.
+---@field onPress? fun()
+--- Called for a short blank-surface tap; a descendant Button or Pressable
+--- owns its own tap instead.
+---@field [integer] FrogUIElementDescription Exactly one child.
+
 ---@class FrogScrollProps:FrogUIElementProps
 ---@field axis FrogUIScrollAxis Required retained scrolling axis.
 ---@field bar? boolean Show the built-in touch-sized scrollbar.
@@ -609,6 +617,15 @@ Frog.Motion = Element.primitive("Motion")
 --- overrides follow Button and accept `false` to suppress a theme default.
 ---@type fun(input:FrogPressableProps):FrogUIElementDescription
 Frog.Pressable = Element.primitive("Pressable")
+
+--- Owns one horizontal swipe surface without exposing pointer mechanics.
+---
+--- A descendant Button or Pressable keeps tap/hold while unresolved. A
+--- qualifying horizontal move claims this surface before either action; after
+--- that claim ownership never transfers. DragSource and active Scroll retain
+--- priority. Thresholds and directional bias are framework-owned.
+---@type fun(input:FrogHorizontalSwipeProps):FrogUIElementDescription
+Frog.HorizontalSwipe = Element.primitive("HorizontalSwipe")
 
 --- Retains clipped wheel/touch scrolling along one required axis.
 ---

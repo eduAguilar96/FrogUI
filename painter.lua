@@ -1103,6 +1103,12 @@ local function defaultInteraction(host, state)
         lines[#lines + 1] = ("gesture %s · %.1fpx · %s"):format(
             tostring(session.claimed or "pending"), session.distance or 0,
             tostring(session.payloadKind or session.press or "pointer"))
+        if session.swipe then
+            lines[#lines + 1] = ("horizontal swipe %s%s"):format(
+                tostring(session.swipePhase or "candidate"),
+                session.swipeDirection
+                    and (" · " .. session.swipeDirection) or "")
+        end
     end
     if state.modal then
         lines[#lines + 1] = ("modal top %s (%d deep)"):format(

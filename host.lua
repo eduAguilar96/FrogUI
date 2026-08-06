@@ -24,7 +24,8 @@ local PRIMITIVES = {
     EffectLayer = true, PopupText = true, Projectile = true, Flipbook = true,
     Text = true, Image = true, TiledImage = true, ShaderImage = true,
     Icon = true, Canvas = true, Button = true, Motion = true,
-    Pressable = true, Scroll = true, Modal = true, Chrome = true,
+    Pressable = true, HorizontalSwipe = true,
+    Scroll = true, Modal = true, Chrome = true,
     DragSource = true, DropTarget = true,
 }
 
@@ -126,6 +127,7 @@ local TYPE_PROPS = {
         onPress = true, onLongPress = true, onHoverChange = true,
         sound = true, hoverSound = true,
     },
+    HorizontalSwipe = { onSwipe = true, onPress = true },
     Scroll = {
         axis = true, bar = true, scrollPosition = true,
         snapInterval = true, onScrollEnd = true,
@@ -266,7 +268,8 @@ local function validatePrimitive(name, children)
     assert(PRIMITIVES[name], "unknown FrogUI primitive " .. tostring(name))
     if name == "Box" or name == "Button" or name == "Motion" then
         assert(#children <= 1, "Frog." .. name .. " accepts at most one child")
-    elseif name == "Pressable" or name == "Scroll" or name == "Modal"
+    elseif name == "Pressable" or name == "HorizontalSwipe"
+            or name == "Scroll" or name == "Modal"
             or name == "Chrome"
             or name == "DragSource" or name == "DropTarget" then
         assert(#children == 1, "Frog." .. name .. " accepts exactly one child")
@@ -853,6 +856,11 @@ local function validatePrimitiveProps(self, name, props)
             "Pressable requires a press, long-press, or hover callback")
         validateSound(props.sound, "Pressable sound")
         validateSound(props.hoverSound, "Pressable hoverSound")
+    elseif name == "HorizontalSwipe" then
+        assert(type(props.onSwipe) == "function",
+            "HorizontalSwipe onSwipe must be a function")
+        assert(props.onPress == nil or type(props.onPress) == "function",
+            "HorizontalSwipe onPress must be a function")
     elseif name == "Scroll" then
         oneOf(props.axis, { "vertical", "horizontal" }, "Scroll axis")
         assert(props.axis ~= nil, "Scroll axis is required")
@@ -1016,6 +1024,12 @@ local function nodeEntry(node, depth, visibleBounds)
                 x = node.x, y = node.y, width = node.width, height = node.height,
             },
         })
+    elseif node.type == "HorizontalSwipe" then
+        entry.gesture = {
+            kind = "horizontal-swipe",
+            input = "pointer",
+            ownership = "candidate-before-claim",
+        }
     end
     if node._scroll then
         entry.scroll = {
@@ -1095,6 +1109,7 @@ local function concreteInspectionHit(node)
             or node.type == "Image" or node.type == "TiledImage"
             or node.type == "Icon" or node.type == "Canvas"
             or node.type == "Button" or node.type == "Pressable"
+            or node.type == "HorizontalSwipe"
             or node.type == "Scroll" or node.type == "DragSource"
             or node.type == "DropTarget" then
         return true
@@ -1966,7 +1981,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     if (context.previewDepth or 0) > 0 then
         assert(descriptor.props.ref == nil,
             "DragSource preview cannot attach committed refs")
-        assert(token.name ~= "Pressable" and token.name ~= "Scroll"
+        assert(token.name ~= "Pressable" and token.name ~= "HorizontalSwipe"
+                and token.name ~= "Scroll"
                 and token.name ~= "Modal" and token.name ~= "Chrome"
                 and token.name ~= "DragSource"
                 and token.name ~= "DropTarget" and token.name ~= "Button",

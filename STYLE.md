@@ -430,6 +430,11 @@ projections, companion style files, or geometry files.
   Do not manufacture a successful commit receipt just to reuse the visual.
 - Compose drag and Scroll directly. Gesture thresholds and arbitration are
   framework constants, not component props or per-screen recognizer tables.
+- Use `HorizontalSwipe` only when one broad pointer surface must arbitrate
+  against descendant tap/hold. Keep its child literal and its callbacks
+  semantic. Place controls that must never compete with the swipe beside the
+  surface, not inside it. Never add threshold props or application transfer
+  callbacks.
 - A centered selection rail uses Scroll's declarative `scrollPosition`,
   `snapInterval`, and final `onScrollEnd(position)` seam. Convert that settled
   offset into an actor-owned selected index; do not recreate raw drag sessions,

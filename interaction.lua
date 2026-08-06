@@ -13,6 +13,25 @@ interaction.AXIS_BIAS = 1.25
 interaction.WHEEL_STEP = 40
 interaction.MOMENTUM_FRICTION = 12
 
+-- HorizontalSwipe intentionally preserves Battle's proven two-stage feel:
+-- qualifying horizontal movement first suppresses a descendant inspection
+-- action, while only a longer release commits the semantic swipe. This is the
+-- sole code authority; application components and docs never repeat values.
+local HORIZONTAL_SWIPE = {
+    claimDistance = 12,
+    commitDistance = 60,
+    axisBias = 1.5,
+}
+
+-- Internal check seam. Returns a copy so tests cannot mutate input policy.
+function interaction.horizontalSwipePolicy()
+    return {
+        claimDistance = HORIZONTAL_SWIPE.claimDistance,
+        commitDistance = HORIZONTAL_SWIPE.commitDistance,
+        axisBias = HORIZONTAL_SWIPE.axisBias,
+    }
+end
+
 local function snapshotPlain(value, label, seen)
     return Message.snapshotPlain(value, label, seen)
 end
@@ -137,7 +156,8 @@ local function clipped(node)
 end
 
 local POINTER_TYPES = {
-    Button = true, Pressable = true, DragSource = true, Scroll = true,
+    Button = true, Pressable = true, HorizontalSwipe = true,
+    DragSource = true, Scroll = true,
 }
 
 local function hitPath(node, x, y, predicate)
@@ -401,6 +421,60 @@ local function claimGesture(host, session, dx, dy)
     end
 end
 
+-- Advances the one unresolved pointer through framework-owned arbitration.
+-- HorizontalSwipe remains a candidate while a descendant press is provisional;
+-- no claimed owner is ever transferred to another recognizer.
+local function updatePointerClaim(host, session, dx, dy, fromRelease)
+    if session.claimed then return end
+    local dragOrScroll = session.sourceIdentity or session.scrollIdentity
+    if dragOrScroll then
+        -- Existing DragSource/Scroll ownership begins only from a delivered
+        -- move. A coalesced release may finish HorizontalSwipe, but must not
+        -- silently broaden those older primitives' lifecycle.
+        if not fromRelease
+                and session.distance >= interaction.CLAIM_DISTANCE then
+            claimGesture(host, session, dx, dy)
+        end
+        return
+    end
+    if session.swipeIdentity then
+        if session.distance > HORIZONTAL_SWIPE.claimDistance then
+            session.swipePending = true
+        end
+        if math.abs(dx) > HORIZONTAL_SWIPE.claimDistance
+                and math.abs(dx) > math.abs(dy) * HORIZONTAL_SWIPE.axisBias then
+            session.claimed = "horizontal-swipe"
+            session.swipeDirection = dx < 0 and "left" or "right"
+            session.pressSuppressed = true
+            host._pressedIdentity = nil
+        elseif session.swipeTapBlocked
+                and session.distance >= HORIZONTAL_SWIPE.commitDistance then
+            -- Preserve hold tolerance during moderate off-axis jitter. At the
+            -- semantic band shipped descendant inspection becomes terminal
+            -- dragging, so this path cannot become either a press or swipe.
+            -- A blank arena path has no inspection owner and stays eligible.
+            session.claimed = "moved"
+            session.pressSuppressed = true
+            host._pressedIdentity = nil
+        end
+        return
+    end
+    if session.distance >= interaction.CLAIM_DISTANCE then
+        claimGesture(host, session, dx, dy)
+    end
+end
+
+-- A swipe surface deliberately keeps descendant tap tolerance through its
+-- private claim boundary. Other pointer primitives retain the original
+-- generic tolerance; callers do not need to understand either policy.
+local function tapEligible(session)
+    if session.swipeIdentity then
+        return not session.swipePending
+            and session.distance <= HORIZONTAL_SWIPE.claimDistance
+    end
+    return session.distance < interaction.CLAIM_DISTANCE
+end
+
 function interaction.pointerDown(host, x, y, pointerId, button)
     if button ~= nil and button ~= 1 then return host._modal ~= nil end
     host._pointerX, host._pointerY = x, y
@@ -422,15 +496,22 @@ function interaction.pointerDown(host, x, y, pointerId, button)
         or deepestOf(path, "Button", function(node)
             return buttonAvailable(host, node)
         end)
+    local pressSurface = deepestOf(path, "Pressable")
+        or deepestOf(path, "Button")
+    local swipe = deepestOf(path, "HorizontalSwipe")
     local source = deepestOf(path, "DragSource")
     local scroll = nearestScroll(path)
-    if not press and not source and not scroll then return modal ~= nil end
+    if not press and not swipe and not source and not scroll then
+        return modal ~= nil
+    end
     local session = {
         kind = "pointer", pointerId = pointerId,
         x0 = x, y0 = y, x = x, y = y,
         started = host._rawClock:now(), elapsed = 0, distance = 0,
         pressIdentity = press and press.identity or nil,
         pressType = press and press.type or nil,
+        swipeIdentity = swipe and swipe.identity or nil,
+        swipeTapBlocked = pressSurface ~= nil,
         sourceIdentity = source and source.identity or nil,
         scrollIdentity = scroll and scroll.logicalIdentity or nil,
     }
@@ -479,9 +560,7 @@ function interaction.pointerMove(host, x, y, pointerId)
     local dx, dy = x - session.x0, y - session.y0
     session.distance = math.sqrt(dx * dx + dy * dy)
     if session.kind == "modal-outside" then return true end
-    if not session.claimed and session.distance >= interaction.CLAIM_DISTANCE then
-        claimGesture(host, session, dx, dy)
-    end
+    updatePointerClaim(host, session, dx, dy)
     if session.claimed == "scroll" then
         local scroll = (host._scrolls or {})[session.scrollIdentity]
         if scroll then
@@ -535,7 +614,24 @@ function interaction.pointerUp(host, x, y, pointerId, button)
         return true
     end
     session.x, session.y = x, y
-    if session.claimed == "drag" then
+    local releaseDx, releaseDy = x - session.x0, y - session.y0
+    session.distance = math.sqrt(releaseDx * releaseDx + releaseDy * releaseDy)
+    updatePointerClaim(host, session, releaseDx, releaseDy, true)
+    if session.claimed == "horizontal-swipe" then
+        local dx, dy = x - session.x0, y - session.y0
+        local qualifies = math.abs(dx) > HORIZONTAL_SWIPE.commitDistance
+            and math.abs(dx) > math.abs(dy) * HORIZONTAL_SWIPE.axisBias
+        local direction = qualifies and (dx < 0 and "left" or "right") or nil
+        local swipe = findActiveIdentity(host, session.swipeIdentity)
+        host._interactionSession = nil
+        host._pressedIdentity = nil
+        if direction and swipe then
+            local ok, err = pcall(host._runCallback, host, function()
+                swipe.props.onSwipe(direction)
+            end, "HorizontalSwipe:" .. swipe.identity, swipe.source)
+            if not ok then error(err, 0) end
+        end
+    elseif session.claimed == "drag" then
         local target = acceptedTarget(host, x, y, session.payload.kind)
         finishDrag(host, session, "cancelled", "no-target", target)
     elseif session.claimed == "scroll" then
@@ -569,7 +665,8 @@ function interaction.pointerUp(host, x, y, pointerId, button)
         end
     else
         local pressed
-        if not session.claimed and session.distance < interaction.CLAIM_DISTANCE
+        if not session.claimed and not session.pressSuppressed
+                and tapEligible(session)
                 and session.pressIdentity then
             pressed = findActiveIdentity(host, session.pressIdentity)
             if pressed and (not localInside(pressed, x, y)
@@ -595,6 +692,18 @@ function interaction.pointerUp(host, x, y, pointerId, button)
                 host._pressedIdentity = nil
                 error(err, 0)
             end
+        elseif not session.claimed and not session.pressSuppressed
+                and tapEligible(session)
+                and session.swipeIdentity and not session.swipeTapBlocked then
+            local swipe = findActiveIdentity(host, session.swipeIdentity)
+            host._interactionSession = nil
+            host._pressedIdentity = nil
+            if swipe and swipe.props.onPress and localInside(swipe, x, y) then
+                local ok, err = pcall(host._runCallback, host, function()
+                    swipe.props.onPress()
+                end, "HorizontalSwipe:press:" .. swipe.identity, swipe.source)
+                if not ok then error(err, 0) end
+            end
         else
             host._interactionSession = nil
             host._pressedIdentity = nil
@@ -608,7 +717,8 @@ function interaction.update(host, dt)
     local session = host._interactionSession
     if session and session.kind == "pointer" and not session.claimed then
         session.elapsed = session.elapsed + dt
-        if session.elapsed >= interaction.HOLD_SECONDS and session.pressIdentity then
+        if session.elapsed >= interaction.HOLD_SECONDS
+                and not session.pressSuppressed and session.pressIdentity then
             local pressed = findActiveIdentity(host, session.pressIdentity)
             if pressed and pressed.props.onLongPress then
                 host:_runCallback(function()
@@ -721,6 +831,11 @@ function interaction.rebind(host)
         if not source then interaction.cancel(host, "navigation") return end
         session.source = source
     end
+    if session.swipeIdentity and not findActiveIdentity(host,
+            session.swipeIdentity) then
+        interaction.cancel(host, "navigation")
+        return
+    end
     if session.pressIdentity and not findActiveIdentity(host,
             session.pressIdentity) then
         interaction.cancel(host, "navigation")
@@ -820,6 +935,12 @@ function interaction.inspect(host)
             distance = session.distance, elapsed = session.elapsed,
             press = session.pressIdentity, source = session.sourceIdentity,
             scroll = session.scrollIdentity,
+            swipe = session.swipeIdentity,
+            swipePhase = session.claimed == "horizontal-swipe" and "claimed"
+                or session.claimed and session.swipeIdentity and "blocked"
+                or session.swipePending and "pending"
+                or session.swipeIdentity and "candidate" or nil,
+            swipeDirection = session.swipeDirection,
             payloadKind = session.payload and session.payload.kind or nil,
             target = session.lastTarget and session.lastTarget.key or nil,
         } or nil,
