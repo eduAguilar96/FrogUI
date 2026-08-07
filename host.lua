@@ -24,7 +24,7 @@ local PRIMITIVES = {
     EffectLayer = true, PopupText = true, Projectile = true, Flipbook = true,
     Text = true, Image = true, TiledImage = true, ShaderImage = true,
     Icon = true, Canvas = true, Button = true, Motion = true,
-    Pressable = true, HorizontalSwipe = true,
+    Pressable = true, HorizontalSwipe = true, RadialDial = true,
     Scroll = true, Modal = true, Chrome = true,
     DragSource = true, DropTarget = true,
 }
@@ -128,6 +128,12 @@ local TYPE_PROPS = {
         sound = true, hoverSound = true,
     },
     HorizontalSwipe = { onSwipe = true, onPress = true },
+    RadialDial = {
+        value = true, values = true, onChange = true, disabled = true,
+        trackRadius = true, sound = true, spinSound = true,
+        background = true, border = true, borderWidth = true,
+        focusedBorder = true,
+    },
     Scroll = {
         axis = true, bar = true, scrollPosition = true,
         snapInterval = true, onScrollEnd = true,
@@ -356,6 +362,7 @@ local function validateTheme(theme)
     local soundKeys = {
         activate = true, hover = true, reject = true, dismiss = true,
         dragGrab = true, dragDrop = true,
+        dialSpin = true, dialCommit = true,
     }
     assert(theme.sounds == nil or (type(theme.sounds) == "table"
             and getmetatable(theme.sounds) == nil),
@@ -861,6 +868,37 @@ local function validatePrimitiveProps(self, name, props)
             "HorizontalSwipe onSwipe must be a function")
         assert(props.onPress == nil or type(props.onPress) == "function",
             "HorizontalSwipe onPress must be a function")
+    elseif name == "RadialDial" then
+        assert(type(props.values) == "table" and getmetatable(props.values) == nil,
+            "RadialDial values must be a plain dense numeric array")
+        local count, maximum, seen = 0, 0, {}
+        for key in pairs(props.values) do
+            assert(type(key) == "number" and key >= 1 and key % 1 == 0,
+                "RadialDial values must be a plain dense numeric array")
+            count, maximum = count + 1, math.max(maximum, key)
+        end
+        assert(count == maximum and count >= 2,
+            "RadialDial values must contain at least two dense entries")
+        local selected = false
+        for index = 1, maximum do
+            local value = props.values[index]
+            assert(finite(value),
+                "RadialDial value " .. index .. " must be a finite number")
+            assert(not seen[value], "RadialDial values must be unique")
+            seen[value] = true
+            if value == props.value then selected = true end
+        end
+        assert(finite(props.value) and selected,
+            "RadialDial value must be a finite member of values")
+        assert(type(props.onChange) == "function",
+            "RadialDial onChange must be a function")
+        assert(props.disabled == nil or type(props.disabled) == "boolean",
+            "RadialDial disabled must be a boolean")
+        validateNumber(props.trackRadius, "RadialDial trackRadius")
+        assert(props.trackRadius == nil or props.trackRadius > 0,
+            "RadialDial trackRadius must be positive")
+        validateSound(props.sound, "RadialDial sound")
+        validateSound(props.spinSound, "RadialDial spinSound")
     elseif name == "Scroll" then
         oneOf(props.axis, { "vertical", "horizontal" }, "Scroll axis")
         assert(props.axis ~= nil, "Scroll axis is required")
@@ -951,8 +989,38 @@ end
 
 local function inside(node, x, y)
     local localX, localY = Motion.localPoint(node, x, y)
+    if node.type == "RadialDial" then
+        local centerX = node.x + node.width / 2
+        local centerY = node.y + node.height / 2
+        local dx, dy = localX - centerX, localY - centerY
+        local radius = math.min(node.width, node.height) / 2
+        return dx * dx + dy * dy <= radius * radius
+    end
     return localX >= node.x and localY >= node.y
         and localX <= node.x + node.width and localY <= node.y + node.height
+end
+
+-- Describes a RadialDial's stable transformed circle for F6. Its ornamental
+-- bounce deliberately does not change layout, hit ownership, or inspection.
+local function inspectionCircle(node)
+    local centerX = node.x + node.width / 2
+    local centerY = node.y + node.height / 2
+    local radius = math.min(node.width, node.height) / 2
+    local world = node._worldTransform
+    if not world then
+        return { center = { x = centerX, y = centerY }, radius = radius }
+    end
+    local transformedX = world.a * centerX + world.c * centerY + world.tx
+    local transformedY = world.b * centerX + world.d * centerY + world.ty
+    local edgeX = world.a * (centerX + radius)
+        + world.c * centerY + world.tx
+    local edgeY = world.b * (centerX + radius)
+        + world.d * centerY + world.ty
+    return {
+        center = { x = transformedX, y = transformedY },
+        radius = math.sqrt((edgeX - transformedX) ^ 2
+            + (edgeY - transformedY) ^ 2),
+    }
 end
 
 local function nodeEntry(node, depth, visibleBounds)
@@ -1029,6 +1097,40 @@ local function nodeEntry(node, depth, visibleBounds)
             kind = "horizontal-swipe",
             input = "pointer",
             ownership = "candidate-before-claim",
+        }
+    elseif node.type == "RadialDial" then
+        local visual = Interaction.radialPresentation(node)
+        local circle = inspectionCircle(node)
+        entry.inspectionShape = {
+            type = "circle",
+            center = deepCopy(circle.center),
+            radius = circle.radius,
+        }
+        entry.radialDial = {
+            value = node._radialDial.value,
+            values = deepCopy(node._radialDial.values),
+            index = node._radialDial.index,
+            angle = node._radialDial.angle,
+            targetAngle = node._radialDial.targetAngle,
+            previewAngle = node._radialDial.previewAngle,
+            visualAngle = visual.angle,
+            trackRadius = node._radialDial.trackRadius,
+            settling = math.abs(node._radialDial.targetAngle
+                - node._radialDial.angle) > 0.0001,
+            bounce = node._radialDial.bounce,
+            paintScale = visual.scale,
+            ornamentalPaintOverflow = visual.scale ~= 1,
+            center = deepCopy(circle.center),
+            radius = circle.radius,
+            deadZoneRadius = circle.radius
+                * Interaction.radialDialPolicy().deadZoneRatio,
+            reducedMotion = node._radialDial.reducedMotion == true,
+            disabled = node.props.disabled == true,
+            keyboard = {
+                "focused Button",
+                "source-ordered Button shortcut",
+                "focused dial fallback",
+            },
         }
     end
     if node._scroll then
@@ -1110,6 +1212,7 @@ local function concreteInspectionHit(node)
             or node.type == "Icon" or node.type == "Canvas"
             or node.type == "Button" or node.type == "Pressable"
             or node.type == "HorizontalSwipe"
+            or node.type == "RadialDial"
             or node.type == "Scroll" or node.type == "DragSource"
             or node.type == "DropTarget" then
         return true
@@ -1143,13 +1246,15 @@ local function collectCommittedRefRectangles(node, rectangles)
     end
 end
 
-local function collectButtons(node, output, spent)
-    if node.type == "Button" and not node.props.disabled
-            and not spent[node.identity] then
+local function collectFocusables(node, output, spent)
+    if (node.type == "Button" and not node.props.disabled
+            and not spent[node.identity]) then
+        output[#output + 1] = node
+    elseif node.type == "RadialDial" and not node.props.disabled then
         output[#output + 1] = node
     end
     for _, child in ipairs(node.children) do
-        collectButtons(child, output, spent)
+        collectFocusables(child, output, spent)
     end
 end
 
@@ -1385,6 +1490,7 @@ function host.new(options)
     self._motions = {}
     self._effects = {}
     self._scrolls = {}
+    self._radials = {}
     self._interactionSession = nil
     self._modals = {}
     self._modal = nil
@@ -1698,6 +1804,7 @@ function host:mount(root)
     self._motions = context.motions
     self._effects = context.effects
     self._scrolls = context.scrolls
+    self._radials = context.radials
     self._modals = context.modals
     self._modal = context.modal
     self._chrome = context.chrome
@@ -1982,6 +2089,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         assert(descriptor.props.ref == nil,
             "DragSource preview cannot attach committed refs")
         assert(token.name ~= "Pressable" and token.name ~= "HorizontalSwipe"
+                and token.name ~= "RadialDial"
                 and token.name ~= "Scroll"
                 and token.name ~= "Modal" and token.name ~= "Chrome"
                 and token.name ~= "DragSource"
@@ -2015,6 +2123,12 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         local instance = Interaction.reconcileScroll(
             self._scrolls[logicalPath], node, node.props, logicalPath)
         context.scrolls[logicalPath] = instance
+    end
+    if token.name == "RadialDial" then
+        local instance = Interaction.reconcileRadialDial(
+            self._radials[logicalPath], node, node.props, logicalPath,
+            self.reducedMotion)
+        context.radials[logicalPath] = instance
     end
     if token.name == "Motion" or descriptor.props.juice
             or descriptor.props.reactions then
@@ -2050,6 +2164,37 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 or child.type == "Box" and #child.children == 0,
             "Frog.ShaderImage child must resolve to Image, TiledImage,"
                 .. " or an empty Box")
+    end
+    if token.name == "RadialDial" then
+        local interactive = {
+            Button = true, Pressable = true, HorizontalSwipe = true,
+            RadialDial = true, Scroll = true, Modal = true, Chrome = true,
+            DragSource = true, DropTarget = true,
+        }
+        local function checkStatic(child)
+            assert(not interactive[child.type] and child._ref == nil
+                    and child.type ~= "Motion"
+                    and child.type ~= "EffectLayer"
+                    and child.type ~= "PopupText"
+                    and child.type ~= "Projectile"
+                    and child.type ~= "Flipbook"
+                    and child._motion == nil,
+                "Frog.RadialDial child must be static presentation")
+            for _, nested in ipairs(child.children or {}) do checkStatic(nested) end
+        end
+        assert(#node.children == #node._radialDial.values,
+            "Frog.RadialDial needs exactly one child per value")
+        local keys = {}
+        for index, child in ipairs(node.children) do
+            assert(child.key ~= nil,
+                "Frog.RadialDial child " .. index .. " needs a stable key")
+            assert(not keys[child.key],
+                "Frog.RadialDial children need unique stable keys")
+            assert(child.props.offset == nil,
+                "Frog.RadialDial option children do not accept offset")
+            keys[child.key] = true
+            checkStatic(child)
+        end
     end
     if token.name == "DragSource" then
         context.previewDepth = (context.previewDepth or 0) + 1
@@ -2140,6 +2285,7 @@ function host:_build(root)
         motions = {},
         effects = {},
         scrolls = {},
+        radials = {},
         previewDepth = 0,
         nextReceiverOrder = 1,
         nextEffectOrder = 1,
@@ -2227,6 +2373,7 @@ function host:render(root)
         self._motions = context.motions
         self._effects = context.effects
         self._scrolls = context.scrolls
+        self._radials = context.radials
         self._modals = context.modals
         self._modal = context.modal
         self._chrome = context.chrome
@@ -2985,6 +3132,7 @@ function host:resize(width, height)
         self._motions = context.motions
         self._effects = context.effects
         self._scrolls = context.scrolls
+        self._radials = context.radials
         self._modals = context.modals
         self._modal = context.modal
         self._chrome = context.chrome
@@ -3073,27 +3221,27 @@ function host:keyDown(key, scancode, isrepeat)
     end
     if isrepeat then return self._modal ~= nil end
     if key == "escape" and Interaction.keyBack(self) then return true end
-    local buttons, seen = {}, {}
+    local focusables, seen = {}, {}
     for _, inputRoot in ipairs(Interaction.inputRoots(self)) do
         local found = {}
-        collectButtons(inputRoot, found, self._spentAuthorities)
-        for _, button in ipairs(found) do
-            if not seen[button.identity] then
-                seen[button.identity] = true
-                buttons[#buttons + 1] = button
+        collectFocusables(inputRoot, found, self._spentAuthorities)
+        for _, control in ipairs(found) do
+            if not seen[control.identity] then
+                seen[control.identity] = true
+                focusables[#focusables + 1] = control
             end
         end
     end
     if key == "tab" then
-        if #buttons == 0 then return self._modal ~= nil end
+        if #focusables == 0 then return self._modal ~= nil end
         local nextIndex = 1
-        for index, button in ipairs(buttons) do
-            if button.identity == self._focusedIdentity then
-                nextIndex = index % #buttons + 1
+        for index, control in ipairs(focusables) do
+            if control.identity == self._focusedIdentity then
+                nextIndex = index % #focusables + 1
                 break
             end
         end
-        self._focusedIdentity = buttons[nextIndex].identity
+        self._focusedIdentity = focusables[nextIndex].identity
         Interaction.revealFocus(self, self._focusedIdentity)
         return true
     end
@@ -3110,19 +3258,26 @@ function host:keyDown(key, scancode, isrepeat)
         end
     end
     if not activated then
-        for _, button in ipairs(buttons) do
-            local shortcut = button.props.shortcut
+        for _, control in ipairs(focusables) do
+            local shortcut = control.type == "Button"
+                and control.props.shortcut
             local matches = shortcut == key
             if type(shortcut) == "table" then
                 for _, accepted in ipairs(shortcut) do
                     if accepted == key then matches = true break end
                 end
             end
-            if matches then activated = button break end
+            if matches then activated = control break end
         end
     end
     if activated and (activated.props.onPress or activated.props.onCommit) then
         self:_activateButton(activated)
+        return true
+    end
+    local focusedControl = Interaction.findActiveIdentity(
+        self, self._focusedIdentity)
+    if focusedControl and focusedControl.type == "RadialDial"
+            and Interaction.keyRadialDial(self, focusedControl, key) then
         return true
     end
     return self._modal ~= nil
@@ -3262,6 +3417,7 @@ function host:unmount()
     self._effects = {}
     Shader.clear(self)
     self._scrolls = {}
+    self._radials = {}
     self._modals = {}
     self._modal = nil
     self._chrome = nil

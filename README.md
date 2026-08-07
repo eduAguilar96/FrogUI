@@ -89,6 +89,7 @@ the Host, so unknown props fail loudly.
 | `Frog.Motion` | Animate one child's paint/input presentation without changing layout | zero or one |
 | `Frog.Pressable` | Add pointer tap, hold, and mouse-hover to one child | exactly one |
 | `Frog.HorizontalSwipe` | Arbitrate a broad horizontal swipe against descendant tap/hold | exactly one |
+| `Frog.RadialDial` | Select one controlled numeric value with internal circular preview | one keyed upright option per value |
 | `Frog.Scroll` | Retain clipped wheel/touch scrolling on one axis | exactly one |
 | `Frog.EffectLayer` | Paint ordered transient feedback without accepting input | many effect leaves |
 | `Frog.PopupText` | Run one finite rising/fading text lifetime | none |
@@ -747,10 +748,11 @@ Button is focused. This prevents a screen-level default from stealing an
 accessible component's activation.
 
 `Pressable` remains pointer-only for a surface that deliberately must not enter
-keyboard focus order. `HorizontalSwipe`, `Scroll`, `Modal`, `DragSource`, and
-`DropTarget` own generic mechanics; they never import Run, Reward, Spellbook,
-or another game concept. A drag source alone calls the domain operation after
-FrogUI supplies the deepest matching `{ address, key }` target.
+keyboard focus order. `HorizontalSwipe`, `RadialDial`, `Scroll`, `Modal`,
+`DragSource`, and `DropTarget` own generic mechanics; they never import Run,
+Reward, Spellbook, or another game concept. A drag source alone calls the
+domain operation after FrogUI supplies the deepest matching
+`{ address, key }` target.
 
 `HorizontalSwipe` is the narrow broad-surface exception needed by the Battle
 arena and similar paging regions. Its child stays completely readable:
@@ -777,6 +779,49 @@ hand the gesture to HorizontalSwipe. Nesting selects the deepest swipe surface
 deterministically. Keep named controls outside the broad surface when they must
 never compete with it. HorizontalSwipe is pointer-only; keyboard actions still
 use visible Buttons.
+
+`RadialDial` is the controlled circular selector. Values and keyed option faces
+are written together in the same order; FrogUI orbits each complete face
+without rotating it:
+
+```lua
+Frog.RadialDial {
+    width = 240,
+    height = 240,
+    value = state.speed,
+    values = { 0.5, 1, 2 },
+    trackRadius = 72,
+    onChange = props.changeSpeed,
+    SpeedOption { key = "slow", value = 0.5 },
+    SpeedOption { key = "normal", value = 1 },
+    SpeedOption { key = "fast", value = 2 },
+}
+```
+
+Pointer movement changes only Host-owned preview positions. A completed release
+emits one numeric `onChange(value)`, including a settled value equal to the
+controlled value; cancellation emits nothing and restores toward controlled
+state. A tap on the left half chooses the previous value and a tap on the right
+chooses the next, with that direction fixed at pointer-down. An exact-center
+tap does nothing. A drag that starts or crosses the center establishes its
+angular origin only after leaving the dead-zone, preventing a jump. The
+children are static presentation, so controls remain siblings. The circular
+hit, center dead-zone, threshold, shortest-path raw-clock settle, and small
+ornamental bounce are private policy. Reduced motion snaps the settle and
+removes the bounce; direct pointer tracking remains truthful. `trackRadius` is
+visual-only and must keep every option inside the circle.
+RadialDial itself does not accept `padding`, and its direct option children do
+not accept `offset`; size the circular surface and each option explicitly so
+paint, hit testing, and F6 share one center.
+
+Tab includes the dial in focus order and its focus ring is always visible.
+Keyboard priority is deliberate: an actionable focused Button activates first,
+then source-ordered Button shortcuts, then a focused RadialDial may handle
+Left/Down as previous, Right/Up/Enter/Space as next, Home as first, and End as
+last. A screen such as Analyze therefore keeps its visible seek Buttons
+authoritative.
+No application component receives an angle, pointer coordinate, movement
+callback, threshold, or recognizer.
 
 Inside a Scroll, movement along its axis scrolls while cross-axis movement
 drags. Claim distance and directional bias are Host-owned, so components never
@@ -851,7 +896,7 @@ caching, and overlapping playback one owner.
 
 ### Controls already sound correct by default
 
-The presentation theme defines six generic interaction defaults:
+The presentation theme defines eight generic interaction defaults:
 
 | Theme field | Used by | Current cue |
 |---|---|---|
@@ -861,6 +906,8 @@ The presentation theme defines six generic interaction defaults:
 | `sounds.dismiss` | Modal back/outside dismissal | `ui.close` |
 | `sounds.dragGrab` | DragSource claiming the gesture | `drag.grab` |
 | `sounds.dragDrop` | DragSource committing a drop | `drag.drop` |
+| `sounds.dialSpin` | RadialDial first entering free rotation | `dial.swoosh` |
+| `sounds.dialCommit` | RadialDial terminal release/key activation | `dial.click` |
 
 Most components therefore add no sound prop:
 
@@ -905,6 +952,8 @@ Frog.DragSource {
 entry. `Pressable` supports `sound` and `hoverSound`. `Modal.dismissSound`
 covers both keyboard-back and outside-pointer dismissal. Pass `false` to any
 sound prop to deliberately suppress that one inherited/default cue.
+`RadialDial.spinSound` and `sound` override its start and terminal cues;
+passing `false` suppresses either one.
 
 ### State changes and events use keyed juice
 

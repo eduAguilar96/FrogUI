@@ -6,6 +6,7 @@ local Message = require("src.frogui.message")
 local Motion = require("src.frogui.motion")
 
 local interaction = {}
+local stageSound
 
 interaction.HOLD_SECONDS = 0.35
 interaction.CLAIM_DISTANCE = 8
@@ -22,6 +23,142 @@ local HORIZONTAL_SWIPE = {
     commitDistance = 60,
     axisBias = 1.5,
 }
+
+-- RadialDial owns angular preview internally. Callers provide only controlled
+-- values and receive one settled numeric value after release/key activation.
+local RADIAL_DIAL = {
+    dragRadians = 0.10,
+    deadZoneRatio = 0.12,
+    settleSpeed = 10,
+    bounceAmplitude = 0.05,
+    bounceDuration = 0.28,
+}
+
+local function normalizeAngle(value)
+    while value > math.pi do value = value - math.pi * 2 end
+    while value < -math.pi do value = value + math.pi * 2 end
+    return value
+end
+
+local function radialStep(count)
+    return math.pi * 2 / count
+end
+
+local function radialAngle(index, count)
+    return -(index - 1) * radialStep(count)
+end
+
+local function radialIndex(angle, count)
+    return math.floor(-angle / radialStep(count) + 0.5) % count + 1
+end
+
+local function radialSignature(values)
+    local parts = { tostring(#values) }
+    for index, value in ipairs(values) do
+        parts[index + 1] = string.format("%.17g", value)
+    end
+    return table.concat(parts, ":")
+end
+
+local function radialTarget(angle, index, count)
+    local canonical = radialAngle(index, count)
+    return angle + normalizeAngle(canonical - angle)
+end
+
+local function copyRadial(instance)
+    if not instance then return nil end
+    local values = {}
+    for index, value in ipairs(instance.values) do values[index] = value end
+    return {
+        identity = instance.identity,
+        signature = instance.signature,
+        values = values,
+        value = instance.value,
+        index = instance.index,
+        angle = instance.angle,
+        targetAngle = instance.targetAngle,
+        previewAngle = instance.previewAngle,
+        bounce = instance.bounce,
+        reducedMotion = instance.reducedMotion,
+        trackRadius = instance.trackRadius,
+        geometrySignature = instance.geometrySignature,
+        pendingCommit = instance.pendingCommit and {
+            value = instance.pendingCommit.value,
+            restartBounce = instance.pendingCommit.restartBounce,
+        } or nil,
+        node = instance.node,
+    }
+end
+
+-- Retains the visual settle process while the keyed controlled dial remains
+-- compatible. The application owns only value; angular state stays here.
+function interaction.reconcileRadialDial(old, node, props, identity, reducedMotion)
+    local values, index = {}, nil
+    for position, value in ipairs(props.values) do
+        values[position] = value
+        if value == props.value then index = position end
+    end
+    local signature = radialSignature(values)
+    local compatible = old and old.signature == signature
+    local controlledChanged = compatible and old.value ~= props.value
+    local instance = compatible and copyRadial(old) or {
+        angle = radialAngle(index, #values),
+        bounce = 0,
+    }
+    instance.identity = identity
+    instance.signature = signature
+    instance.values = values
+    instance.value = props.value
+    instance.index = assert(index, "RadialDial value must occur in values")
+    instance.targetAngle = radialTarget(instance.angle, index, #values)
+    instance.previewAngle = nil
+    instance.node = node
+    instance.reducedMotion = reducedMotion == true
+    if controlledChanged then
+        local internalCommit = instance.pendingCommit
+            and instance.pendingCommit.value == props.value
+        if not internalCommit or instance.pendingCommit.restartBounce then
+            instance.bounce = reducedMotion and 0 or 1
+        end
+    end
+    instance.pendingCommit = nil
+    if reducedMotion or not compatible then
+        instance.angle = instance.targetAngle
+        instance.bounce = 0
+    end
+    node._radialDial = instance
+    return instance
+end
+
+-- Internal check seam. Values remain code-owned rather than copied into docs.
+function interaction.radialDialPolicy()
+    return {
+        dragRadians = RADIAL_DIAL.dragRadians,
+        deadZoneRatio = RADIAL_DIAL.deadZoneRatio,
+        settleSpeed = RADIAL_DIAL.settleSpeed,
+        bounceAmplitude = RADIAL_DIAL.bounceAmplitude,
+        bounceDuration = RADIAL_DIAL.bounceDuration,
+    }
+end
+
+-- Returns the current visual angle and bounce scale without exposing either to
+-- application components.
+function interaction.radialPresentation(node)
+    local dial = assert(node._radialDial, "unprepared RadialDial")
+    return {
+        angle = dial.previewAngle or dial.angle,
+        scale = 1 + RADIAL_DIAL.bounceAmplitude
+            * math.sin((dial.bounce or 0) * math.pi),
+    }
+end
+
+-- Keeps arranged option centers and transformed/F6 bounds truthful in the
+-- same pointer frame without asking application code to rerender.
+local function refreshRadial(host, node)
+    require("src.frogui.layout").arrangeRadialDial(node, host)
+    Motion.transformTree(host._tree)
+    host:_refreshCommittedRefs()
+end
 
 -- Internal check seam. Returns a copy so tests cannot mutate input policy.
 function interaction.horizontalSwipePolicy()
@@ -99,6 +236,10 @@ function interaction.snapshot(host)
     for identity, instance in pairs(host._scrolls or {}) do
         scrolls[identity] = copyScroll(instance)
     end
+    local radials = {}
+    for identity, instance in pairs(host._radials or {}) do
+        radials[identity] = copyRadial(instance)
+    end
     local session = host._interactionSession
     local sessionCopy
     if session then
@@ -114,6 +255,7 @@ function interaction.snapshot(host)
     end
     return {
         scrolls = scrolls,
+        radials = radials,
         session = sessionCopy,
         hoveredIdentity = host._hoveredIdentity,
         pressedIdentity = host._pressedIdentity,
@@ -124,6 +266,7 @@ end
 
 function interaction.restore(host, state)
     host._scrolls = state.scrolls
+    host._radials = state.radials or {}
     host._interactionSession = state.session
     host._hoveredIdentity = state.hoveredIdentity
     host._pressedIdentity = state.pressedIdentity
@@ -132,6 +275,11 @@ function interaction.restore(host, state)
     for _, scroll in pairs(host._scrolls or {}) do
         if scroll.node then
             require("src.frogui.layout").arrangeScroll(scroll.node, host)
+        end
+    end
+    for _, radial in pairs(host._radials or {}) do
+        if radial.node then
+            refreshRadial(host, radial.node)
         end
     end
     host:_refreshCommittedRefs()
@@ -157,8 +305,16 @@ end
 
 local POINTER_TYPES = {
     Button = true, Pressable = true, HorizontalSwipe = true,
-    DragSource = true, Scroll = true,
+    RadialDial = true, DragSource = true, Scroll = true,
 }
+
+local function radialInside(node, x, y)
+    local localX, localY = Motion.localPoint(node, x, y)
+    local centerX, centerY = node.x + node.width / 2, node.y + node.height / 2
+    local dx, dy = localX - centerX, localY - centerY
+    local radius = math.min(node.width, node.height) / 2
+    return dx * dx + dy * dy <= radius * radius
+end
 
 local function hitPath(node, x, y, predicate)
     if node.type == "EffectLayer" then return nil end
@@ -227,10 +383,134 @@ end
 
 local function pointerPath(host, x, y)
     for _, root in ipairs(inputRoots(host)) do
-        local path = hitPath(root, x, y,
-            function(node) return POINTER_TYPES[node.type] == true end)
+        local path = hitPath(root, x, y, function(node)
+            return POINTER_TYPES[node.type] == true
+                and (node.type ~= "RadialDial" or radialInside(node, x, y))
+        end)
         if path then return path, root end
     end
+end
+
+local function radialPoint(node, x, y)
+    local localX, localY = Motion.localPoint(node, x, y)
+    local centerX, centerY = node.x + node.width / 2, node.y + node.height / 2
+    local dx, dy = localX - centerX, localY - centerY
+    return dx, dy, math.sqrt(dx * dx + dy * dy),
+        math.min(node.width, node.height) / 2
+end
+
+local function beginRadial(host, node, session, x, y)
+    local dx, dy, distance, radius = radialPoint(node, x, y)
+    local dial = node._radialDial
+    session.claimed = "radial-dial"
+    session.radialIdentity = node.identity
+    session.radialSignature = dial.signature
+    session.radialValue = dial.value
+    session.radialBounds = {
+        x = node.x, y = node.y, width = node.width, height = node.height,
+    }
+    session.radialGeometrySignature = dial.geometrySignature
+    session.radialPointerAngle = distance > radius * RADIAL_DIAL.deadZoneRatio
+        and math.atan2(dy, dx) or nil
+    session.radialAccumulated = 0
+    session.radialBaseAngle = dial.angle
+    session.radialPreviewAngle = dial.angle
+    session.radialPreviewIndex = dial.index
+    if distance == 0 then
+        session.radialTapStep = nil
+    else
+        session.radialTapStep = dx < 0 and -1 or 1
+    end
+    session.radialMoved = false
+    dial.bounce = host.reducedMotion and 0 or 1
+    host._focusedIdentity = node.identity
+    host._pressedIdentity = nil
+end
+
+local function moveRadial(host, session, x, y)
+    local node = findActiveIdentity(host, session.radialIdentity)
+    if not node then return end
+    local dx, dy, distance, radius = radialPoint(node, x, y)
+    if distance <= radius * RADIAL_DIAL.deadZoneRatio then
+        session.radialPointerAngle = nil
+        return
+    end
+    local pointerAngle = math.atan2(dy, dx)
+    if session.radialPointerAngle == nil then
+        session.radialPointerAngle = pointerAngle
+        return
+    end
+    local delta = normalizeAngle(pointerAngle - session.radialPointerAngle)
+    session.radialPointerAngle = pointerAngle
+    session.radialAccumulated = session.radialAccumulated + delta
+    if math.abs(session.radialAccumulated) > RADIAL_DIAL.dragRadians
+            and not session.radialMoved then
+        session.radialMoved = true
+        host:_runCallback(function()
+            stageSound(host, node.props.spinSound, "dialSpin")
+        end, "RadialDial:spin:" .. node.identity, node.source)
+    end
+    if session.radialMoved then
+        session.radialPreviewAngle = session.radialBaseAngle
+            + session.radialAccumulated
+        session.radialPreviewIndex = radialIndex(
+            session.radialPreviewAngle, #node._radialDial.values)
+        node._radialDial.previewAngle = session.radialPreviewAngle
+        refreshRadial(host, node)
+    end
+end
+
+local function armRadialSettle(host, node, restartBounce)
+    local dial = node._radialDial
+    dial.angle = dial.previewAngle or dial.angle
+    dial.previewAngle = nil
+    dial.targetAngle = radialTarget(dial.angle, dial.index, #dial.values)
+    if restartBounce then dial.bounce = host.reducedMotion and 0 or 1 end
+    if host.reducedMotion then dial.angle = dial.targetAngle end
+    refreshRadial(host, node)
+end
+
+local function commitRadial(host, node, value, restartBounce, origin)
+    local ok, reason = pcall(host._runCallback, host, function()
+        node._radialDial.pendingCommit = {
+            value = value,
+            restartBounce = restartBounce == true,
+        }
+        stageSound(host, node.props.sound, "dialCommit")
+        node.props.onChange(value)
+    end,
+        origin or ("RadialDial:" .. node.identity), node.source)
+    local current = findActiveIdentity(host, node.identity)
+    if current and current._radialDial then
+        current._radialDial.pendingCommit = nil
+    end
+    if not ok then error(reason, 0) end
+end
+
+-- Handles only focused dial keys. Application-owned Button shortcuts remain
+-- authoritative because the Host resolves them before this fallback.
+function interaction.keyRadialDial(host, node, key)
+    if not node or node.type ~= "RadialDial" or node.props.disabled then
+        return false
+    end
+    local dial = node._radialDial
+    local index
+    if key == "left" or key == "down" then
+        index = (dial.index - 2) % #dial.values + 1
+    elseif key == "right" or key == "up"
+            or key == "return" or key == "space" or key == "kpenter" then
+        index = dial.index % #dial.values + 1
+    elseif key == "home" then
+        index = 1
+    elseif key == "end" then
+        index = #dial.values
+    else
+        return false
+    end
+    armRadialSettle(host, node, true)
+    commitRadial(host, node, dial.values[index], true,
+        "RadialDial:key:" .. node.identity)
+    return true
 end
 
 local function deepestOf(path, kind, predicate)
@@ -270,7 +550,7 @@ local function soundCue(host, override, defaultKey)
 end
 
 -- Stages sound with the surrounding Host transaction when one is declared.
-local function stageSound(host, override, defaultKey)
+stageSound = function(host, override, defaultKey)
     local cue = soundCue(host, override, defaultKey)
     if cue then host:_stageFeedback("sound", cue) end
 end
@@ -360,6 +640,18 @@ function interaction.cancel(host, reason)
     if session.claimed == "drag" then
         finishDrag(host, session, "cancelled", reason or "cancelled")
     else
+        if session.radialIdentity then
+            local radial = findActiveIdentity(host, session.radialIdentity)
+            if radial and radial._radialDial then
+                local dial = radial._radialDial
+                dial.angle = dial.previewAngle or dial.angle
+                dial.previewAngle = nil
+                dial.targetAngle = radialTarget(
+                    dial.angle, dial.index, #dial.values)
+                if host.reducedMotion then dial.angle = dial.targetAngle end
+                refreshRadial(host, radial)
+            end
+        end
         host._interactionSession = nil
         host._pressedIdentity = nil
     end
@@ -498,10 +790,12 @@ function interaction.pointerDown(host, x, y, pointerId, button)
         end)
     local pressSurface = deepestOf(path, "Pressable")
         or deepestOf(path, "Button")
-    local swipe = deepestOf(path, "HorizontalSwipe")
+    local radial = deepestOf(path, "RadialDial",
+        function(node) return not node.props.disabled end)
+    local swipe = not radial and deepestOf(path, "HorizontalSwipe") or nil
     local source = deepestOf(path, "DragSource")
     local scroll = nearestScroll(path)
-    if not press and not swipe and not source and not scroll then
+    if not press and not swipe and not radial and not source and not scroll then
         return modal ~= nil
     end
     local session = {
@@ -524,7 +818,11 @@ function interaction.pointerDown(host, x, y, pointerId, button)
     end
     host._interactionSession = session
     host._pressedIdentity = press and press.identity or nil
-    if press and press.type == "Button" then host._focusedIdentity = press.identity end
+    if radial and not press and not source and not scroll then
+        beginRadial(host, radial, session, x, y)
+    elseif press and press.type == "Button" then
+        host._focusedIdentity = press.identity
+    end
     setHover(host, hoverNode(host, x, y), pointerId)
     return true
 end
@@ -560,6 +858,10 @@ function interaction.pointerMove(host, x, y, pointerId)
     local dx, dy = x - session.x0, y - session.y0
     session.distance = math.sqrt(dx * dx + dy * dy)
     if session.kind == "modal-outside" then return true end
+    if session.claimed == "radial-dial" then
+        moveRadial(host, session, x, y)
+        return true
+    end
     updatePointerClaim(host, session, dx, dy)
     if session.claimed == "scroll" then
         local scroll = (host._scrolls or {})[session.scrollIdentity]
@@ -617,7 +919,31 @@ function interaction.pointerUp(host, x, y, pointerId, button)
     local releaseDx, releaseDy = x - session.x0, y - session.y0
     session.distance = math.sqrt(releaseDx * releaseDx + releaseDy * releaseDy)
     updatePointerClaim(host, session, releaseDx, releaseDy, true)
-    if session.claimed == "horizontal-swipe" then
+    if session.claimed == "radial-dial" then
+        local radial = findActiveIdentity(host, session.radialIdentity)
+        local value
+        if radial then
+            local dial = radial._radialDial
+            local index
+            if session.radialMoved then
+                index = session.radialPreviewIndex
+            elseif session.radialTapStep then
+                index = (dial.index - 1 + session.radialTapStep)
+                    % #dial.values + 1
+            end
+            value = index and dial.values[index] or nil
+        end
+        if radial and value ~= nil then
+            armRadialSettle(host, radial, not session.radialMoved)
+        end
+        host._interactionSession = nil
+        host._pressedIdentity = nil
+        if radial and value ~= nil then
+            local ok, err = pcall(commitRadial, host, radial, value,
+                not session.radialMoved)
+            if not ok then error(err, 0) end
+        end
+    elseif session.claimed == "horizontal-swipe" then
         local dx, dy = x - session.x0, y - session.y0
         local qualifies = math.abs(dx) > HORIZONTAL_SWIPE.commitDistance
             and math.abs(dx) > math.abs(dy) * HORIZONTAL_SWIPE.axisBias
@@ -751,6 +1077,43 @@ function interaction.update(host, dt)
             scroll.velocity = 0
         end
     end
+    local radialIdentities = {}
+    for identity in pairs(host._radials or {}) do
+        radialIdentities[#radialIdentities + 1] = identity
+    end
+    table.sort(radialIdentities)
+    for _, identity in ipairs(radialIdentities) do
+        local dial = host._radials[identity]
+        local captured = session and session.claimed == "radial-dial"
+            and dial.node and session.radialIdentity == dial.node.identity
+        local changed = false
+        if not captured then
+            if host.reducedMotion then
+                if dial.angle ~= dial.targetAngle or dial.bounce ~= 0 then
+                    dial.angle, dial.bounce = dial.targetAngle, 0
+                    changed = true
+                end
+            else
+                local delta = normalizeAngle(dial.targetAngle - dial.angle)
+                if math.abs(delta) > 0.0001 then
+                    local progress = 1
+                        - math.exp(-RADIAL_DIAL.settleSpeed * dt)
+                    dial.angle = dial.angle + delta * progress
+                    changed = true
+                else
+                    dial.angle = dial.targetAngle
+                end
+            end
+        end
+        if not host.reducedMotion and (dial.bounce or 0) > 0 then
+            dial.bounce = math.max(0,
+                dial.bounce - dt / RADIAL_DIAL.bounceDuration)
+            changed = true
+        end
+        if changed and dial.node then
+            refreshRadial(host, dial.node)
+        end
+    end
 end
 
 function interaction.wheelMoved(host, dx, dy)
@@ -799,7 +1162,9 @@ function interaction.revealFocus(host, identity)
 end
 
 function interaction.keyBack(host)
-    if host._interactionSession and host._interactionSession.claimed == "drag" then
+    if host._interactionSession
+            and (host._interactionSession.claimed == "drag"
+                or host._interactionSession.claimed == "radial-dial") then
         interaction.cancel(host, "back")
         return true
     end
@@ -820,6 +1185,14 @@ function interaction.rebind(host)
             or findIdentity(host._tree, identity)
         if scroll.node then scroll.node._scroll = scroll end
     end
+    for _, radial in pairs(host._radials or {}) do
+        local node = findIdentity(host._tree,
+            radial.node and radial.node.identity)
+        if node and node.type == "RadialDial" then
+            radial.node = node
+            node._radialDial = radial
+        end
+    end
     local session = host._interactionSession
     if not session then return end
     if session.scrollIdentity then
@@ -830,6 +1203,25 @@ function interaction.rebind(host)
         local source = findActiveIdentity(host, session.sourceIdentity)
         if not source then interaction.cancel(host, "navigation") return end
         session.source = source
+    end
+    if session.radialIdentity then
+        local radial = findActiveIdentity(host, session.radialIdentity)
+        local bounds = session.radialBounds
+        local geometryChanged = radial and bounds
+            and (radial.x ~= bounds.x or radial.y ~= bounds.y
+                or radial.width ~= bounds.width or radial.height ~= bounds.height)
+        if not radial or radial.type ~= "RadialDial"
+                or radial.props.disabled
+                or radial._radialDial.signature ~= session.radialSignature
+                or radial._radialDial.value ~= session.radialValue
+                or radial._radialDial.geometrySignature
+                    ~= session.radialGeometrySignature
+                or geometryChanged then
+            interaction.cancel(host, "controlled-change")
+            return
+        end
+        radial._radialDial.previewAngle = session.radialPreviewAngle
+        refreshRadial(host, radial)
     end
     if session.swipeIdentity and not findActiveIdentity(host,
             session.swipeIdentity) then
@@ -941,6 +1333,13 @@ function interaction.inspect(host)
                 or session.swipePending and "pending"
                 or session.swipeIdentity and "candidate" or nil,
             swipeDirection = session.swipeDirection,
+            radial = session.radialIdentity,
+            radialPhase = session.radialIdentity
+                and (session.radialMoved and "preview" or "armed") or nil,
+            radialPreviewAngle = session.radialPreviewAngle,
+            radialPreviewIndex = session.radialPreviewIndex,
+            radialAccumulated = session.radialAccumulated,
+            radialOriginEstablished = session.radialPointerAngle ~= nil,
             payloadKind = session.payload and session.payload.kind or nil,
             target = session.lastTarget and session.lastTarget.key or nil,
         } or nil,

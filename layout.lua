@@ -183,6 +183,17 @@ local function measure(node, maxWidth, maxHeight, host)
                     at.y + child.measuredHeight / 2)
             end
         end
+    elseif node.type == "RadialDial" then
+        local largestWidth, largestHeight = 0, 0
+        for _, child in ipairs(node.children) do
+            measure(child, innerMaxWidth, innerMaxHeight, host)
+            largestWidth = math.max(largestWidth, child.measuredWidth)
+            largestHeight = math.max(largestHeight, child.measuredHeight)
+        end
+        local radius = node.props.trackRadius
+            or math.max(largestWidth, largestHeight)
+        naturalWidth = radius * 2 + largestWidth
+        naturalHeight = radius * 2 + largestHeight
     elseif node.type == "Scroll" then
         local child = node.children[1]
         if child then
@@ -207,6 +218,56 @@ local function measure(node, maxWidth, maxHeight, host)
     node.measuredWidth = clamp(width, 0, maxWidth)
     node.measuredHeight = clamp(height, 0, maxHeight)
     return node.measuredWidth, node.measuredHeight
+end
+
+-- Places every keyed dial option around the Host-owned visual angle. Children
+-- move along the track but keep their own upright paint orientation.
+function layout.arrangeRadialDial(node, host)
+    local dial = assert(node._radialDial, "unprepared Frog.RadialDial")
+    local centerX = node.contentX + node.contentWidth / 2
+    local centerY = node.contentY + node.contentHeight / 2
+    local maximum = math.min(node.width, node.height) / 2
+    local measured = {}
+    local largestHalfDiagonal = 0
+    for index, child in ipairs(node.children) do
+        measure(child, node.contentWidth, node.contentHeight, host)
+        local width = resolveSize(child.props.width, node.contentWidth)
+            or child.measuredWidth
+        local height = resolveSize(child.props.height, node.contentHeight)
+            or child.measuredHeight
+        measured[index] = { width = width, height = height }
+        largestHalfDiagonal = math.max(largestHalfDiagonal,
+            math.sqrt((width / 2) ^ 2 + (height / 2) ^ 2))
+    end
+    local trackRadius = node.props.trackRadius
+        or math.max(0, math.min(node.contentWidth, node.contentHeight) / 2
+            - largestHalfDiagonal)
+    local containedMaximum = math.min(
+        maximum,
+        math.min(node.contentWidth, node.contentHeight) / 2
+            - largestHalfDiagonal)
+    assert(trackRadius > 0 and trackRadius <= containedMaximum,
+        "RadialDial trackRadius must keep every option child inside the"
+            .. " arranged circular surface")
+    dial.trackRadius = trackRadius
+    local geometry = { string.format("%.17g", trackRadius) }
+    for index, size in ipairs(measured) do
+        geometry[#geometry + 1] = type(node.children[index].key)
+            .. ":" .. tostring(node.children[index].key)
+        geometry[#geometry + 1] = string.format("%.17g", size.width)
+        geometry[#geometry + 1] = string.format("%.17g", size.height)
+    end
+    dial.geometrySignature = table.concat(geometry, ":")
+    local angle = dial.previewAngle or dial.angle
+    local step = math.pi * 2 / #node.children
+    for index, child in ipairs(node.children) do
+        local childAngle = angle + (index - 1) * step - math.pi / 2
+        local size = measured[index]
+        layout.arrange(child,
+            centerX + math.cos(childAngle) * trackRadius - size.width / 2,
+            centerY + math.sin(childAngle) * trackRadius - size.height / 2,
+            size.width, size.height, host)
+    end
 end
 
 local function alignedStart(align, start, available, size)
@@ -436,6 +497,8 @@ function layout.arrange(node, x, y, width, height, host)
                 }
             end
         end
+    elseif node.type == "RadialDial" then
+        layout.arrangeRadialDial(node, host)
     elseif node.type == "Scroll" then
         layout.arrangeScroll(node, host)
     elseif node.children[1] then

@@ -441,6 +441,31 @@ local Interaction = require("src.frogui.interaction")
 --- owns its own tap instead.
 ---@field [integer] FrogUIElementDescription Exactly one child.
 
+---@class FrogRadialDialProps:FrogUIElementProps
+---@field value number Required controlled numeric value; must occur in values.
+---@field values number[] Required ordered list of at least two unique finite
+--- values.
+---@field onChange fun(value:number)
+--- Called exactly once after a directional tap, completed drag, or focused
+--- keyboard activation, including when the settled value equals the controlled
+--- value; never during movement or cancellation.
+---@field disabled? boolean Removes pointer/focus/key input while preserving layout.
+---@field width? FrogUISize Optional surface width; arranged size must contain
+--- every option footprint around the track.
+---@field height? FrogUISize Optional surface height; arranged size must contain
+--- every option footprint around the track.
+---@field trackRadius? number Visual-only positive radius for option centers;
+--- every option footprint must remain inside the arranged circle.
+---@field sound? FrogUISoundCue Terminal settle cue; defaults to
+--- theme.sounds.dialCommit.
+---@field spinSound? FrogUISoundCue First drag-threshold crossing cue; defaults
+--- to theme.sounds.dialSpin.
+---@field background? FrogUIColor Optional dial-surface fill.
+---@field border? FrogUIColor Optional resting outline.
+---@field borderWidth? number Non-negative resting outline width.
+---@field focusedBorder? FrogUIColor Visible keyboard-focus outline; defaults to the theme focus color.
+---@field [integer] FrogUIElementDescription Exactly one keyed static upright option child per values entry, in matching order.
+
 ---@class FrogScrollProps:FrogUIElementProps
 ---@field axis FrogUIScrollAxis Required retained scrolling axis.
 ---@field bar? boolean Show the built-in touch-sized scrollbar.
@@ -626,6 +651,17 @@ Frog.Pressable = Element.primitive("Pressable")
 --- priority. Thresholds and directional bias are framework-owned.
 ---@type fun(input:FrogHorizontalSwipeProps):FrogUIElementDescription
 Frog.HorizontalSwipe = Element.primitive("HorizontalSwipe")
+
+--- Owns one controlled circular selector with internal angular preview.
+---
+--- Pointer movement orbits keyed option children without rotating them and
+--- never calls application code. A directional tap or completed drag snaps and
+--- calls `onChange(value)` once. A pointer that starts exactly at center and
+--- never becomes a drag is silent, as is cancellation. `padding` and direct
+--- option `offset` are rejected so the circular center stays unambiguous.
+--- Source-ordered Button shortcuts win before the focused dial fallback.
+---@type fun(input:FrogRadialDialProps):FrogUIElementDescription
+Frog.RadialDial = Element.primitive("RadialDial")
 
 --- Retains clipped wheel/touch scrolling along one required axis.
 ---

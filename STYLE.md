@@ -435,6 +435,14 @@ projections, companion style files, or geometry files.
   semantic. Place controls that must never compete with the swipe beside the
   surface, not inside it. Never add threshold props or application transfer
   callbacks.
+- Use `RadialDial` only for one controlled ordered numeric choice. Author one
+  keyed static upright child per value in the same order and keep all other
+  controls as siblings. Application code receives only terminal
+  `onChange(value)`; never expose angles, coordinates, movement callbacks,
+  thresholds, or recognizers. Visible Button shortcuts precede the focused
+  dial fallback. Its private bounce is ornamental paint overflow around a
+  stable circular hit/layout footprint, and F6 must report that scale. Do not
+  pad the dial or offset a direct option child; size the surface and faces.
 - A centered selection rail uses Scroll's declarative `scrollPosition`,
   `snapInterval`, and final `onScrollEnd(position)` seam. Convert that settled
   offset into an actor-owned selected index; do not recreate raw drag sessions,

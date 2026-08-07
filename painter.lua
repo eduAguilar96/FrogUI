@@ -4,6 +4,7 @@
 local Effect = require("src.frogui.effects.runtime")
 local Shader = require("src.frogui.shader")
 local Canvas = require("src.frogui.canvas")
+local Interaction = require("src.frogui.interaction")
 
 local painter = {}
 
@@ -165,6 +166,20 @@ local function styleFor(host, node, inheritedOpacity, inheritedTint)
             style.borderWidth = props.borderWidth or 1
         end
         style.radius = props.radius or button.radius or 5
+    elseif node.type == "RadialDial" then
+        local button = ((host.theme.controls or {}).button or {})
+        style.background = props.background
+            and host:_color(props.background) or nil
+        local border = props.border
+        if host._focusedIdentity == node.identity and not props.disabled then
+            border = props.focusedBorder or button.focusedBorder
+            style.border = border and host:_color(border, "inspectorSelected")
+                or host:_color(nil, "inspectorSelected")
+            style.borderWidth = math.max(2, props.borderWidth or 0)
+        elseif border then
+            style.border = host:_color(border, "border")
+            style.borderWidth = props.borderWidth or 1
+        end
     end
     style.background = faded(tinted(style.background, tint), opacity)
     style.border = faded(tinted(style.border, tint), opacity)
@@ -174,6 +189,22 @@ end
 local function defaultBox(host, node, style)
     local g = graphics()
     if not g then return end
+    if node.type == "RadialDial" then
+        local centerX = node.x + node.width / 2
+        local centerY = node.y + node.height / 2
+        local radius = math.min(node.width, node.height) / 2
+        if style.background then
+            setColor(style.background)
+            g.circle("fill", centerX, centerY, radius)
+        end
+        if style.border and style.borderWidth > 0 then
+            setColor(style.border)
+            g.setLineWidth(style.borderWidth)
+            g.circle("line", centerX, centerY,
+                math.max(0, radius - style.borderWidth / 2))
+        end
+        return
+    end
     if style.background then
         setColor(style.background)
         g.rectangle("fill", node.x, node.y, node.width, node.height,
@@ -700,16 +731,20 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             and node.identity == session.sourceIdentity then return end
     local g = graphics()
     local presentation = node.presentation or {}
+    local radialPresentation = node.type == "RadialDial"
+        and Interaction.radialPresentation(node) or nil
+    local radialScale = radialPresentation and radialPresentation.scale or 1
     if not custom and g then
         local centerX, centerY = node.x + node.width / 2, node.y + node.height / 2
         g.push("all")
         g.translate(presentation.x or 0, presentation.y or 0)
         g.translate(centerX, centerY)
         g.rotate(presentation.rotation or 0)
-        g.scale(presentation.scale or 1)
+        g.scale((presentation.scale or 1) * radialScale)
         g.translate(-centerX, -centerY)
     end
     local style = styleFor(host, node, inheritedOpacity or 1, inheritedTint)
+    style.transform.scale = style.transform.scale * radialScale
     local customDescriptor = custom and customNode(node) or nil
     if custom then
         customCall(custom, "box", customDescriptor, style)
@@ -905,7 +940,12 @@ local function defaultInspector(host, entry, selected)
     setColor(host:_color(nil, selected and "inspectorSelected" or "inspector"))
     g.setLineWidth(selected and 2 or 1)
     local bounds = entry.bounds
-    g.rectangle("line", bounds.x, bounds.y, bounds.width, bounds.height)
+    if entry.inspectionShape and entry.inspectionShape.type == "circle" then
+        local circle = entry.inspectionShape
+        g.circle("line", circle.center.x, circle.center.y, circle.radius)
+    else
+        g.rectangle("line", bounds.x, bounds.y, bounds.width, bounds.height)
+    end
     if selected then
         local font = host:_font("caption")
         if font then g.setFont(font) end
@@ -998,6 +1038,17 @@ local function defaultInspector(host, entry, selected)
             g.print(("shader %s / %s / fallback %s / blend %s"):format(
                     tostring(shaderState.token), tostring(shaderState.status),
                     tostring(shaderState.fallback), tostring(shaderState.blend)),
+                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
+            detailLine = detailLine + 1
+        elseif entry.radialDial then
+            local dial = entry.radialDial
+            g.print(("radial value %s / index %d / angle %.3f / visual %.3f"
+                    .. " / track %.1f / scale %.3f%s%s"):format(
+                    tostring(dial.value), dial.index, dial.angle,
+                    dial.visualAngle, dial.trackRadius or 0,
+                    dial.paintScale or 1,
+                    dial.settling and " / settling" or "",
+                    dial.reducedMotion and " / reduced" or ""),
                 bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
             detailLine = detailLine + 1
         end
@@ -1108,6 +1159,13 @@ local function defaultInteraction(host, state)
                 tostring(session.swipePhase or "candidate"),
                 session.swipeDirection
                     and (" · " .. session.swipeDirection) or "")
+        end
+        if session.radial then
+            lines[#lines + 1] = ("radial dial %s · index %s · angle %s"):format(
+                tostring(session.radialPhase or "armed"),
+                tostring(session.radialPreviewIndex or "-"),
+                session.radialPreviewAngle
+                    and ("%.3f"):format(session.radialPreviewAngle) or "-")
         end
     end
     if state.modal then
