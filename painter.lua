@@ -390,14 +390,84 @@ local function defaultImage(host, node, asset, style, clipState)
     local shape = nodeShape(node, false)
     if style.fit == "cover" then beginClip(clipState, shape) end
     local quad = sourceQuad(asset, style.sourceRect)
+    local scaleX = style.mirror and -geometry.scaleX or geometry.scaleX
     if quad then
-        g.draw(asset, quad, geometry.x, geometry.y, 0,
-            geometry.scaleX, geometry.scaleY)
+        g.draw(asset, quad, geometry.centerX, geometry.centerY, 0,
+            scaleX, geometry.scaleY,
+            geometry.imageWidth / 2, geometry.imageHeight / 2)
     else
-        g.draw(asset, geometry.x, geometry.y, 0,
-            geometry.scaleX, geometry.scaleY)
+        g.draw(asset, geometry.centerX, geometry.centerY, 0,
+            scaleX, geometry.scaleY,
+            geometry.imageWidth / 2, geometry.imageHeight / 2)
     end
     if style.fit == "cover" then endClip(clipState, shape) end
+end
+
+-- Resolves one horizontal sheet frame directly from explicit clock time.
+-- SpriteSheet has no retained playback state: rewinding the clock rewinds art.
+local function spriteSheetGeometry(node, asset)
+    local props = node.props
+    local time = props.clock:now()
+    local frame = math.floor(time * props.fps) % props.frameCount + 1
+    local frameWidth = asset and asset:getWidth() / props.frameCount or 48
+    local frameHeight = asset and asset:getHeight() or 48
+    local geometry = {
+        status = asset and "ready" or "missing",
+        frame = frame,
+        frameCount = props.frameCount,
+        fps = props.fps,
+        time = time,
+        clock = "explicit",
+        fit = props.fit or "contain",
+        filter = props.filter or "nearest",
+        mirror = props.mirror == true,
+        frameWidth = frameWidth,
+        frameHeight = frameHeight,
+    }
+    if asset then
+        geometry.sourceRect = {
+            x = (frame - 1) * frameWidth,
+            y = 0,
+            width = frameWidth,
+            height = frameHeight,
+        }
+        local fitted = imageGeometry(node, asset, geometry.fit,
+            geometry.sourceRect)
+        for key, value in pairs(fitted) do geometry[key] = value end
+    end
+    return geometry
+end
+
+-- Draws one clock-selected horizontal sheet frame and restores the shared
+-- Image object's previous filter even when LÖVE rejects the draw.
+local function defaultSpriteSheet(node, asset, geometry, style, clipState)
+    local g = graphics()
+    if not g then return end
+    if not asset or not asset.getWidth or not asset.getHeight then
+        missingAsset(node, style)
+        return
+    end
+    local previousMin, previousMag, previousAnisotropy
+    if asset.getFilter and asset.setFilter then
+        previousMin, previousMag, previousAnisotropy = asset:getFilter()
+        asset:setFilter(geometry.filter, geometry.filter)
+    end
+    local shape = nodeShape(node, false)
+    if geometry.fit == "cover" then beginClip(clipState, shape) end
+    local ok, reason = pcall(function()
+        local quad = sourceQuad(asset, geometry.sourceRect)
+        local scaleX = geometry.mirror and -geometry.scaleX
+            or geometry.scaleX
+        setColor(style.tint)
+        g.draw(asset, quad, geometry.centerX, geometry.centerY, 0,
+            scaleX, geometry.scaleY,
+            geometry.imageWidth / 2, geometry.imageHeight / 2)
+    end)
+    if geometry.fit == "cover" then endClip(clipState, shape) end
+    if previousMin then
+        asset:setFilter(previousMin, previousMag, previousAnisotropy)
+    end
+    if not ok then error(reason, 0) end
 end
 
 local maskShader
@@ -835,12 +905,27 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
         else
             defaultTiledImage(node, asset, geometry, imageStyle, clipState)
         end
+    elseif node.type == "SpriteSheet" then
+        local spriteStyle = {
+            tint = faded(tinted(host:_color(node.props.tint, nil,
+                { 1, 1, 1, 1 }), style.tint), style.opacity),
+        }
+        local asset = host:_asset(node.props.source)
+        local geometry = spriteSheetGeometry(node, asset)
+        node._spriteSheetGeometry = geometry
+        if custom then
+            customCall(custom, "spriteSheet", customDescriptor,
+                asset, safeCustomValue(geometry), spriteStyle)
+        else
+            defaultSpriteSheet(node, asset, geometry, spriteStyle, clipState)
+        end
     elseif node.type == "Image" then
         local imageStyle = {
             tint = faded(tinted(host:_color(node.props.tint, nil, { 1, 1, 1, 1 }),
                 style.tint), style.opacity),
             fit = node.props.fit or "contain",
             sourceRect = node.props.sourceRect,
+            mirror = node.props.mirror == true,
         }
         local asset = host:_asset(node.props.source)
         if custom then
@@ -1022,6 +1107,17 @@ local function defaultInspector(host, entry, selected)
                     tostring(state.status), state.commandCount or 0,
                     state.transformDepth or 0,
                     localBounds.width or 0, localBounds.height or 0),
+                bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
+            detailLine = detailLine + 1
+        elseif entry.spriteSheet then
+            local sprite = entry.spriteSheet
+            g.print(("sprite %s / frame %d/%d / %.2fs @ %.2f fps"
+                    .. " / %s clock / %s / %s%s"):format(
+                    tostring(sprite.status), sprite.frame or 0,
+                    sprite.frameCount or 0, sprite.time or 0,
+                    sprite.fps or 0, tostring(sprite.clock),
+                    tostring(sprite.fit), tostring(sprite.filter),
+                    sprite.mirror and " / mirrored" or ""),
                 bounds.x + 3, bounds.y + 2 + detailLine * lineHeight)
             detailLine = detailLine + 1
         elseif entry.tiledImage then

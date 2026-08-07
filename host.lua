@@ -22,7 +22,8 @@ local renderingHost = nil
 local PRIMITIVES = {
     Box = true, Row = true, Column = true, Overlay = true,
     EffectLayer = true, PopupText = true, Projectile = true, Flipbook = true,
-    Text = true, Image = true, TiledImage = true, ShaderImage = true,
+    Text = true, Image = true, SpriteSheet = true,
+    TiledImage = true, ShaderImage = true,
     Icon = true, Canvas = true, Button = true, Motion = true,
     Pressable = true, HorizontalSwipe = true, RadialDial = true,
     Scroll = true, Modal = true, Chrome = true,
@@ -101,7 +102,14 @@ local TYPE_PROPS = {
         align = true, fitDown = true,
         outlineWidth = true, outlineColor = true,
     },
-    Image = { source = true, sourceRect = true, fit = true, tint = true },
+    Image = {
+        source = true, sourceRect = true, fit = true, tint = true,
+        mirror = true,
+    },
+    SpriteSheet = {
+        source = true, frameCount = true, fps = true, clock = true,
+        fit = true, mirror = true, filter = true, tint = true,
+    },
     Icon = {
         source = true, sourceRect = true, fit = true, tint = true,
         mirror = true, outline = true,
@@ -283,7 +291,8 @@ local function validatePrimitive(name, children)
         assert(#children == 1, "Frog.ShaderImage accepts exactly one child")
     elseif name == "Text" or name == "PopupText"
             or name == "Projectile" or name == "Flipbook"
-            or name == "Image" or name == "TiledImage"
+            or name == "Image" or name == "SpriteSheet"
+            or name == "TiledImage"
             or name == "Icon" or name == "Canvas" then
         assert(#children == 0, "Frog." .. name .. " does not accept children")
     end
@@ -695,9 +704,9 @@ local function validatePrimitiveProps(self, name, props)
                     name .. " sourceRect must stay inside its source asset")
             end
         end
+        assert(props.mirror == nil or type(props.mirror) == "boolean",
+            name .. " mirror must be a boolean")
         if name == "Icon" then
-            assert(props.mirror == nil or type(props.mirror) == "boolean",
-                "Icon mirror must be a boolean")
             local outline = props.outline
             if outline ~= nil then
                 assert(type(outline) == "table" and getmetatable(outline) == nil,
@@ -820,6 +829,27 @@ local function validatePrimitiveProps(self, name, props)
         assert(props.mirror == nil or type(props.mirror) == "boolean",
             "Flipbook mirror must be a boolean")
         validateEffectPivot(props.anchor, "Flipbook anchor")
+    elseif name == "SpriteSheet" then
+        validateAssetSource(self, props.source, name)
+        assert(finite(props.frameCount) and props.frameCount > 0
+                and props.frameCount % 1 == 0,
+            "SpriteSheet frameCount must be a positive integer")
+        validateNumber(props.fps, "SpriteSheet fps")
+        assert(props.fps and props.fps > 0,
+            "SpriteSheet fps must be positive")
+        assert(Clock.isClock(props.clock),
+            "SpriteSheet clock must come from Frog.clock")
+        oneOf(props.fit, { "contain", "cover", "stretch" },
+            "SpriteSheet fit")
+        assert(props.mirror == nil or type(props.mirror) == "boolean",
+            "SpriteSheet mirror must be a boolean")
+        oneOf(props.filter, { "nearest", "linear" },
+            "SpriteSheet filter")
+        local asset = self:_asset(props.source)
+        if asset then
+            assert(asset:getWidth() % props.frameCount == 0,
+                "SpriteSheet source width must divide exactly by frameCount")
+        end
     elseif name == "TiledImage" then
         validateAssetSource(self, props.source, name)
         validateNumber(props.tileWidth, "TiledImage tileWidth", 1)
@@ -1072,6 +1102,19 @@ local function nodeEntry(node, depth, visibleBounds)
             filter = node.props.filter or "linear",
             clock = node.props.clock and "explicit" or "none",
         })
+    elseif node.type == "SpriteSheet" then
+        entry.spriteSheet = deepCopy(node._spriteSheetGeometry or {
+            status = "pending",
+            frame = math.floor(node.props.clock:now() * node.props.fps)
+                % node.props.frameCount + 1,
+            frameCount = node.props.frameCount,
+            fps = node.props.fps,
+            time = node.props.clock:now(),
+            clock = "explicit",
+            fit = node.props.fit or "contain",
+            filter = node.props.filter or "nearest",
+            mirror = node.props.mirror == true,
+        })
     elseif node.type == "ShaderImage" then
         entry.shaderImage = deepCopy(node._shaderInspection or {
             token = node.props.shader,
@@ -1208,7 +1251,8 @@ end
 local function concreteInspectionHit(node)
     if node.type == "Text" or node.type == "PopupText"
             or node.type == "Projectile" or node.type == "Flipbook"
-            or node.type == "Image" or node.type == "TiledImage"
+            or node.type == "Image" or node.type == "SpriteSheet"
+            or node.type == "TiledImage"
             or node.type == "Icon" or node.type == "Canvas"
             or node.type == "Button" or node.type == "Pressable"
             or node.type == "HorizontalSwipe"

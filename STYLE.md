@@ -278,7 +278,32 @@ projections, companion style files, or geometry files.
   resize reprojection, missing-art fallback, and reduced-motion settlement
   belong to the three effect primitives; owners publish only collection changes.
 
-## 10. Tiled art and shaders remain ordinary composition
+## 10. Sprite, tiled art, and shaders remain ordinary composition
+
+- Use `Frog.SpriteSheet` for a continuously looping horizontal strip. Declare
+  the semantic asset, exact `frameCount`, positive `fps`, and explicit
+  `Frog.clock` at the visible call site; one frame owns intrinsic layout size.
+- Choose the SpriteSheet clock deliberately. Raw idle motion normally uses an
+  owner-advanced raw clock; execution or feedback animation receives that
+  explicit clock instead. Reduced motion never silently substitutes a clock.
+- SpriteSheet animation is a pure clock sample. Do not add playback keys,
+  callbacks, completion events, per-frame rerenders, or component-owned frame
+  state. Use finite `Flipbook` effects when completion/contact semantics matter.
+- Keep horizontal sheet files exactly divisible by `frameCount`. Prefer the
+  default `nearest` filter for pixel art; request `linear` explicitly when the
+  authored asset needs it. Never mutate a cached Image's filter in application
+  code.
+- `Frog.Image { mirror = true }` is the RGB-preserving horizontal flip. Keep
+  `Frog.Icon` for alpha-mask recoloring; mirroring is not a reason to use Icon.
+- Application figures accept semantic `facing = "left"|"right"`; callers do
+  not calculate `mirror`. `CharacterFigure` and `MobFigure` keep that mapping
+  beside their own authored crop/sprite correction.
+- Give `MobFigure` the explicit clock whose policy the owner intends. Battle
+  will pass raw time for authored idle sheets; execution speed must never be
+  inferred from component location or a global.
+- `HealthBar` paints only authoritative static segments. The readable HP copy,
+  name, and later Motion feedback remain visible parent composition;
+  `ShieldBadge` is a sibling with a stable slot, not a hidden bar decoration.
 
 - Use `Frog.TiledImage` for repeated authored art. The component declares its
   semantic asset token, arranged rectangle, tile size, repeat axis, phase,

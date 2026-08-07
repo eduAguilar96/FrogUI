@@ -330,6 +330,20 @@ local Interaction = require("src.frogui.interaction")
 ---@field sourceRect? FrogUIImageSourceRect
 ---@field fit? FrogUIImageFit Sizing policy; defaults to `contain`.
 ---@field tint? FrogUIColor Optional multiplicative tint.
+---@field mirror? boolean Mirror horizontally while preserving authored RGB.
+
+---@class FrogSpriteSheetProps:FrogUIElementProps
+---@field source FrogUIAssetSource Required horizontal sprite-sheet source.
+---@field frameCount integer Required positive number of equal-width frames.
+---@field fps number Required positive playback rate in frames per second.
+---@field clock FrogUIClock Required explicit clock; the owner chooses and advances
+--- raw, feedback, or execution time semantics.
+---@field fit? FrogUIImageFit Sizing policy for one frame; defaults to `contain`.
+--- If only width or height is authored, the other follows frame aspect ratio
+--- and is preserved as its implicit partner through parent stretch layout.
+---@field mirror? boolean Mirror the selected frame horizontally.
+---@field filter? FrogUIImageFilter Temporary asset filter; defaults to `nearest`.
+---@field tint? FrogUIColor Optional multiplicative tint.
 
 ---@class FrogTiledImageProps:FrogUIElementProps
 ---@field source FrogUIAssetSource Required authored image source.
@@ -588,9 +602,17 @@ Frog.Text = Element.primitive("Text")
 
 --- Draws an authored image without replacing its RGB colors.
 ---
---- `fit` accepts `contain`, `cover`, or `stretch`.
+--- `fit` accepts `contain`, `cover`, or `stretch`; `mirror` flips horizontally.
 ---@type fun(input:FrogImageProps):FrogUIElementDescription
 Frog.Image = Element.primitive("Image")
+
+--- Loops equal-width frames from one horizontal sprite sheet.
+---
+--- `frameCount`, `fps`, and an explicit Frog.clock are required. Frame choice
+--- is a pure function of clock time, so the primitive has no completion hooks
+--- or hidden playback state. `filter` defaults to `nearest`.
+---@type fun(input:FrogSpriteSheetProps):FrogUIElementDescription
+Frog.SpriteSheet = Element.primitive("SpriteSheet")
 
 --- Repeats one authored image across its arranged rectangle.
 ---

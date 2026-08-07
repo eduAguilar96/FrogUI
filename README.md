@@ -81,6 +81,7 @@ the Host, so unknown props fail loudly.
 | `Frog.Overlay` | Give every child the same region; paint in listed order | many |
 | `Frog.Text` | Draw text using a theme font/color role | none |
 | `Frog.Image` | Draw an authored image while preserving its RGB | none |
+| `Frog.SpriteSheet` | Loop equal-width frames from one horizontal strip | none |
 | `Frog.TiledImage` | Repeat authored art with explicit phase/clock motion | none |
 | `Frog.ShaderImage` | Apply a semantic shader and safe fallback to one paint leaf | exactly one |
 | `Frog.Icon` | Draw and recolor an alpha silhouette | none |
@@ -103,7 +104,8 @@ the Host, so unknown props fail loudly.
 `Image` and `Icon` accept an optional source-pixel
 `sourceRect = { x, y, width, height }`. The crop controls intrinsic size and
 `fit`, stays deterministic when an asset is unavailable, and must remain
-inside a loaded asset. This keeps sprite-sheet/cropped-art math declarative.
+inside a loaded asset. Both also accept `mirror = true`; Image retains authored
+RGB while Icon continues to recolor from alpha.
 
 `Overlay` is the important SpellCard primitive. Its first child is painted
 first (behind); later children paint on top. It is used for visual layers, not
@@ -312,7 +314,46 @@ see its stable resource id, frame id, and mounted state. The generic gallery
 story demonstrates pause, resize retention, snapshot publication, and explicit
 resource reset without importing game code.
 
-## Tiled images and shader wrappers
+## Images, sprite sheets, and shader wrappers
+
+`Frog.SpriteSheet` is the small, stateless choice for an infinitely looping
+horizontal animation. The source must contain exactly `frameCount` equal-width
+frames. Its width must divide exactly at mount when the asset is available:
+
+```lua
+Frog.SpriteSheet {
+    source = "mob-idle",
+    frameCount = 6,
+    fps = 8,
+    clock = props.rawClock,
+    width = 144,
+    height = 168,
+    fit = "contain",
+    mirror = props.facing == "left",
+}
+```
+
+`frameCount`, positive `fps`, and a `Frog.clock` are required. The selected
+frame is exactly `floor(clock:now() * fps) % frameCount + 1`; changing or
+rewinding the clock changes the visible frame without rerendering. There is no
+playback key, callback, completion event, or hidden lifetime. This primitive is
+for continuous idle/environment animation; finite timed feedback still belongs
+in `Flipbook`.
+
+One frame supplies intrinsic layout size. When only `width` or `height` is
+authored, FrogUI derives the other dimension from that frame's aspect ratio;
+this makes height-owned character art readable without a parallel width
+calculation. That implicit partner behaves like an authored dimension through
+parent measurement and default stretch alignment, so a constrained parent does
+not distort the frame. `fit` uses the same `contain`, `cover`, and `stretch` policies as
+Image, `mirror` flips horizontally, `tint`
+multiplies the authored RGB, and `filter` is `nearest` by default or explicitly
+`linear`. FrogUI restores the shared asset's previous filter after drawing.
+Missing declared art paints the standard crossed-box fallback while clock/frame
+inspection remains available. Custom painters receive
+`spriteSheet(node, asset, geometry, style)` with a sanitized node, current frame
+geometry, and resolved tint. F6 reports frame, time, FPS, frame count, fit,
+filter, mirror, clock ownership, and asset status.
 
 `Frog.TiledImage` is a normal image leaf that repeats inside its arranged
 rectangle. It owns tile coverage, one shared seam-free phase, clipping, filter
@@ -378,10 +419,10 @@ FrogUI logs the first failure for a semantic shader token, caches the failure,
 and keeps the Host usable. F6 shows tile coverage/phase/clock and shader token,
 status, uniforms, blend, and fallback.
 
-Reduced motion does not secretly stop a TiledImage or shader clock. The owner
-defines that policy by advancing or pausing its explicit clock in `useFrame`.
-This makes raw ambience, feedback time, and execution time visibly different
-choices instead of framework guesses.
+Reduced motion does not secretly stop a SpriteSheet, TiledImage, or shader
+clock. The owner defines that policy by advancing or pausing its explicit clock
+in `useFrame`. This makes raw ambience, feedback time, and execution time
+visibly different choices instead of framework guesses.
 
 ## Bounded Canvas drawing
 

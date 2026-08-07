@@ -94,6 +94,9 @@ local function imageSize(node, host)
     if rect then return rect.width, rect.height end
     local image = host:_asset(node.props.source)
     if image and image.getWidth and image.getHeight then
+        if node.type == "SpriteSheet" then
+            return image:getWidth() / node.props.frameCount, image:getHeight()
+        end
         return image:getWidth(), image:getHeight()
     end
     return 48, 48
@@ -135,7 +138,8 @@ local function measure(node, maxWidth, maxHeight, host)
         naturalWidth, naturalHeight = 0, 0
     elseif node.type == "Text" or node.type == "PopupText" then
         naturalWidth, naturalHeight = textSize(node, innerMaxWidth, innerMaxHeight, host)
-    elseif node.type == "Image" or node.type == "TiledImage"
+    elseif node.type == "Image" or node.type == "SpriteSheet"
+            or node.type == "TiledImage"
             or node.type == "Icon" then
         naturalWidth, naturalHeight = imageSize(node, host)
     elseif node.type == "Canvas" then
@@ -213,10 +217,30 @@ local function measure(node, maxWidth, maxHeight, host)
         end
     end
 
+    local derivedWidth, derivedHeight = false, false
+    if node.type == "SpriteSheet" and naturalWidth > 0 and naturalHeight > 0 then
+        if width ~= nil and height == nil then
+            local contentWidth = math.max(0, width - pad.left - pad.right)
+            height = contentWidth * naturalHeight / naturalWidth
+                + pad.top + pad.bottom
+            derivedHeight = true
+        elseif height ~= nil and width == nil then
+            local contentHeight = math.max(0, height - pad.top - pad.bottom)
+            width = contentHeight * naturalWidth / naturalHeight
+                + pad.left + pad.right
+            derivedWidth = true
+        end
+    end
     width = width or naturalWidth + pad.left + pad.right
     height = height or naturalHeight + pad.top + pad.bottom
-    node.measuredWidth = clamp(width, 0, maxWidth)
-    node.measuredHeight = clamp(height, 0, maxHeight)
+    -- A derived SpriteSheet axis is the implicit authored partner of the
+    -- explicit axis. Preserve it like childBox preserves an explicit size, so
+    -- a centered overflow-visible figure cannot be silently distorted by its
+    -- parent's measurement ceiling.
+    node._derivedWidth = derivedWidth and width or nil
+    node._derivedHeight = derivedHeight and height or nil
+    node.measuredWidth = node._derivedWidth or clamp(width, 0, maxWidth)
+    node.measuredHeight = node._derivedHeight or clamp(height, 0, maxHeight)
     return node.measuredWidth, node.measuredHeight
 end
 
@@ -319,7 +343,8 @@ local function arrangeWrappedRow(node, host)
             local width = allocations[index]
             local height = child.measuredHeight
             local align = node.props.align or "stretch"
-            if align == "stretch" and child.props.height == nil then
+            if align == "stretch" and child.props.height == nil
+                    and child._derivedHeight == nil then
                 height = line.height
             end
             local childY = alignedStart(align, y, line.height, height)
@@ -367,8 +392,11 @@ local function arrangeFlow(node, horizontal, host)
         else measure(child, contentCross, main, host) end
         local cross = horizontal and child.measuredHeight or child.measuredWidth
         local align = node.props.align or "stretch"
-        if align == "stretch" and (horizontal and child.props.height == nil
-                or not horizontal and child.props.width == nil) then
+        if align == "stretch"
+                and (horizontal and child.props.height == nil
+                    and child._derivedHeight == nil
+                or not horizontal and child.props.width == nil
+                    and child._derivedWidth == nil) then
             cross = contentCross
         end
         local crossStart = alignedStart(align,
@@ -397,8 +425,14 @@ local function childBox(node, child, host)
     else
         align, justify = align or "stretch", justify or "stretch"
     end
-    if align == "stretch" and child.props.width == nil then width = node.contentWidth end
-    if justify == "stretch" and child.props.height == nil then height = node.contentHeight end
+    if align == "stretch" and child.props.width == nil
+            and child._derivedWidth == nil then
+        width = node.contentWidth
+    end
+    if justify == "stretch" and child.props.height == nil
+            and child._derivedHeight == nil then
+        height = node.contentHeight
+    end
     local x = alignedStart(align, node.contentX, node.contentWidth, width)
     local y = alignedStart(justify, node.contentY, node.contentHeight, height)
     layout.arrange(child, x, y, width, height, host)
