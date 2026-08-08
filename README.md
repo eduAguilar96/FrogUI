@@ -551,7 +551,10 @@ source ordering and guarantee one finite lifetime per entry.
 
 The public variants are `float`, `impact`, and `notice`. Their defaults live in
 [`effects/popup_text.lua`](effects/popup_text.lua); component code may override
-`duration`, upward `distance`, or `delay` without rebuilding the recipe. Text
+`duration`, upward `distance`, or `delay` without rebuilding the recipe. Use
+`travel = { x?, y? }` instead of `distance` for an explicit directional path.
+`sound = "semantic.cue"` emits that cue once with the same keyed lifetime, so
+the visible transient and its audio cannot be authored as drifting siblings. Text
 styling uses the same roles, colors, fitting, wrapping, and outline props as
 `Frog.Text`. The `impact` default also owns the shipped combat-number treatment:
 an impact font role, dark rim, drop shadow, and a brighter band across the top
@@ -1014,6 +1017,20 @@ Frog.Box {
 }
 ```
 
+When the state change is already represented by one keyed `Frog.PopupText`,
+put the cue directly on that popup. It is shorthand for the same keyed juice
+rule and cannot replay on an ordinary rerender:
+
+```lua
+Frog.PopupText {
+    key = event.address,
+    text = "=12",
+    at = event.origin,
+    travel = { x = 120, y = 0 },
+    sound = "battle.execution.damage.1.total",
+}
+```
+
 The key must be a stable scalar that changes once per semantic occurrence. A
 rerender with the same key does not replay the sound. A typed event reaction
 may instead use `do_ = Frog.play("claimed")` on an element with that named
@@ -1246,9 +1263,10 @@ Stateful actors/processes and FrogUI framework core require a restart because
 their live instance schema cannot be safely replaced.
 
 Battle follows the same split. Ordinary Battle components hot-reload.
-`battle/dice_show_tuning.lua` is a named `presentation-data` table, so numeric
-DiceShow edits reload without restarting the gallery; press R or wait for the
-next roll to see one coherent new launch and timeline. Structural edits to
+`battle/dice_show_tuning.lua` and `battle/execution_tuning.lua` are named
+`presentation-data` tables, so numeric DiceShow/execution edits reload without
+restarting the gallery; press R or wait for the next semantic beat to see one
+coherent updated sequence. Structural edits to
 `dice_show.lua`, `dice_show_layer.lua`, `playback.lua`, or `visible_state.lua`
 remain restart-only.
 

@@ -232,8 +232,12 @@ local Interaction = require("src.frogui.interaction")
 ---@field duration? number Non-negative animation duration; defaults are owned
 --- by the chosen variant.
 ---@field distance? number Non-negative upward travel override.
+---@field travel? FrogUIOffset Explicit directional travel from `at`; mutually
+--- exclusive with `distance` and useful for formula or combat trajectories.
 ---@field delay? number Non-negative hold before animation begins.
 ---@field clock? FrogUIClock Explicit Frog.clock; omitted popups use Host raw time.
+---@field sound? FrogUISoundCue Optional semantic cue emitted once with this
+--- keyed popup; `false` explicitly requests silence.
 ---@field onComplete? fun() Exactly-once callback after the keyed lifetime
 --- settles; normally sends a typed removal action.
 ---@field width? FrogUISize Optional centered text box width.

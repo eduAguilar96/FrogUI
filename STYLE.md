@@ -179,6 +179,10 @@ projections, companion style files, or geometry files.
 - A new or renamed primitive prop updates four places in the same change: the
   inline LuaLS contract, Host validation, the code-reading guide, and a focused
   framework regression.
+- `PopupText.travel = { x?, y? }` declares a directional trajectory from its
+  authored `at` point; use `distance` for the ordinary straight-up float, never
+  both. `PopupText.sound` attaches one semantic cue to the same keyed lifetime,
+  so a visible transient and its audio cannot drift into separate owners.
 - Semantic font roles remain the default. Use `Text.fontScale` for deliberate
   local emphasis and keep the multiplier beside its component owner; change the
   theme role only when every semantic user should change.

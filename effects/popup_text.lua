@@ -40,8 +40,10 @@ local ALLOWED_PROPS = {
     variant = true,
     duration = true,
     distance = true,
+    travel = true,
     delay = true,
     clock = true,
+    sound = true,
     onComplete = true,
     width = true,
     height = true,
@@ -94,6 +96,17 @@ local function validateProps(props)
         assert(value == nil or finite(value) and value >= 0,
             "Frog.PopupText " .. name .. " must be finite and non-negative")
     end
+    assert(not (props.distance ~= nil and props.travel ~= nil),
+        "Frog.PopupText distance and travel are mutually exclusive")
+    if props.travel ~= nil then
+        assert(type(props.travel) == "table"
+                and getmetatable(props.travel) == nil,
+            "Frog.PopupText travel must be a plain { x?, y? } offset")
+        for name, value in pairs(props.travel) do
+            assert((name == "x" or name == "y") and finite(value),
+                "Frog.PopupText travel only accepts finite x/y values")
+        end
+    end
     for _, name in ipairs({ "shine", "shineSplit" }) do
         local value = props[name]
         assert(value == nil or finite(value) and value >= 0 and value <= 1,
@@ -101,6 +114,9 @@ local function validateProps(props)
     end
     assert(props.clock == nil or Clock.isClock(props.clock),
         "Frog.PopupText clock must come from Frog.clock")
+    assert(props.sound == nil or props.sound == false
+            or type(props.sound) == "string" and props.sound ~= "",
+        "Frog.PopupText sound must be a non-empty cue or false")
     assert(props.onComplete == nil or type(props.onComplete) == "function",
         "Frog.PopupText onComplete must be a function")
     assert(#props.children == 0,
@@ -111,10 +127,11 @@ end
 local function lifetimeRecipe(props, variant)
     local duration = props.duration or variant.duration
     local distance = props.distance or variant.distance
+    local travel = props.travel or { y = -distance }
     local fadeDelay = duration * 0.42
     local recipe = Juice.parallel {
         Juice.tween {
-            to = { y = -distance },
+            to = { x = travel.x or 0, y = travel.y or 0 },
             duration = duration,
             ease = "out_quad",
         },
@@ -127,6 +144,12 @@ local function lifetimeRecipe(props, variant)
             },
         },
     }
+    if props.sound then
+        recipe = Juice.parallel {
+            recipe,
+            Juice.sound { cue = props.sound },
+        }
+    end
     if (props.delay or 0) > 0 then
         recipe = Juice.sequence { Juice.delay(props.delay), recipe }
     end
