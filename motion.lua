@@ -64,6 +64,18 @@ local function setValue(values, name, value)
     values[name] = name == "tint" and copyColor(value) or value
 end
 
+local function sameValues(left, right)
+    for name in pairs(DEFAULT_VALUES) do
+        if not sameValue(left[name], right[name]) then return false end
+    end
+    return sameValue(left.tint, right.tint)
+end
+
+local function sameGeometry(left, right)
+    return left.x == right.x and left.y == right.y
+        and left.rotation == right.rotation and left.scale == right.scale
+end
+
 local function sortedKeys(input)
     local out = {}
     for key in pairs(input) do out[#out + 1] = key end
@@ -584,8 +596,14 @@ end
 -- Starts a named recipe after a typed element reaction accepts an event.
 function motion.play(instance, instruction, host)
     assert(Juice.isPlay(instruction), "element reaction do_ must be Frog.play")
+    local previous = instance.node and instance.node.presentation
     start(instance, instruction.name, host)
-    if instance.node then instance.node.presentation = copyValues(instance.values) end
+    if instance.node then
+        instance.node.presentation = copyValues(instance.values)
+        if not previous or not sameGeometry(previous, instance.values) then
+            motion.invalidate(host._tree)
+        end
+    end
 end
 
 local function runnerOrder(left, right)
@@ -620,6 +638,60 @@ composeActive = function(instance)
     return values
 end
 
+-- Samples one active owner. Keeping this separate lets updateAll preserve
+-- pending-completion delivery while idle owners take a plain conditional fast
+-- path with no runner/value allocations.
+local function updateActive(instance, host, completions)
+    local ordered = {}
+    for name, runner in pairs(instance.active) do
+        ordered[#ordered + 1] = { name = name, runner = runner }
+    end
+    table.sort(ordered, runnerOrder)
+    local values = copyValues(instance.settled)
+    local completed = {}
+    for _, entry in ipairs(ordered) do
+        local runner = entry.runner
+        local elapsed = runner.clock:now() - runner.startedAt
+        if elapsed < runner.previous then runner.previous = -1e-12 end
+        emitFeedback(runner.recipe, runner.previous, elapsed, host)
+        applyRunner(values, runner, elapsed)
+        runner.previous = elapsed
+        if elapsed >= duration(runner.recipe) then
+            completed[#completed + 1] = entry
+        end
+    end
+    for _, entry in ipairs(completed) do
+        local runner = entry.runner
+        local result = finalValues(runner.recipe, runner.base)
+        for property, mode in pairs(writtenProperties(runner.recipe)) do
+            if mode ~= "add" then
+                setValue(instance.settled, property, result[property])
+            end
+        end
+        instance.active[entry.name] = nil
+        local binding = instance.recipes[entry.name]
+        if binding and binding.onComplete
+                and binding.key == runner.bindingKey then
+            completions[#completions + 1] = {
+                callback = binding.onComplete,
+                identity = instance.identity,
+                lifetime = instance.lifetime,
+                name = entry.name,
+                key = runner.bindingKey,
+                order = runner.order,
+                source = instance.source,
+            }
+        end
+    end
+    local visualChanged = not sameValues(instance.values, values)
+    local geometryChanged = not sameGeometry(instance.values, values)
+    instance.values = values
+    if instance.node and visualChanged then
+        instance.node.presentation = copyValues(instance.values)
+        if geometryChanged then motion.invalidate(host._tree) end
+    end
+end
+
 -- Advances every committed runner from its selected absolute clock. Active
 -- names compose in stable start order: additive shake sums; later replacement
 -- recipes own properties they share with earlier recipes.
@@ -650,48 +722,13 @@ function motion.updateAll(instances, host)
             end
             instance.pendingCompletions[name] = nil
         end
-        local ordered = {}
-        for name, runner in pairs(instance.active) do
-            ordered[#ordered + 1] = { name = name, runner = runner }
-        end
-        table.sort(ordered, runnerOrder)
-        local values = copyValues(instance.settled)
-        local completed = {}
-        for _, entry in ipairs(ordered) do
-            local runner = entry.runner
-            local elapsed = runner.clock:now() - runner.startedAt
-            if elapsed < runner.previous then runner.previous = -1e-12 end
-            emitFeedback(runner.recipe, runner.previous, elapsed, host)
-            applyRunner(values, runner, elapsed)
-            runner.previous = elapsed
-            if elapsed >= duration(runner.recipe) then completed[#completed + 1] = entry end
+        -- Most mounted juice owners are idle most of the time. Pending
+        -- completions above still deliver, but an idle owner does not need a
+        -- runner array, value snapshot, or replacement presentation table.
+        if next(instance.active) ~= nil then
+            updateActive(instance, host, completions)
             changed = true
         end
-        for _, entry in ipairs(completed) do
-            local runner = entry.runner
-            local result = finalValues(runner.recipe, runner.base)
-            for property, mode in pairs(writtenProperties(runner.recipe)) do
-                if mode ~= "add" then
-                    setValue(instance.settled, property, result[property])
-                end
-            end
-            instance.active[entry.name] = nil
-            local binding = instance.recipes[entry.name]
-            if binding and binding.onComplete
-                    and binding.key == runner.bindingKey then
-                completions[#completions + 1] = {
-                    callback = binding.onComplete,
-                    identity = instance.identity,
-                    lifetime = instance.lifetime,
-                    name = entry.name,
-                    key = runner.bindingKey,
-                    order = runner.order,
-                    source = instance.source,
-                }
-            end
-        end
-        instance.values = values
-        if instance.node then instance.node.presentation = copyValues(instance.values) end
     end
     table.sort(completions, function(left, right)
         if left.order ~= right.order then return left.order < right.order end
@@ -751,39 +788,39 @@ function motion.inspect(instance)
     }
 end
 
-local function multiply(left, right)
-    return {
-        a = left.a * right.a + left.c * right.b,
-        b = left.b * right.a + left.d * right.b,
-        c = left.a * right.c + left.c * right.d,
-        d = left.b * right.c + left.d * right.d,
-        tx = left.a * right.tx + left.c * right.ty + left.tx,
-        ty = left.b * right.tx + left.d * right.ty + left.ty,
-    }
-end
-
-local function localMatrix(node)
+local function localMatrix(node, out)
     local value = node.presentation or DEFAULT_VALUES
     local scale = value.scale or 1
     local rotation = value.rotation or 0
     local cosine, sine = math.cos(rotation) * scale, math.sin(rotation) * scale
     local centerX, centerY = node.x + node.width / 2, node.y + node.height / 2
-    return {
-        a = cosine, b = sine, c = -sine, d = cosine,
-        tx = (value.x or 0) + centerX - cosine * centerX + sine * centerY,
-        ty = (value.y or 0) + centerY - sine * centerX - cosine * centerY,
-    }
+    out = out or {}
+    out.a, out.b, out.c, out.d = cosine, sine, -sine, cosine
+    out.tx = (value.x or 0) + centerX - cosine * centerX + sine * centerY
+    out.ty = (value.y or 0) + centerY - sine * centerX - cosine * centerY
+    return out
 end
 
-local function inverse(value)
+local function multiply(left, right, out)
+    out = out or {}
+    out.a = left.a * right.a + left.c * right.b
+    out.b = left.b * right.a + left.d * right.b
+    out.c = left.a * right.c + left.c * right.d
+    out.d = left.b * right.c + left.d * right.d
+    out.tx = left.a * right.tx + left.c * right.ty + left.tx
+    out.ty = left.b * right.tx + left.d * right.ty + left.ty
+    return out
+end
+
+local function inverse(value, out)
     local determinant = value.a * value.d - value.b * value.c
     if math.abs(determinant) < 1e-12 then return nil end
-    return {
-        a = value.d / determinant, b = -value.b / determinant,
-        c = -value.c / determinant, d = value.a / determinant,
-        tx = (value.c * value.ty - value.d * value.tx) / determinant,
-        ty = (value.b * value.tx - value.a * value.ty) / determinant,
-    }
+    out = out or {}
+    out.a, out.b = value.d / determinant, -value.b / determinant
+    out.c, out.d = -value.c / determinant, value.a / determinant
+    out.tx = (value.c * value.ty - value.d * value.tx) / determinant
+    out.ty = (value.b * value.tx - value.a * value.ty) / determinant
+    return out
 end
 
 local function point(matrix, x, y)
@@ -793,25 +830,34 @@ end
 
 local IDENTITY = { a = 1, b = 0, c = 0, d = 1, tx = 0, ty = 0 }
 
+local function writeBounds(out, x1, y1, x2, y2, x3, y3, x4, y4)
+    out = out or {}
+    local minimumX = math.min(x1, x2, x3, x4)
+    local maximumX = math.max(x1, x2, x3, x4)
+    local minimumY = math.min(y1, y2, y3, y4)
+    local maximumY = math.max(y1, y2, y3, y4)
+    out.x, out.y = minimumX, minimumY
+    out.width, out.height = maximumX - minimumX, maximumY - minimumY
+    return out
+end
+
 local function transformNode(node, parent)
     -- Portals are painted and hit-tested in the Host root plane. Their
     -- authored tree position must not inherit Motion or Scroll transforms.
     if node._portal then parent = IDENTITY end
     node.presentation = node.presentation or copyValues()
-    node._localTransform = localMatrix(node)
-    node._worldTransform = multiply(parent or IDENTITY, node._localTransform)
-    node._inverseWorldTransform = inverse(node._worldTransform)
+    node._localTransform = localMatrix(node, node._localTransform)
+    node._worldTransform = multiply(parent or IDENTITY, node._localTransform,
+        node._worldTransform)
+    node._inverseWorldTransform = inverse(node._worldTransform,
+        node._inverseWorldTransform)
     local x1, y1 = point(node._worldTransform, node.x, node.y)
     local x2, y2 = point(node._worldTransform, node.x + node.width, node.y)
     local x3, y3 = point(node._worldTransform, node.x, node.y + node.height)
     local x4, y4 = point(node._worldTransform,
         node.x + node.width, node.y + node.height)
-    node._visualBounds = {
-        x = math.min(x1, x2, x3, x4),
-        y = math.min(y1, y2, y3, y4),
-        width = math.max(x1, x2, x3, x4) - math.min(x1, x2, x3, x4),
-        height = math.max(y1, y2, y3, y4) - math.min(y1, y2, y3, y4),
-    }
+    node._visualBounds = writeBounds(node._visualBounds,
+        x1, y1, x2, y2, x3, y3, x4, y4)
     local cx1, cy1 = point(node._worldTransform, node.contentX, node.contentY)
     local cx2, cy2 = point(node._worldTransform,
         node.contentX + node.contentWidth, node.contentY)
@@ -819,18 +865,37 @@ local function transformNode(node, parent)
         node.contentX, node.contentY + node.contentHeight)
     local cx4, cy4 = point(node._worldTransform,
         node.contentX + node.contentWidth, node.contentY + node.contentHeight)
-    node._visualContentBounds = {
-        x = math.min(cx1, cx2, cx3, cx4),
-        y = math.min(cy1, cy2, cy3, cy4),
-        width = math.max(cx1, cx2, cx3, cx4) - math.min(cx1, cx2, cx3, cx4),
-        height = math.max(cy1, cy2, cy3, cy4) - math.min(cy1, cy2, cy3, cy4),
-    }
-    for _, child in ipairs(node.children) do transformNode(child, node._worldTransform) end
+    node._visualContentBounds = writeBounds(node._visualContentBounds,
+        cx1, cy1, cx2, cy2, cx3, cy3, cx4, cy4)
+    for _, child in ipairs(node.children) do
+        transformNode(child, node._worldTransform)
+    end
 end
 
--- Recomputes paint/input/F6 transforms after layout or a clock tick.
+-- Marks the committed root's geometry stale. Motion and the two retained
+-- layout mutators (Scroll and RadialDial) call this at their exact mutation
+-- point. Callers pass the Host root explicitly so the tree remains acyclic.
+-- Dirtiness is intentionally one root bit: dirty frames recompute the whole
+-- tree in place; clean frames do no recursive work. This is smaller and easier
+-- to audit than a generic dirty-subtree system.
+function motion.invalidate(root)
+    if not root then return end
+    root._motionTransformDirty = true
+end
+
+-- Recomputes paint/input/F6 transforms only after layout or a clock tick
+-- invalidates committed geometry. Matrix and bounds tables retain identity so
+-- an active frame updates numbers without recreating five tables per node.
 function motion.transformTree(root)
-    if root then transformNode(root, IDENTITY) end
+    if not root then return false end
+    if root._motionTransformReady and not root._motionTransformDirty then
+        return false
+    end
+    transformNode(root, IDENTITY)
+    root._motionTransformRevision = (root._motionTransformRevision or 0) + 1
+    root._motionTransformReady = true
+    root._motionTransformDirty = false
+    return true
 end
 
 -- Converts a virtual pointer into a node's untransformed layout space.

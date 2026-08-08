@@ -156,6 +156,7 @@ end
 -- same pointer frame without asking application code to rerender.
 local function refreshRadial(host, node)
     require("src.frogui.layout").arrangeRadialDial(node, host)
+    Motion.invalidate(host._tree)
     host:_transformTree()
     host:_refreshCommittedRefs()
 end
@@ -819,6 +820,7 @@ function interaction.pointerMove(host, x, y, pointerId)
             session.lastAxis, session.lastMoveTime = axis, now
             if scroll.node then
                 require("src.frogui.layout").arrangeScroll(scroll.node, host)
+                Motion.invalidate(host._tree)
                 host:_transformTree()
                 host:_refreshCommittedRefs()
             end
@@ -915,6 +917,7 @@ function interaction.pointerUp(host, x, y, pointerId, button)
                     math.floor(scroll.offset / interval + 0.5) * interval))
                 scroll.velocity = 0
                 require("src.frogui.layout").arrangeScroll(node, host)
+                Motion.invalidate(host._tree)
                 host:_transformTree()
                 host:_refreshCommittedRefs()
             end
@@ -1016,7 +1019,10 @@ function interaction.update(host, dt)
             if nextOffset == 0 or nextOffset == scroll.extent then scroll.velocity = 0
             else scroll.velocity = scroll.velocity * factor end
             scroll.offset = nextOffset
-            if scroll.node then require("src.frogui.layout").arrangeScroll(scroll.node, host) end
+            if scroll.node then
+                require("src.frogui.layout").arrangeScroll(scroll.node, host)
+                Motion.invalidate(host._tree)
+            end
         elseif math.abs(scroll.velocity or 0) <= 0.1 then
             scroll.velocity = 0
         end
@@ -1071,6 +1077,7 @@ function interaction.wheelMoved(host, dx, dy)
         scroll.offset + amount * interaction.WHEEL_STEP))
     scroll.velocity = 0
     require("src.frogui.layout").arrangeScroll(node, host)
+    Motion.invalidate(host._tree)
     host:_transformTree()
     host:_refreshCommittedRefs()
     return true
@@ -1099,6 +1106,7 @@ function interaction.revealFocus(host, identity)
             elseif high > viewHigh then scroll.offset = scroll.offset + high - viewHigh end
             scroll.offset = math.max(0, math.min(scroll.extent, scroll.offset))
             require("src.frogui.layout").arrangeScroll(node, host)
+            Motion.invalidate(host._tree)
         end
     end
     host:_transformTree()
