@@ -1025,7 +1025,9 @@ messages, or renders emit no sound.
 Follow all five steps in one change:
 
 1. Add the `.wav` under `assets/audio/`. Replacement UI assets keep the
-   existing `ui_*` filename convention; components still never mention it.
+   existing `ui_*` filename convention; gameplay cues may instead reuse a
+   shared pool in `src/presentation/audio_assets.lua`. Components never mention
+   either filename form.
 2. Add one semantic cue entry to `CATALOG` in
    [`src/presentation/audio.lua`](../presentation/audio.lua). Name the event
    (`shop.purchase`, `spell.execute`), not the file (`ui_hold_drop`). A cue may
@@ -1237,12 +1239,18 @@ and follow helpers only as needed.
 ## Development loop
 
 Run `love . --frogui gallery`. F6 shows the resolved component/primitive tree.
-F7 cycles viewport sizes. Saving the presentation theme, gallery/card story,
-or a static component under `src/presentation/spell_card/`, `spellbook/`, or
-`relic/` reloads it; F5 forces that scoped set. This includes the ordinary
-`SpellbookOverlay` and shared bag surface, but not the stateful Spellbook actor.
-A bad reload keeps the last good tree. Stateful actor modules and framework
-core require a restart.
+F7 cycles viewport sizes. The gallery polls watched file contents and reloads
+saved presentation theme/data tables, stories, and stateless components in
+place; F5 forces that same scoped set. A bad reload keeps the last good tree.
+Stateful actors/processes and FrogUI framework core require a restart because
+their live instance schema cannot be safely replaced.
+
+Battle follows the same split. Ordinary Battle components hot-reload.
+`battle/dice_show_tuning.lua` is a named `presentation-data` table, so numeric
+DiceShow edits reload without restarting the gallery; press R or wait for the
+next roll to see one coherent new launch and timeline. Structural edits to
+`dice_show.lua`, `dice_show_layer.lua`, `playback.lua`, or `visible_state.lua`
+remain restart-only.
 
 The generic committed-ref, process, transient-text, travel/frame, world-art,
 and bounded-Canvas stories appear before the foundation story. The world-art story composes the

@@ -353,9 +353,11 @@ projections, companion style files, or geometry files.
   the process, advances it from explicit pause/speed policy, and gives Canvas
   only a read-only draw callback. Both the stateful process and its mounted
   owner are restart-only; the ordinary screen and tray components stay live.
-  Cosmetic tumble faces are
-  addressed fake values; the canonical `DiceTray` remains the only component
-  that receives a newly revealed authoritative face and owns its arrival cue.
+  Its plainly named `dice_show_tuning.lua` numeric policy is presentation data
+  and hot-reloads in place; use the next roll for one coherent tuned sequence.
+  Cosmetic tumble faces are addressed fake values; the canonical `DiceTray`
+  remains the only component that receives a newly revealed authoritative face
+  and owns its arrival cue.
 - A live resize retargets a retained Canvas process. Do not remount it, restart
   its clock, repeat its feedback key, or expose future semantic state merely to
   make custom drawing easier.
