@@ -349,6 +349,16 @@ projections, companion style files, or geometry files.
 - Keep `withTransform` scopes shallow and visible. Extract a lower camelCase
   painter helper when one complete visible shape makes the callback easier to
   scan. Do not create a companion painter/geometry file to hide a whole screen.
+- DiceShow demonstrates the complete pattern: a keyed `DiceShowLayer` retains
+  the process, advances it from explicit pause/speed policy, and gives Canvas
+  only a read-only draw callback. Both the stateful process and its mounted
+  owner are restart-only; the ordinary screen and tray components stay live.
+  Cosmetic tumble faces are
+  addressed fake values; the canonical `DiceTray` remains the only component
+  that receives a newly revealed authoritative face and owns its arrival cue.
+- A live resize retargets a retained Canvas process. Do not remount it, restart
+  its clock, repeat its feedback key, or expose future semantic state merely to
+  make custom drawing easier.
 - Treat Canvas clipping and geometry safety as separate contracts. Author raw
   shape bounds, rounded corners, line widths, translations, and nested scale
   within the leaf-relative/hard ceilings enforced by `canvas.lua`; never copy
