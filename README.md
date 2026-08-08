@@ -1251,3 +1251,11 @@ canopy in `ShaderImage`, pauses its explicit clock with 1, toggles the wrapper
 with 2, and reflows with F7. The Canvas story paints a rotating abstract marker
 over a real Button, pauses its caller-owned clock with 1, and reflows with F7.
 F6 shows each primitive contract in the exact tree.
+
+The Battle sequence ends with a real `BattlePlayback` lifecycle story after
+the static field/chrome story. It starts paused; Space plays or pauses the
+ordered event trace, R rebuilds round zero with the same captured seed, and F7
+rearranges the existing owner. The trace is deliberately bounded and displays
+only committed event addresses. `src/presentation/battle/playback.lua` is a
+stateful process, so edits to it require restarting the gallery; Battle's
+ordinary visible component files remain hot-reloadable.
