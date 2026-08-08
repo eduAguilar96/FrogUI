@@ -57,6 +57,8 @@ local function tinted(color, tint)
 end
 
 local WHITE = { 1, 1, 1, 1 }
+local BLACK = { 0, 0, 0, 1 }
+local ICON_OUTLINE = { 0, 0, 0, 0.85 }
 
 -- Writes one multiplied color into caller-owned scratch. The default Painter
 -- keeps this scratch on each committed node; custom painters still receive
@@ -82,13 +84,13 @@ local function writePaintColor(out, color, tint, opacity)
 end
 
 -- Mixes one resolved text color toward white for the impact highlight pass.
-local function brightened(color, amount)
-    return {
-        color[1] + (1 - color[1]) * amount,
-        color[2] + (1 - color[2]) * amount,
-        color[3] + (1 - color[3]) * amount,
-        color[4],
-    }
+local function writeBrightened(out, color, amount)
+    out = out or {}
+    out[1] = color[1] + (1 - color[1]) * amount
+    out[2] = color[2] + (1 - color[2]) * amount
+    out[3] = color[3] + (1 - color[3]) * amount
+    out[4] = color[4]
+    return out
 end
 
 local function beginClip(state, drawShape)
@@ -116,15 +118,27 @@ local function endClip(state, drawShape)
 end
 
 local function nodeShape(node, content)
-    return function()
-        local g = graphics()
-        if content then
-            g.rectangle("fill", node.contentX, node.contentY,
-                node.contentWidth, node.contentHeight)
-        else
-            g.rectangle("fill", node.x, node.y, node.width, node.height)
+    local scratch = node._paintScratch
+    if not scratch then
+        scratch = {}
+        node._paintScratch = scratch
+    end
+    local key = content and "contentShape" or "boundsShape"
+    if not scratch[key] then
+        -- The callback reads the committed node at invocation time, so Scroll
+        -- rearrangement and in-place Motion bounds remain current. Retaining
+        -- it on the node also gives stencil begin/end one stable identity.
+        scratch[key] = function()
+            local g = graphics()
+            if content then
+                g.rectangle("fill", node.contentX, node.contentY,
+                    node.contentWidth, node.contentHeight)
+            else
+                g.rectangle("fill", node.x, node.y, node.width, node.height)
+            end
         end
     end
+    return scratch[key]
 end
 
 local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch)
@@ -244,6 +258,68 @@ local function defaultScratch(node)
     return scratch
 end
 
+-- Default leaf styles reuse storage beneath their committed node. Custom
+-- painters take the fresh branch so retained user arguments can never alias
+-- or mutate the default Painter's next frame.
+local function leafScratch(node, custom, name)
+    if custom then return {}, {} end
+    local root = defaultScratch(node)
+    local leaves = root.leaves
+    if not leaves then
+        leaves = {}
+        root.leaves = leaves
+    end
+    local entry = leaves[name]
+    if not entry then
+        entry = { style = {} }
+        leaves[name] = entry
+    end
+    return entry.style, entry
+end
+
+local function textStyleFor(host, node, inherited, custom)
+    local style, scratch = leafScratch(node, custom, "text")
+    scratch.color = writePaintColor(scratch.color,
+        host:_color(node.props.color, "text"),
+        inherited.tint, inherited.opacity)
+    scratch.outlineColor = writePaintColor(scratch.outlineColor,
+        host:_color(node.props.outlineColor, nil, BLACK),
+        inherited.tint, inherited.opacity)
+    scratch.shadowColor = writePaintColor(scratch.shadowColor,
+        host:_color(node.props.shadowColor, nil, BLACK),
+        inherited.tint, inherited.opacity)
+    style.color = scratch.color
+    style.font = node._resolvedFont or host:_font(node.props.role)
+    style.role = node.props.role or "body"
+    style.outlineWidth = node.props.outlineWidth or 0
+    style.outlineColor = scratch.outlineColor
+    style.shadowOffset = node.props.shadowOffset or 0
+    style.shadowColor = scratch.shadowColor
+    style.shine = node.props.shine or 0
+    style.shineSplit = node.props.shineSplit or 0.5
+    return style
+end
+
+local function imageStyleFor(host, node, inherited, custom, name)
+    local style, scratch = leafScratch(node, custom, name)
+    scratch.tint = writePaintColor(scratch.tint,
+        host:_color(node.props.tint, nil, WHITE),
+        inherited.tint, inherited.opacity)
+    style.tint = scratch.tint
+    return style, scratch
+end
+
+local function sourceRectFor(node, custom)
+    local rect = node.props.sourceRect
+    if not rect or not custom then return rect end
+    return {
+        x = rect.x,
+        y = rect.y,
+        width = rect.width,
+        height = rect.height,
+    }
+end
+
 local function defaultBox(host, node, style)
     local g = graphics()
     if not g then return end
@@ -276,6 +352,30 @@ local function defaultBox(host, node, style)
     end
 end
 
+local OUTLINE_DIRECTIONS = {
+    { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 },
+    { -0.7, -0.7 }, { 0.7, -0.7 },
+    { -0.7, 0.7 }, { 0.7, 0.7 },
+}
+
+local function stampText(g, node, value, align, dx, dy)
+    g.printf(value, node.x + (dx or 0), node.y + (dy or 0),
+        math.max(0, node.width), align)
+end
+
+local function textShineShape(node, shineSplit)
+    local scratch = defaultScratch(node)
+    scratch.shineSplit = shineSplit
+    if not scratch.shineShape then
+        scratch.shineShape = function()
+            local g = graphics()
+            g.rectangle("fill", node.x, node.y,
+                node.width, node.height * scratch.shineSplit)
+        end
+    end
+    return scratch.shineShape
+end
+
 local function defaultText(host, node, style, clipState)
     local g = graphics()
     if not g then return end
@@ -285,37 +385,29 @@ local function defaultText(host, node, style, clipState)
     if align == "start" then align = "left"
     elseif align == "end" then align = "right" end
     local value = tostring(node.props.text or "")
-    local function stamp(dx, dy)
-        g.printf(value, node.x + (dx or 0), node.y + (dy or 0),
-            math.max(0, node.width), align)
-    end
     if style.shadowOffset > 0 then
         setColor(style.shadowColor)
-        stamp(style.shadowOffset, style.shadowOffset)
+        stampText(g, node, value, align,
+            style.shadowOffset, style.shadowOffset)
     end
     if style.outlineWidth > 0 then
         local width = style.outlineWidth
         setColor(style.outlineColor)
-        for _, offset in ipairs({
-            { -width, 0 }, { width, 0 }, { 0, -width }, { 0, width },
-            { -width * 0.7, -width * 0.7 },
-            { width * 0.7, -width * 0.7 },
-            { -width * 0.7, width * 0.7 },
-            { width * 0.7, width * 0.7 },
-        }) do
-            stamp(offset[1], offset[2])
+        for _, direction in ipairs(OUTLINE_DIRECTIONS) do
+            stampText(g, node, value, align,
+                direction[1] * width, direction[2] * width)
         end
     end
     setColor(style.color)
-    stamp(0, 0)
+    stampText(g, node, value, align, 0, 0)
     if style.shine > 0 and style.shineSplit > 0 then
-        local shineShape = function()
-            g.rectangle("fill", node.x, node.y,
-                node.width, node.height * style.shineSplit)
-        end
+        local shineShape = textShineShape(node, style.shineSplit)
         beginClip(clipState, shineShape)
-        setColor(brightened(style.color, style.shine))
-        stamp(0, 0)
+        local scratch = defaultScratch(node)
+        scratch.shineColor = writeBrightened(
+            scratch.shineColor, style.color, style.shine)
+        setColor(scratch.shineColor)
+        stampText(g, node, value, align, 0, 0)
         endClip(clipState, shineShape)
     end
 end
@@ -445,7 +537,7 @@ local function defaultImage(host, node, asset, style, clipState)
     end
     local geometry = imageGeometry(node, asset, style.fit, style.sourceRect)
     setColor(style.tint)
-    local shape = nodeShape(node, false)
+    local shape = style.fit == "cover" and nodeShape(node, false) or nil
     if style.fit == "cover" then beginClip(clipState, shape) end
     local quad = sourceQuad(asset, style.sourceRect)
     local scaleX = style.mirror and -geometry.scaleX or geometry.scaleX
@@ -498,6 +590,16 @@ end
 
 -- Draws one clock-selected horizontal sheet frame and restores the shared
 -- Image object's previous filter even when LÖVE rejects the draw.
+local function drawSpriteSheetFrame(g, asset, geometry, style)
+    local quad = sourceQuad(asset, geometry.sourceRect)
+    local scaleX = geometry.mirror and -geometry.scaleX
+        or geometry.scaleX
+    setColor(style.tint)
+    g.draw(asset, quad, geometry.centerX, geometry.centerY, 0,
+        scaleX, geometry.scaleY,
+        geometry.imageWidth / 2, geometry.imageHeight / 2)
+end
+
 local function defaultSpriteSheet(node, asset, geometry, style, clipState)
     local g = graphics()
     if not g then return end
@@ -510,17 +612,10 @@ local function defaultSpriteSheet(node, asset, geometry, style, clipState)
         previousMin, previousMag, previousAnisotropy = asset:getFilter()
         asset:setFilter(geometry.filter, geometry.filter)
     end
-    local shape = nodeShape(node, false)
+    local shape = geometry.fit == "cover" and nodeShape(node, false) or nil
     if geometry.fit == "cover" then beginClip(clipState, shape) end
-    local ok, reason = pcall(function()
-        local quad = sourceQuad(asset, geometry.sourceRect)
-        local scaleX = geometry.mirror and -geometry.scaleX
-            or geometry.scaleX
-        setColor(style.tint)
-        g.draw(asset, quad, geometry.centerX, geometry.centerY, 0,
-            scaleX, geometry.scaleY,
-            geometry.imageWidth / 2, geometry.imageHeight / 2)
-    end)
+    local ok, reason = pcall(
+        drawSpriteSheetFrame, g, asset, geometry, style)
     if geometry.fit == "cover" then endClip(clipState, shape) end
     if previousMin then
         asset:setFilter(previousMin, previousMag, previousAnisotropy)
@@ -547,6 +642,20 @@ end
 -- Icon is the semantic silhouette primitive: unlike Image it deliberately
 -- ignores source RGB and recolors from alpha. This keeps black legacy glyphs
 -- and white authored glyphs on one predictable path.
+local function stampIcon(g, asset, quad, geometry, scaleX, dx, dy)
+    if quad then
+        g.draw(asset, quad, geometry.centerX + (dx or 0),
+            geometry.centerY + (dy or 0), 0,
+            scaleX, geometry.scaleY,
+            geometry.imageWidth / 2, geometry.imageHeight / 2)
+    else
+        g.draw(asset, geometry.centerX + (dx or 0),
+            geometry.centerY + (dy or 0), 0,
+            scaleX, geometry.scaleY,
+            geometry.imageWidth / 2, geometry.imageHeight / 2)
+    end
+end
+
 local function defaultIcon(host, node, asset, style, clipState)
     local g = graphics()
     if not g then return end
@@ -557,39 +666,21 @@ local function defaultIcon(host, node, asset, style, clipState)
     local geometry = imageGeometry(node, asset, style.fit, style.sourceRect)
     local quad = sourceQuad(asset, style.sourceRect)
     local scaleX = style.mirror and -geometry.scaleX or geometry.scaleX
-    local function stamp(dx, dy)
-        if quad then
-            g.draw(asset, quad, geometry.centerX + (dx or 0),
-                geometry.centerY + (dy or 0), 0,
-                scaleX, geometry.scaleY,
-                geometry.imageWidth / 2, geometry.imageHeight / 2)
-        else
-            g.draw(asset, geometry.centerX + (dx or 0),
-                geometry.centerY + (dy or 0), 0,
-                scaleX, geometry.scaleY,
-                geometry.imageWidth / 2, geometry.imageHeight / 2)
-        end
-    end
 
-    local shape = nodeShape(node, false)
+    local shape = style.fit == "cover" and nodeShape(node, false) or nil
     if style.fit == "cover" then beginClip(clipState, shape) end
     local previousShader = g.getShader and g.getShader() or nil
     g.setShader(alphaMaskShader())
     if style.outline and style.outline.width > 0 then
         local width = style.outline.width
         setColor(style.outline.color)
-        for _, offset in ipairs({
-            { -width, 0 }, { width, 0 }, { 0, -width }, { 0, width },
-            { -width * 0.7, -width * 0.7 },
-            { width * 0.7, -width * 0.7 },
-            { -width * 0.7, width * 0.7 },
-            { width * 0.7, width * 0.7 },
-        }) do
-            stamp(offset[1], offset[2])
+        for _, direction in ipairs(OUTLINE_DIRECTIONS) do
+            stampIcon(g, asset, quad, geometry, scaleX,
+                direction[1] * width, direction[2] * width)
         end
     end
     setColor(style.tint)
-    stamp(0, 0)
+    stampIcon(g, asset, quad, geometry, scaleX, 0, 0)
     g.setShader(previousShader)
     if style.fit == "cover" then endClip(clipState, shape) end
 end
@@ -662,6 +753,16 @@ local function tiledGeometry(node, asset)
 end
 
 -- Clips tiles to one leaf while preserving any surrounding shader and filter.
+local function drawTiles(g, asset, geometry)
+    local scaleX = geometry.tileWidth / asset:getWidth()
+    local scaleY = geometry.tileHeight / asset:getHeight()
+    for _, y in ipairs(geometry.rows) do
+        for _, x in ipairs(geometry.columns) do
+            g.draw(asset, x, y, 0, scaleX, scaleY)
+        end
+    end
+end
+
 local function defaultTiledImage(node, asset, geometry, style, clipState)
     local g = graphics()
     if not g or not asset then return end
@@ -675,15 +776,7 @@ local function defaultTiledImage(node, asset, geometry, style, clipState)
     beginClip(clipState, nodeShape(node, false))
     if activeShader then g.setShader(activeShader) end
     setColor(style.tint)
-    local ok, reason = pcall(function()
-        local scaleX = geometry.tileWidth / asset:getWidth()
-        local scaleY = geometry.tileHeight / asset:getHeight()
-        for _, y in ipairs(geometry.rows) do
-            for _, x in ipairs(geometry.columns) do
-                g.draw(asset, x, y, 0, scaleX, scaleY)
-            end
-        end
-    end)
+    local ok, reason = pcall(drawTiles, g, asset, geometry)
     if activeShader then g.setShader() end
     endClip(clipState, nodeShape(node, false))
     if activeShader then g.setShader(activeShader) end
@@ -852,7 +945,19 @@ local function customNode(node)
     }
 end
 
-local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
+local drawNode
+
+-- Recurses without allocating one closure per primitive per frame. Shader
+-- error isolation calls this same helper through pcall, preserving its exact
+-- child push/pop and fallback behavior.
+local function drawChildren(host, node, custom, style, clipState, portalRoot)
+    for _, child in ipairs(node.children) do
+        drawNode(host, child, custom, style.opacity, style.tint,
+            clipState, portalRoot)
+    end
+end
+
+drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
         clipState, portalRoot)
     if node._portal and node ~= portalRoot then return end
     local session = host._interactionSession
@@ -928,34 +1033,20 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             defaultFlipbook(host, node, node._effect, effectStyle)
         end
     elseif node.type == "Text" or node.type == "PopupText" then
-        local textStyle = {
-            color = faded(tinted(host:_color(node.props.color, "text"),
-                style.tint), style.opacity),
-            font = node._resolvedFont or host:_font(node.props.role),
-            role = node.props.role or "body",
-            outlineWidth = node.props.outlineWidth or 0,
-            outlineColor = faded(tinted(host:_color(node.props.outlineColor, nil,
-                { 0, 0, 0, 1 }), style.tint), style.opacity),
-            shadowOffset = node.props.shadowOffset or 0,
-            shadowColor = faded(tinted(host:_color(node.props.shadowColor, nil,
-                { 0, 0, 0, 1 }), style.tint), style.opacity),
-            shine = node.props.shine or 0,
-            shineSplit = node.props.shineSplit or 0.5,
-        }
+        local textStyle = textStyleFor(host, node, style, custom)
         if custom then
             customCall(custom, "text", customDescriptor,
                 node.props.text or "", textStyle)
         else
-            local shape = nodeShape(node, false)
+            local shape = node.props.maxLines and g
+                and nodeShape(node, false) or nil
             if node.props.maxLines and g then beginClip(clipState, shape) end
             defaultText(host, node, textStyle, clipState)
             if node.props.maxLines and g then endClip(clipState, shape) end
         end
     elseif node.type == "TiledImage" then
-        local imageStyle = {
-            tint = faded(tinted(host:_color(node.props.tint, nil,
-                { 1, 1, 1, 1 }), style.tint), style.opacity),
-        }
+        local imageStyle = imageStyleFor(
+            host, node, style, custom, "tiledImage")
         local asset = host:_asset(node.props.source)
         local geometry = tiledGeometry(node, asset)
         node._tileGeometry = geometry
@@ -966,10 +1057,8 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             defaultTiledImage(node, asset, geometry, imageStyle, clipState)
         end
     elseif node.type == "SpriteSheet" then
-        local spriteStyle = {
-            tint = faded(tinted(host:_color(node.props.tint, nil,
-                { 1, 1, 1, 1 }), style.tint), style.opacity),
-        }
+        local spriteStyle = imageStyleFor(
+            host, node, style, custom, "spriteSheet")
         local asset = host:_asset(node.props.source)
         local geometry = spriteSheetGeometry(node, asset)
         node._spriteSheetGeometry = geometry
@@ -980,32 +1069,39 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
             defaultSpriteSheet(node, asset, geometry, spriteStyle, clipState)
         end
     elseif node.type == "Image" then
-        local imageStyle = {
-            tint = faded(tinted(host:_color(node.props.tint, nil, { 1, 1, 1, 1 }),
-                style.tint), style.opacity),
-            fit = node.props.fit or "contain",
-            sourceRect = node.props.sourceRect,
-            mirror = node.props.mirror == true,
-        }
+        local imageStyle = imageStyleFor(
+            host, node, style, custom, "image")
+        imageStyle.fit = node.props.fit or "contain"
+        imageStyle.sourceRect = sourceRectFor(node, custom)
+        imageStyle.mirror = node.props.mirror == true
         local asset = host:_asset(node.props.source)
         if custom then
             customCall(custom, "image", customDescriptor, asset, imageStyle)
         else defaultImage(host, node, asset, imageStyle, clipState) end
     elseif node.type == "Icon" then
         local outline = node.props.outline
-        local iconStyle = {
-            tint = faded(tinted(host:_color(node.props.tint, nil, { 1, 1, 1, 1 }),
-                style.tint), style.opacity),
-            fit = node.props.fit or "contain",
-            sourceRect = node.props.sourceRect,
-            mirror = node.props.mirror == true,
-            alphaMask = true,
-            outline = outline and {
-                width = outline.width or 1,
-                color = faded(tinted(host:_color(outline.color, nil,
-                    { 0, 0, 0, 0.85 }), style.tint), style.opacity),
-            } or nil,
-        }
+        local iconStyle, iconScratch = imageStyleFor(
+            host, node, style, custom, "icon")
+        iconStyle.fit = node.props.fit or "contain"
+        iconStyle.sourceRect = sourceRectFor(node, custom)
+        iconStyle.mirror = node.props.mirror == true
+        iconStyle.alphaMask = true
+        if outline then
+            local outlineStyle = iconScratch.outline
+            if not outlineStyle then
+                outlineStyle = {}
+                iconScratch.outline = outlineStyle
+            end
+            iconScratch.outlineColor = writePaintColor(
+                iconScratch.outlineColor,
+                host:_color(outline.color, nil, ICON_OUTLINE),
+                style.tint, style.opacity)
+            outlineStyle.width = outline.width or 1
+            outlineStyle.color = iconScratch.outlineColor
+            iconStyle.outline = outlineStyle
+        else
+            iconStyle.outline = nil
+        end
         local asset = host:_asset(node.props.source)
         if custom then
             customCall(custom, "icon", customDescriptor, asset, iconStyle)
@@ -1014,27 +1110,23 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
 
     local clipped = node.type == "Scroll" or node.props.clip
         or node.props.overflow == "clip"
-    local contentShape = nodeShape(node, true)
+    local contentShape = clipped and not custom and g
+        and nodeShape(node, true) or nil
     if clipped and not custom and g then beginClip(clipState, contentShape) end
-    local function drawChildren()
-        for _, child in ipairs(node.children) do
-            drawNode(host, child, custom, style.opacity, style.tint,
-                clipState, portalRoot)
-        end
-    end
     if node.type == "ShaderImage" then
         if custom then
             node._shaderInspection = Shader.inspect(host, node)
             customCall(custom, "shaderImage", customDescriptor,
                 node._shaderInspection)
-            drawChildren()
+            drawChildren(host, node, custom, style, clipState, portalRoot)
         else
             local previousShader = g.getShader and g.getShader() or nil
             local previousBlend, previousAlpha = g.getBlendMode()
             local active = Shader.activate(host, node)
             node._shaderInspection = Shader.inspect(host, node)
             if active then
-                local ok, reason = pcall(drawChildren)
+                local ok, reason = pcall(drawChildren,
+                    host, node, custom, style, clipState, portalRoot)
                 if not ok then
                     -- The validated child is one paint leaf, so its unmatched
                     -- drawNode push is the only graphics frame to unwind.
@@ -1044,17 +1136,19 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
                     g.setBlendMode(previousBlend, previousAlpha)
                     node._shaderInspection = Shader.inspect(host, node)
                     if (node.props.fallback or "plain") == "plain" then
-                        drawChildren()
+                        drawChildren(host, node, custom, style,
+                            clipState, portalRoot)
                     end
                 end
             elseif (node.props.fallback or "plain") == "plain" then
                 g.setShader(previousShader)
                 g.setBlendMode(previousBlend, previousAlpha)
-                drawChildren()
+                drawChildren(host, node, custom, style,
+                    clipState, portalRoot)
             end
         end
     else
-        drawChildren()
+        drawChildren(host, node, custom, style, clipState, portalRoot)
     end
     if clipped and not custom and g then endClip(clipState, contentShape) end
     if node.type == "Scroll" and node.props.bar and node._scroll
