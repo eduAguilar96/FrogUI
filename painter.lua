@@ -56,6 +56,31 @@ local function tinted(color, tint)
     }
 end
 
+local WHITE = { 1, 1, 1, 1 }
+
+-- Writes one multiplied color into caller-owned scratch. The default Painter
+-- keeps this scratch on each committed node; custom painters still receive
+-- fresh per-draw descriptors and styles.
+local function writeTint(out, color, tint)
+    out = out or {}
+    color = color or WHITE
+    tint = tint or WHITE
+    out[1] = (color[1] or color.r or 1) * (tint[1] or tint.r or 1)
+    out[2] = (color[2] or color.g or 1) * (tint[2] or tint.g or 1)
+    out[3] = (color[3] or color.b or 1) * (tint[3] or tint.b or 1)
+    out[4] = (color[4] or color.a or 1) * (tint[4] or tint.a or 1)
+    return out
+end
+
+-- Combines tint and opacity in one pass instead of allocating intermediate
+-- tinted and faded colors for every primitive on every draw.
+local function writePaintColor(out, color, tint, opacity)
+    if not color then return nil end
+    out = writeTint(out, color, tint)
+    out[4] = out[4] * opacity
+    return out
+end
+
 -- Mixes one resolved text color toward white for the impact highlight pass.
 local function brightened(color, amount)
     return {
@@ -102,88 +127,121 @@ local function nodeShape(node, content)
     end
 end
 
-local function styleFor(host, node, inheritedOpacity, inheritedTint)
+local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch)
     local props = node.props
     local presentation = node.presentation or {}
     local authoredOpacity = node.type ~= "Motion" and node.type ~= "PopupText"
         and type(props.opacity) == "number" and props.opacity or 1
     local opacity = inheritedOpacity * authoredOpacity * (presentation.opacity or 1)
-    local tint = tinted(inheritedTint or { 1, 1, 1, 1 }, presentation.tint)
-    local style = {
-        background = props.background and host:_color(props.background) or nil,
-        border = props.border and host:_color(props.border) or nil,
-        borderWidth = props.borderWidth or (props.border and 1 or 0),
-        radius = props.radius or 0,
-        opacity = opacity,
-        tint = tint,
-        transform = {
-            x = presentation.x or 0,
-            y = presentation.y or 0,
-            rotation = presentation.rotation or 0,
-            scale = presentation.scale or 1,
-            bounds = node._visualBounds,
-            world = node._worldTransform,
-        },
-    }
+    local retainedScratch = scratch ~= nil
+    scratch = scratch or {}
+    local style = scratch.style
+    if not style then
+        style = { transform = {} }
+        scratch.style = style
+    end
+    local tint = writeTint(scratch.tint, inheritedTint, presentation.tint)
+    scratch.tint = tint
+    local background = props.background and host:_color(props.background) or nil
+    local border = props.border and host:_color(props.border) or nil
+    style.borderWidth = props.borderWidth or (props.border and 1 or 0)
+    style.radius = props.radius or 0
+    style.opacity = opacity
+    style.tint = tint
+    local transform = style.transform
+    transform.x = presentation.x or 0
+    transform.y = presentation.y or 0
+    transform.rotation = presentation.rotation or 0
+    transform.scale = presentation.scale or 1
+    if retainedScratch then
+        transform.bounds = node._visualBounds
+        transform.world = node._worldTransform
+    else
+        local bounds = node._visualBounds
+        transform.bounds = bounds and {
+            x = bounds.x,
+            y = bounds.y,
+            width = bounds.width,
+            height = bounds.height,
+        } or nil
+        local world = node._worldTransform
+        transform.world = world and {
+            a = world.a,
+            b = world.b,
+            c = world.c,
+            d = world.d,
+            tx = world.tx,
+            ty = world.ty,
+        } or nil
+    end
     if node.type == "Button" then
         local button = ((host.theme.controls or {}).button or {})
-        local background = props.background or button.background
-        local border = props.border or button.border
+        background = props.background or button.background
+        border = props.border or button.border
         if props.disabled then
             background = props.background or button.disabled
-            style.background = host:_color(background,
-                "buttonDisabled")
+            background = host:_color(background, "buttonDisabled")
         elseif host._pressedIdentity == node.identity then
             background = props.pressedBackground or props.background
                 or button.pressed
             border = props.pressedBorder or props.border or button.border
-            style.background = host:_color(background,
-                "buttonPressed")
+            background = host:_color(background, "buttonPressed")
         elseif host._focusedIdentity == node.identity then
             background = props.focusedBackground or props.background
                 or button.focused or button.hover
             border = props.focusedBorder or button.focusedBorder
                 or props.hoverBorder or props.border or button.border
-            style.background = host:_color(background,
-                "buttonFocused")
+            background = host:_color(background, "buttonFocused")
         elseif props.selected then
             background = props.selectedBackground or button.selected
                 or props.background
             border = props.selectedBorder or props.border or button.border
-            style.background = host:_color(background,
-                "buttonSelected")
+            background = host:_color(background, "buttonSelected")
         elseif host._hoveredIdentity == node.identity then
             background = props.hoverBackground or props.background
                 or button.hover
             border = props.hoverBorder or props.border or button.border
-            style.background = host:_color(background,
-                "buttonHover")
+            background = host:_color(background, "buttonHover")
         else
-            style.background = host:_color(background, "button")
+            background = host:_color(background, "button")
         end
         if border then
-            style.border = host:_color(border, "border")
+            border = host:_color(border, "border")
             style.borderWidth = props.borderWidth or 1
         end
         style.radius = props.radius or button.radius or 5
     elseif node.type == "RadialDial" then
         local button = ((host.theme.controls or {}).button or {})
-        style.background = props.background
+        background = props.background
             and host:_color(props.background) or nil
-        local border = props.border
+        border = props.border
         if host._focusedIdentity == node.identity and not props.disabled then
             border = props.focusedBorder or button.focusedBorder
-            style.border = border and host:_color(border, "inspectorSelected")
+            border = border and host:_color(border, "inspectorSelected")
                 or host:_color(nil, "inspectorSelected")
             style.borderWidth = math.max(2, props.borderWidth or 0)
         elseif border then
-            style.border = host:_color(border, "border")
+            border = host:_color(border, "border")
             style.borderWidth = props.borderWidth or 1
         end
     end
-    style.background = faded(tinted(style.background, tint), opacity)
-    style.border = faded(tinted(style.border, tint), opacity)
+    style.background = writePaintColor(
+        scratch.background, background, tint, opacity)
+    style.border = writePaintColor(scratch.border, border, tint, opacity)
+    if style.background then scratch.background = style.background end
+    if style.border then scratch.border = style.border end
     return style
+end
+
+-- Default painting owns reusable ephemeral style storage on the committed
+-- node. It carries no semantic state and disappears with that candidate.
+local function defaultScratch(node)
+    local scratch = node._paintScratch
+    if not scratch then
+        scratch = {}
+        node._paintScratch = scratch
+    end
+    return scratch
 end
 
 local function defaultBox(host, node, style)
@@ -698,7 +756,8 @@ local function preflightNode(host, node, inheritedOpacity, inheritedTint,
     local session = host._interactionSession
     if session and session.claimed == "drag"
             and node.identity == session.sourceIdentity then return nil end
-    local style = styleFor(host, node, inheritedOpacity or 1, inheritedTint)
+    local style = styleFor(host, node, inheritedOpacity or 1, inheritedTint,
+        defaultScratch(node))
     if node.type == "Canvas" then
         local commands, inspection = Canvas.record(node.props.draw,
             node.width, node.height, function(color)
@@ -813,7 +872,8 @@ local function drawNode(host, node, custom, inheritedOpacity, inheritedTint,
         g.scale((presentation.scale or 1) * radialScale)
         g.translate(-centerX, -centerY)
     end
-    local style = styleFor(host, node, inheritedOpacity or 1, inheritedTint)
+    local style = styleFor(host, node, inheritedOpacity or 1, inheritedTint,
+        not custom and defaultScratch(node) or nil)
     style.transform.scale = style.transform.scale * radialScale
     local customDescriptor = custom and customNode(node) or nil
     if custom then
