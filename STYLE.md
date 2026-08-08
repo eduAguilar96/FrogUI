@@ -186,6 +186,14 @@ projections, companion style files, or geometry files.
 - Semantic font roles remain the default. Use `Text.fontScale` for deliberate
   local emphasis and keep the multiplier beside its component owner; change the
   theme role only when every semantic user should change.
+- Typed messages cross into the Host as one validated canonical copy. Each
+  actor reaction receives a detached delivery copy, so an impure reducer cannot
+  alter what later recipients observe. Keep payloads small and semantic. F6
+  retains only compact delivery metadata—not payload archives or full
+  before/after actor states.
+- Actor actions, events, route props, and retained-process revisions reconcile
+  the tree. Motion/effect clocks, painting, and process advance stay per-frame
+  work and do not manufacture a render loop.
 
 ## 7. Committed refs name exact geometry
 
@@ -207,9 +215,9 @@ projections, companion style files, or geometry files.
 - A candidate render, arrange, or resize never publishes partial rectangles.
   All current handles update together after Host commit; removal and unmount
   clear them together. Host-owned retained Scroll arrangements republish their
-  descendant rectangles before observers run and restore them with a failed
-  transaction. Do not use a ref to decide simulation or ordinary component
-  layout.
+  descendant rectangles before observers run. A failed candidate keeps the
+  last committed Scroll and ref geometry. Do not use a ref to decide simulation
+  or ordinary component layout.
 - Source sites make same-callback hook reorder fail loudly. Replacing a render
   callback during hot reload may refresh those sites only when count and kind
   still match; a structural hook edit keeps the last good tree and requires a
@@ -225,18 +233,23 @@ projections, companion style files, or geometry files.
   change; do not add dependency arrays or manual caches.
 - A resource factory returns `value, cleanup`. Cleanup belongs beside creation,
   is safe to call exactly once, sends no FrogUI messages, and does not change
-  presentation. Candidate rollback, committed removal, compatible owner
-  callback reload, and Host unmount are framework-owned lifecycle boundaries.
-- `useFrame` advances only the retained process. It publishes readable snapshots
-  through typed `send` or `emit`; it never calls Host render directly and never
-  rebuilds the tree merely to expose smooth per-frame interpolation.
+  presentation. Unpublished-candidate failure, committed removal, compatible
+  owner callback reload, and Host unmount are framework-owned lifecycle
+  boundaries.
+- `useFrame` advances only the retained process. A process with a broad view
+  publishes a scalar semantic revision through typed `send` or `emit`; the
+  resulting render reads the process's current detached snapshot once. A small
+  process may publish one directly useful semantic scalar, never a broad view.
+  It never calls Host render directly and never rebuilds the tree merely to
+  expose smooth per-frame interpolation.
 - Frame callbacks receive raw `dt` under normal and reduced-motion settings.
   Game-specific pause and speed policies belong explicitly inside their process,
   while visual micro-interactions continue to use named Motion clocks.
-- Treat a frame callback exception as a development failure. Queued UI messages
-  roll back, but mutable resource internals cannot be rewound by the framework.
+- Treat a frame callback exception as a development failure. It faults the Host;
+  mutable resource internals cannot be rewound by the framework.
 - Every mounted-process owner must fit on one readable screen: resource creation
-  and cleanup, frame advancement, typed snapshot publication, visible tree.
+  and cleanup, frame advancement, typed revision publication, one snapshot read,
+  and the visible tree.
   Split the process implementation itself only when it is an independently
   named concept such as `BattlePlayback`.
 

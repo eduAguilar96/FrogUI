@@ -231,60 +231,6 @@ function interaction.reconcileScroll(old, node, props, identity)
     return instance
 end
 
-function interaction.snapshot(host)
-    local scrolls = {}
-    for identity, instance in pairs(host._scrolls or {}) do
-        scrolls[identity] = copyScroll(instance)
-    end
-    local radials = {}
-    for identity, instance in pairs(host._radials or {}) do
-        radials[identity] = copyRadial(instance)
-    end
-    local session = host._interactionSession
-    local sessionCopy
-    if session then
-        sessionCopy = {}
-        for key, value in pairs(session) do sessionCopy[key] = value end
-        sessionCopy.payload = session.payload
-            and snapshotPlain(session.payload, "drag payload") or nil
-        sessionCopy.lastTarget = session.lastTarget and {
-            key = session.lastTarget.key,
-            address = snapshotPlain(session.lastTarget.address,
-                "drop target address"),
-        } or nil
-    end
-    return {
-        scrolls = scrolls,
-        radials = radials,
-        session = sessionCopy,
-        hoveredIdentity = host._hoveredIdentity,
-        pressedIdentity = host._pressedIdentity,
-        pointerX = host._pointerX,
-        pointerY = host._pointerY,
-    }
-end
-
-function interaction.restore(host, state)
-    host._scrolls = state.scrolls
-    host._radials = state.radials or {}
-    host._interactionSession = state.session
-    host._hoveredIdentity = state.hoveredIdentity
-    host._pressedIdentity = state.pressedIdentity
-    host._pointerX, host._pointerY = state.pointerX, state.pointerY
-    interaction.rebind(host)
-    for _, scroll in pairs(host._scrolls or {}) do
-        if scroll.node then
-            require("src.frogui.layout").arrangeScroll(scroll.node, host)
-        end
-    end
-    for _, radial in pairs(host._radials or {}) do
-        if radial.node then
-            refreshRadial(host, radial.node)
-        end
-    end
-    host:_refreshCommittedRefs()
-end
-
 local function localInside(node, x, y)
     local localX, localY = Motion.localPoint(node, x, y)
     return localX >= node.x and localY >= node.y
@@ -625,10 +571,8 @@ local function finishDrag(host, session, status, detail, target)
                 address = snapshotPlain(target.address,
                     "drop target address"),
             })
-        assert(type(ok) == "boolean", "DragSource onDrop must return ok, detail")
         status = ok and "committed" or "rejected"
-        safeDetail = returned == nil and nil
-            or snapshotPlain(returned, "drag completion detail")
+        safeDetail = returned
     end
     notifyDragEnd(host, session, status, safeDetail, terminal)
     return status, safeDetail

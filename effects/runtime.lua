@@ -489,20 +489,4 @@ function runtime.inspect(instance)
     }
 end
 
--- Copies the committed registry for update/callback rollback.
-function runtime.snapshot(instances)
-    local out = {}
-    for identity, instance in pairs(instances or {}) do
-        out[identity] = clone(instance)
-    end
-    return out
-end
-
--- Reattaches restored lifetimes to their committed tree nodes.
-function runtime.bindAll(instances)
-    for _, instance in pairs(instances or {}) do
-        if instance.node then instance.node._effect = instance end
-    end
-end
-
 return runtime

@@ -190,54 +190,16 @@ local function deepCopy(value, seen)
     return output
 end
 
-local function deepEqual(left, right, seen)
-    if left == right then return true end
-    if type(left) ~= type(right) or type(left) ~= "table" then return false end
-    seen = seen or {}
-    if seen[left] == right then return true end
-    seen[left] = right
-    for key, value in pairs(left) do
-        if not deepEqual(value, right[key], seen) then return false end
-    end
-    for key in pairs(right) do
-        if left[key] == nil then return false end
-    end
-    return true
-end
-
 local function actorLabel(instance)
     if instance.address then return instance.address.name end
     return instance.identity
 end
 
--- Preserves the primary failure while still surfacing a cleanup failure that
--- happened while FrogUI restored the last committed tree.
+-- Preserves the primary failure while still surfacing a later cleanup failure.
 local function appendFailure(primary, label, secondary)
     if not secondary then return primary end
+    if not primary then return label .. ": " .. tostring(secondary) end
     return tostring(primary) .. "\n" .. label .. ": " .. tostring(secondary)
-end
-
--- Returns every live resource that exists after a checkpoint but not in it.
--- Pending disposals matter because a nested render may create and then remove
--- a resource before the surrounding callback rolls back.
-local function abandonedResources(self, snapshot)
-    local retained, found, output = {}, {}, {}
-    for _, instance in ipairs(snapshot.resources or {}) do
-        retained[instance.lifetime] = true
-    end
-    local function collect(entries)
-        for _, instance in ipairs(entries or {}) do
-            if not retained[instance.lifetime]
-                    and not found[instance.lifetime]
-                    and not instance.disposed then
-                found[instance.lifetime] = true
-                output[#output + 1] = instance
-            end
-        end
-    end
-    collect(self._resources)
-    collect(self._pendingResourceDisposals)
-    return output
 end
 
 local function stateAllowed(state, from)
@@ -1349,118 +1311,31 @@ local function reconcileModalFocus(self, oldModals, oldFocusedIdentity)
         and focus or nil
 end
 
--- Captures every Host-owned value that render/input callbacks may change.
--- Candidate builds and lifecycle callbacks restore this exact checkpoint on
--- failure, including focus, interaction, and physical viewport dimensions.
-local function snapshotHost(self)
-    local snapshot = {
-        tree = self._tree,
-        descriptor = self._rootDescriptor,
-        actors = self._actors,
-        addresses = self._addresses,
-        semanticTokens = self._semanticTokens,
-        hookOwners = self._hookOwners,
-        resources = self._resources,
-        frames = self._frames,
-        nextResourceId = self._nextResourceId,
-        nextFrameId = self._nextFrameId,
-        refs = self._refs,
-        refRectangles = Ref.snapshot(self._refs),
-        nextRefId = self._nextRefId,
-        motions = Motion.snapshot(self._motions),
-        effects = Effect.snapshot(self._effects),
-        modals = self._modals,
-        modal = self._modal,
-        chrome = self._chrome,
-        modalFocusStack = deepCopy(self._modalFocusStack),
-        focusedIdentity = self._focusedIdentity,
-        selectedIdentity = self._selectedIdentity,
-        inspectorVisible = self._inspectorVisible,
-        lastInputText = self._lastInputText,
-        interaction = Interaction.snapshot(self),
-        motionStartSequence = self._motionStartSequence,
-        feedbackQueue = deepCopy(self._feedbackQueue),
-        generation = self._generation,
-        states = {},
-        queue = self._messageQueue,
-        trace = deepCopy(self._messageTrace),
-        messageSequence = self._messageSequence,
-        spentAuthorities = deepCopy(self._spentAuthorities),
-        pendingActorUnmounts = shallowCopy(self._pendingActorUnmounts),
-        pendingActorUnmountLifetimes = shallowCopy(
-            self._pendingActorUnmountLifetimes),
-        pendingResourceDisposals = shallowCopy(
-            self._pendingResourceDisposals),
-        pendingResourceLifetimes = shallowCopy(
-            self._pendingResourceLifetimes),
-        physicalWidth = self._viewport.physicalWidth,
-        physicalHeight = self._viewport.physicalHeight,
-    }
-    for identity, instance in pairs(self._actors or {}) do
-        snapshot.states[identity] = deepCopy(instance.state)
-    end
-    return snapshot
-end
-
--- Restores a checkpoint without rerendering application components.
-local function restoreHost(self, snapshot)
-    local abandoned = abandonedResources(self, snapshot)
-    Ref.restore(self._refs, snapshot.refs, snapshot.refRectangles)
-    if self._viewport.physicalWidth ~= snapshot.physicalWidth
-            or self._viewport.physicalHeight ~= snapshot.physicalHeight then
-        self._viewport:resize(snapshot.physicalWidth, snapshot.physicalHeight)
-    end
-    self._tree = snapshot.tree
-    self._rootDescriptor = snapshot.descriptor
-    self._actors = snapshot.actors
-    self._addresses = snapshot.addresses
-    self._semanticTokens = snapshot.semanticTokens
-    self._hookOwners = snapshot.hookOwners
-    self._resources = snapshot.resources
-    self._frames = snapshot.frames
-    self._nextResourceId = snapshot.nextResourceId
-    self._nextFrameId = snapshot.nextFrameId
-    self._refs = snapshot.refs
-    self._nextRefId = snapshot.nextRefId
-    self._motions = snapshot.motions
-    self._effects = snapshot.effects
-    self._modals = snapshot.modals
-    self._modal = snapshot.modal
-    self._chrome = snapshot.chrome
-    self._modalFocusStack = snapshot.modalFocusStack
-    self._focusedIdentity = snapshot.focusedIdentity
-    self._selectedIdentity = snapshot.selectedIdentity
-    self._inspectorVisible = snapshot.inspectorVisible
-    self._lastInputText = snapshot.lastInputText
-    Interaction.restore(self, snapshot.interaction)
-    Motion.bindAll(self._motions)
-    Effect.bindAll(self._effects)
-    Motion.transformTree(self._tree)
-    Effect.updateBounds(self._effects, self)
-    self:_refreshCommittedRefs()
-    self._motionStartSequence = snapshot.motionStartSequence
-    self._feedbackQueue = snapshot.feedbackQueue
-    self._generation = snapshot.generation
-    for identity, state in pairs(snapshot.states) do
-        if self._actors[identity] then self._actors[identity].state = state end
-    end
-    self._messageQueue = snapshot.queue
-    self._messageTrace = snapshot.trace
-    self._messageSequence = snapshot.messageSequence
-    self._spentAuthorities = snapshot.spentAuthorities
-    self._pendingActorUnmounts = snapshot.pendingActorUnmounts
-    self._pendingActorUnmountLifetimes = snapshot.pendingActorUnmountLifetimes
-    self._pendingResourceDisposals = snapshot.pendingResourceDisposals
-    self._pendingResourceLifetimes = snapshot.pendingResourceLifetimes
-    return self:_disposeResources(abandoned, "resource rollback")
-end
-
 local function assertPresentationAllowed(self, operation)
     assert(not self._authorityCallbackActive,
         (self._authorityLabel or "authority callback") .. " may not " .. operation
             .. " presentation; return the domain result")
     assert(not self._drawing,
         "Host drawing phase may not " .. operation .. " presentation")
+end
+
+-- Runtime failures are terminal for this Host. FrogUI deliberately does not
+-- clone and rewind arbitrary actor/process/input state; callers must unmount
+-- and create a fresh Host after the original error has been surfaced.
+local function faultHost(self, origin, reason)
+    if not self._fault then
+        self._fault = {
+            origin = origin or self._currentOrigin or "runtime",
+            message = tostring(reason),
+        }
+    end
+    return self._fault.message
+end
+
+local function assertOperational(self, operation)
+    if not self._fault then return end
+    error(("FrogUI Host faulted during %s: %s; cannot %s; unmount and recreate it")
+        :format(tostring(self._fault.origin), tostring(self._fault.message), operation), 0)
 end
 
 -- Frame subscribers publish typed messages; they never re-enter structural
@@ -1507,6 +1382,7 @@ function host.new(options)
     self._inspectorVisible = options.inspectorActive == true
     self._lastInputText = nil
     self._generation = 0
+    self._fault = nil
     self._actors = {}
     self._addresses = {}
     self._semanticTokens = {}
@@ -1629,8 +1505,8 @@ function host:_newRef(key)
 end
 
 -- Publishes render-hook ownership, process subscriptions, and arranged refs as
--- one successful Host commit. Removed resources are only staged here; their
--- cleanup waits for the surrounding callback transaction to settle.
+-- one successful Host commit. Removed resources are staged until the current
+-- callback batch finishes so every committed cleanup is attempted once.
 function host:_publishRenderHooks(context)
     local previousRefs = self._refs
     self:_stageResourceDisposals(self._resources, context.resources)
@@ -1642,7 +1518,7 @@ function host:_publishRenderHooks(context)
 end
 
 -- Republishes geometry after retained layout mutates the committed tree, such
--- as Scroll drag, snap, wheel, momentum, focus reveal, or rollback restore.
+-- as Scroll drag, snap, wheel, momentum, or focus reveal.
 function host:_refreshCommittedRefs()
     local rectangles = {}
     collectCommittedRefRectangles(self._tree, rectangles)
@@ -1822,6 +1698,7 @@ end
 function host:mount(root)
     assert(Element.isDescriptor(root), "Host:mount expects a FrogUI element/component")
     assert(not self._mounted, "Host is already mounted")
+    assertOperational(self, "mount")
     assert(activeHost == nil,
         "FrogUI permits only one mounted Host")
     local feedbackMark = #self._feedbackQueue
@@ -1956,7 +1833,7 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
     local old = self._actors[logicalPath]
     local retainedState
     if old and old.token == token then
-        retainedState = deepCopy(old.state)
+        retainedState = old.state
     else
         retainedState = self:_initialState(token, props)
     end
@@ -1996,13 +1873,12 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
     instance.reactions = reactions
     context.actors[logicalPath] = instance
 
+    -- Render receives one detached state snapshot. Mutating it is ignored;
+    -- semantic state changes belong to an action/reaction return value.
     local stateForRender = deepCopy(instance.state)
-    local before = deepCopy(stateForRender)
     local rendered = self:_withOwnerRender(token.name, token, logicalPath,
         context, token.definition.render, props, stateForRender,
         self:_actorSend(instance))
-    assert(deepEqual(before, stateForRender),
-        token.name .. " mutated its state during render; return state from an action/reaction")
     if rendered == nil or rendered == false then return nil end
     assert(Element.isDescriptor(rendered), token.name .. " must return one FrogUI element or nil")
     local outputPath = childPath(path .. "/output", rendered, 1)
@@ -2046,13 +1922,11 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
         return instance.token == token.actor and self._host:_accepts(instance, action)
     end
     status._host = self
+    -- Views observe the same detached render snapshot as their actor owner.
     local stateForRender = instance and deepCopy(instance.state) or nil
-    local before = deepCopy(stateForRender)
     local rendered = self:_withOwnerRender(token.name, token, logicalPath,
         context, token.render, props, stateForRender,
         self:_addressSend(address), status)
-    assert(deepEqual(before, stateForRender),
-        token.name .. " mutated observed actor state during render")
     if rendered == nil or rendered == false then return nil end
     assert(Element.isDescriptor(rendered), token.name .. " must return one FrogUI element or nil")
     local outputPath = childPath(path .. "/output", rendered, 1)
@@ -2313,6 +2187,7 @@ local function assignEventOrder(node, nextOrder)
 end
 
 function host:_build(root)
+    local feedbackMark = #self._feedbackQueue
     local context = {
         actors = {},
         addresses = {},
@@ -2375,8 +2250,12 @@ function host:_build(root)
     end
     local ok, candidate = pcall(buildCandidate)
     if not ok then
+        self:_trimFeedback(feedbackMark)
         local cleanupError = self:_disposeResources(
             context.createdResources, "Candidate resource rollback")
+        if cleanupError then
+            faultHost(self, "Candidate resource rollback", cleanupError)
+        end
         error(appendFailure(candidate,
             "candidate resource rollback failed", cleanupError), 0)
     end
@@ -2385,30 +2264,25 @@ end
 
 function host:render(root)
     assert(self._mounted and activeHost == self, "Host is not mounted")
+    assertOperational(self, "render")
     assertPresentationAllowed(self, "render")
     assertFramePublication(self, "render")
     local requested = root or self._rootDescriptor
     assert(Element.isDescriptor(requested), "Host:render expects a FrogUI element/component")
-    local checkpoint = snapshotHost(self)
     local ok, candidate, context = pcall(self._build, self, requested)
-    if not ok then
-        local rollbackError = restoreHost(self, checkpoint)
-        error(appendFailure(candidate, "Host render rollback failed",
-            rollbackError), 0)
-    end
+    if not ok then error(candidate, 0) end
     local previous = {
-        actors = checkpoint.actors,
-        modals = checkpoint.modals or {},
-        modalIdentity = checkpoint.modal and checkpoint.modal.identity or nil,
-        tree = checkpoint.tree,
-        modal = checkpoint.modal,
-        chrome = checkpoint.chrome,
-        focusedIdentity = checkpoint.focusedIdentity,
-        hoveredIdentity = checkpoint.interaction.hoveredIdentity,
+        actors = self._actors,
+        modals = self._modals or {},
+        modalIdentity = self._modal and self._modal.identity or nil,
+        tree = self._tree,
+        modal = self._modal,
+        chrome = self._chrome,
+        focusedIdentity = self._focusedIdentity,
+        hoveredIdentity = self._hoveredIdentity,
     }
-    local commitFinished = false
+    local published = false
     local function commit()
-        self:_stageActorUnmounts(previous.actors, context.actors)
         self._rootDescriptor = requested
         self._tree = candidate
         self._actors = context.actors
@@ -2434,8 +2308,9 @@ function host:render(root)
             self._selectedIdentity = nil
         end
         self:_publishRenderHooks(context)
+        published = true
+        self:_stageActorUnmounts(previous.actors, context.actors)
         Interaction.afterCommit(self, previous)
-        commitFinished = true
     end
     local committed, commitError
     if self._callbackDepth == 0 then
@@ -2445,16 +2320,15 @@ function host:render(root)
         committed, commitError = pcall(commit)
     end
     if not committed then
-        local rollbackError
-        if not commitFinished then rollbackError = restoreHost(self, checkpoint) end
-        local cleanupError = self:_disposeResources(
-            context.createdResources, "Candidate resource rollback")
-        local failure = appendFailure(commitError,
-            "Host render rollback failed", rollbackError)
-        error(appendFailure(failure,
-            "candidate resource rollback failed", cleanupError), 0)
+        local cleanupError
+        if not published then
+            cleanupError = self:_disposeResources(
+                context.createdResources, "Unpublished candidate cleanup")
+        end
+        faultHost(self, "Host:render commit", commitError)
+        error(appendFailure(commitError,
+            "unpublished candidate cleanup failed", cleanupError), 0)
     end
-    if self._callbackDepth == 0 then self:_commitFeedback() end
     return candidate
 end
 
@@ -2463,12 +2337,14 @@ end
 -- reload separately by preserving their token-table identity.
 function host:refreshTheme(theme, assets, root)
     assert(self._mounted and activeHost == self, "Host is not mounted")
+    assertOperational(self, "refresh theme")
     assertPresentationAllowed(self, "refresh")
     assertFramePublication(self, "theme refresh")
     assert(type(theme) == "table", "Host:refreshTheme needs a theme table")
     assert(type(assets) == "table", "Host:refreshTheme needs an asset table")
     validateTheme(theme)
     local previousTheme, previousAssets = self.theme, self.assets
+    local previousGeneration = self._generation
     local previousFonts, previousAssetCache = self._fontCache, self._assetCache
     local previousShaderCache, previousShaderFailures =
         self._shaderCache, self._shaderFailures
@@ -2479,10 +2355,15 @@ function host:refreshTheme(theme, assets, root)
     Shader.clear(self)
     local ok, result = pcall(self.render, self, root)
     if not ok then
-        self.theme, self.assets = previousTheme, previousAssets
-        self._fontCache, self._assetCache = previousFonts, previousAssetCache
-        self._shaderCache, self._shaderFailures =
-            previousShaderCache, previousShaderFailures
+        -- A rejected candidate never published and may safely retain the last
+        -- good theme. A terminal commit fault retains its published tree, so
+        -- it must also retain the theme and caches that built that tree.
+        if self._generation == previousGeneration then
+            self.theme, self.assets = previousTheme, previousAssets
+            self._fontCache, self._assetCache = previousFonts, previousAssetCache
+            self._shaderCache, self._shaderFailures =
+                previousShaderCache, previousShaderFailures
+        end
         error(result, 0)
     end
     return result
@@ -2508,6 +2389,7 @@ end
 
 function host:_enqueue(entry)
     assert(self._mounted and activeHost == self, "FrogUI has no mounted Host")
+    assertOperational(self, "enqueue a message")
     assert(not self._drawing,
         "Host drawing phase may not enqueue FrogUI messages")
     assert(renderingHost == nil,
@@ -2525,6 +2407,7 @@ end
 -- Input owns terminalization; UI follow-up belongs to a result callback.
 function host:_runAuthorityCallback(label, callback, ...)
     assert(type(callback) == "function", label .. " must be a function")
+    assertOperational(self, "run " .. label)
     assert(not self._authorityCallbackActive,
         "nested authority callbacks are forbidden")
     local previousDepth = self._callbackDepth
@@ -2537,13 +2420,20 @@ function host:_runAuthorityCallback(label, callback, ...)
     self._authorityLabel = label
     self._currentOrigin = label
     local args = { ... }
-    local results = { pcall(function() return callback(unpack(args)) end) }
+    local results = { pcall(function()
+        local ok, detail = callback(unpack(args))
+        assert(type(ok) == "boolean", label .. " must return ok, detail")
+        return ok, Message.snapshotPlain(detail, label .. " detail")
+    end) }
     self._authorityCallbackActive = nil
     self._authorityLabel = nil
     self._callbackDepth = previousDepth
     self._currentOrigin = previousOrigin
     self._currentOriginSource = previousSource
-    if not results[1] then error(results[2], 0) end
+    if not results[1] then
+        faultHost(self, label, results[2])
+        error(results[2], 0)
+    end
     table.remove(results, 1)
     return unpack(results)
 end
@@ -2593,8 +2483,8 @@ local function orderedActors(actors)
     return output
 end
 
--- Defers actor cleanup until the surrounding render/message transaction has
--- committed. Failed candidate trees therefore never dispose the live actor.
+-- Defers actor cleanup until the surrounding render/message batch commits.
+-- Failed candidate trees therefore never dispose the live actor.
 function host:_stageActorUnmounts(previousActors, nextActors)
     local retained = {}
     for _, instance in pairs(nextActors or {}) do
@@ -2748,32 +2638,24 @@ function host:_emitTransitionFact(template, props, origin, originSource)
 end
 
 function host:_applyTransition(instance, spec, record, origin)
-    local from = deepCopy(instance.state)
+    local previous = instance.state
     local nextState
     local emitted
     if type(spec) == "function" then
+        -- Reducers own one detached draft. Returning nil discards it; returning
+        -- any valid state publishes one semantic change. Message and props are
+        -- read-only inputs by contract rather than recursively policed copies.
         local reducerState = deepCopy(instance.state)
-        local reducerMessage = deepCopy(record)
-        local reducerProps = deepCopy(instance.props)
-        local beforeState = deepCopy(reducerState)
-        local beforeMessage = deepCopy(reducerMessage)
-        local beforeProps = deepCopy(reducerProps)
         self._dispatching = true
-        local ok, result = pcall(spec, reducerState, reducerMessage, reducerProps)
+        local ok, result = pcall(spec, reducerState, record, instance.props)
         self._dispatching = false
         if not ok then error(result, 0) end
-        assert(deepEqual(beforeState, reducerState),
-            instance.token.name .. " reducer mutated state; return a replacement")
-        assert(deepEqual(beforeMessage, reducerMessage),
-            instance.token.name .. " reducer mutated its delivered message")
-        assert(deepEqual(beforeProps, reducerProps),
-            instance.token.name .. " reducer mutated its props")
-        if result == nil then return false, from, from end
+        if result == nil then return false, false end
         assert(not Message.isTransition(result),
             instance.token.name .. " reducer must return nextState or nil, not Frog.go")
         nextState = result
     elseif Message.isTransition(spec) then
-        if not stateAllowed(instance.state, spec.from) then return false, from, from end
+        if not stateAllowed(instance.state, spec.from) then return false, false end
         nextState = spec.value
         emitted = spec.emit
     else
@@ -2781,12 +2663,14 @@ function host:_applyTransition(instance, spec, record, origin)
     end
     validateActorState(instance.token, nextState,
         instance.token.name .. " transition result")
-    instance.state = deepCopy(nextState)
+    if type(spec) ~= "function" then nextState = deepCopy(nextState) end
+    instance.state = nextState
     if emitted then
         self:_emitTransitionFact(emitted, instance.props,
             origin .. " -> " .. instance.token.name, instance.source)
     end
-    return true, from, deepCopy(instance.state), not deepEqual(from, instance.state)
+    local changed = type(instance.state) == "table" or instance.state ~= previous
+    return true, changed
 end
 
 function host:_processAction(entry)
@@ -2798,9 +2682,9 @@ function host:_processAction(entry)
     local spec
     if type(handler) == "table" then spec = handler[instance.state]
     else spec = handler end
-    local accepted, from, to, changed = false, deepCopy(instance.state), deepCopy(instance.state), false
+    local accepted, changed = false, false
     if spec ~= nil then
-        accepted, from, to, changed = self:_applyTransition(instance, spec, record,
+        accepted, changed = self:_applyTransition(instance, spec, record,
             entry.origin or "action:" .. token.name)
     end
     local recipient = actorLabel(instance)
@@ -2808,7 +2692,6 @@ function host:_processAction(entry)
         kind = "action",
         token = token.name,
         origin = entry.origin,
-        payload = deepCopy(record),
         source = {
             token = deepCopy(token.source),
             origin = deepCopy(entry.originSource),
@@ -2816,9 +2699,8 @@ function host:_processAction(entry)
         recipients = { recipient },
         transitions = { {
             recipient = recipient,
-            from = from,
-            to = to,
             accepted = accepted,
+            changed = changed,
         } },
         reconciled = false,
     })
@@ -2837,18 +2719,20 @@ function host:_processEvent(entry)
                 if receiver.kind == "actor" then
                     local recipient = actorLabel(instance)
                     recipients[#recipients + 1] = recipient
-                    local accepted, from, to, didChange = false,
-                        deepCopy(instance.state), deepCopy(instance.state), false
-                    if Message.matches(reaction.match, record, instance.props) then
-                        accepted, from, to, didChange = self:_applyTransition(
-                            instance, reaction.transition, record,
+                    local accepted, didChange = false, false
+                    -- Each actor reducer owns one detached delivery record.
+                    -- An impure reducer cannot corrupt the canonical broadcast
+                    -- inspected by a later ordered recipient.
+                    local delivery = Message.snapshot(record, "event")
+                    if Message.matches(reaction.match, delivery, instance.props) then
+                        accepted, didChange = self:_applyTransition(
+                            instance, reaction.transition, delivery,
                             entry.origin or "event:" .. token.name)
                     end
                     transitions[#transitions + 1] = {
                         recipient = recipient,
-                        from = from,
-                        to = to,
                         accepted = accepted,
+                        changed = didChange,
                     }
                     changed = changed or didChange
                 else
@@ -2860,6 +2744,7 @@ function host:_processEvent(entry)
                     transitions[#transitions + 1] = {
                         recipient = recipient,
                         accepted = accepted,
+                        changed = accepted,
                     }
                 end
             end
@@ -2870,7 +2755,6 @@ function host:_processEvent(entry)
         kind = "event",
         token = token.name,
         origin = entry.origin,
-        payload = deepCopy(record),
         source = {
             token = deepCopy(token.source),
             origin = deepCopy(entry.originSource),
@@ -2902,8 +2786,10 @@ end
 
 function host:_runCallback(callback, origin, originSource, ...)
     assert(type(callback) == "function", "FrogUI callback must be a function")
+    assertOperational(self, "run another callback")
     if self._callbackDepth > 0 then return callback(...) end
-    local snapshot = snapshotHost(self)
+    local previousQueue = self._messageQueue
+    local feedbackMark = #self._feedbackQueue
     self._messageQueue = {}
     self._callbackDepth = 1
     self._currentOrigin = origin or "callback"
@@ -2936,61 +2822,22 @@ function host:_runCallback(callback, origin, originSource, ...)
     self._callbackDepth = 0
     self._currentOrigin = nil
     self._currentOriginSource = nil
-    if not results[1] then
-        local rollbackError = restoreHost(self, snapshot)
-        error(appendFailure(results[2], "Host callback rollback failed",
-            rollbackError), 0)
+    self._messageQueue = previousQueue
+    local failure = not results[1] and results[2] or nil
+    if failure then self:_trimFeedback(feedbackMark) end
+    local feedbackOk, feedbackError = true, nil
+    if not failure then
+        feedbackOk, feedbackError = pcall(self._commitFeedback, self)
     end
-    self._messageQueue = snapshot.queue
-    local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
     local resourceError = self:_commitResourceDisposals()
     local actorError = self:_commitActorUnmounts()
-    if not feedbackOk or resourceError or actorError then
-        error(not feedbackOk and feedbackError or resourceError or actorError, 0)
-    end
-    table.remove(results, 1)
-    return unpack(results)
-end
-
--- Settles UI follow-up after a successful irreversible domain call without
--- restoring pre-call actor state. A transient failed render is retried once;
--- the spent control remains inert if recovery is still impossible.
-function host:_runTerminalCallback(callback, origin, originSource, ...)
-    assert(type(callback) == "function", "FrogUI callback must be a function")
-    assert(self._callbackDepth == 0,
-        "terminal UI follow-up requires the root input boundary")
-    self._messageQueue = {}
-    self._callbackDepth = 1
-    self._currentOrigin = origin or "terminal callback"
-    self._currentOriginSource = originSource
-    local args = { ... }
-    local results = { pcall(function() return callback(unpack(args)) end) }
-    local failure = not results[1] and results[2] or nil
-    local budget = { processed = 0 }
-    while #self._messageQueue > 0 do
-        local ok, dirty, traceIndex = pcall(
-            self._drainMessages, self, budget)
-        if not ok then failure = failure or dirty break end
-        if dirty then
-            local rendered, renderError = pcall(self.render, self)
-            if not rendered then failure = failure or renderError break end
-            if traceIndex and self._messageTrace[traceIndex] then
-                self._messageTrace[traceIndex].reconciled = true
-            end
-        end
-    end
-    self._callbackDepth = 0
-    self._currentOrigin = nil
-    self._currentOriginSource = nil
-    self._messageQueue = {}
-    if failure then pcall(self.render, self) end
-    local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
-    local resourceError = self:_commitResourceDisposals()
-    local cleanupError = self:_commitActorUnmounts()
     failure = failure or (not feedbackOk and feedbackError or nil)
-        or resourceError
-        or cleanupError
-    if failure then error(failure, 0) end
+    failure = appendFailure(failure, "resource cleanup failed", resourceError)
+    failure = appendFailure(failure, "actor cleanup failed", actorError)
+    if failure then
+        faultHost(self, origin or "callback", failure)
+        error(failure, 0)
+    end
     table.remove(results, 1)
     return unpack(results)
 end
@@ -3012,11 +2859,8 @@ function host:_activateButton(button)
     self._spentAuthorities[button.identity] = true
     local ok, detail = self:_runAuthorityCallback(
         "Button onCommit", button.props.onCommit)
-    assert(type(ok) == "boolean",
-        "Button onCommit must return ok, detail")
     local status = ok and "committed" or "rejected"
     if not ok then self._spentAuthorities[button.identity] = nil end
-    detail = Message.snapshotPlain(detail, "Button onCommit detail")
     local notify = function()
         local cue = ok
             and soundCue(self, button.props.sound, "activate")
@@ -3024,12 +2868,7 @@ function host:_activateButton(button)
         if cue then self:_stageFeedback("sound", cue) end
         button.props.onResult(status, detail)
     end
-    if ok then
-        self:_runTerminalCallback(notify,
-            "Button:onResult", button.source)
-    else
-        self:_runCallback(notify, "Button:onResult", button.source)
-    end
+    self:_runCallback(notify, "Button:onResult", button.source)
     return true
 end
 
@@ -3051,7 +2890,7 @@ function host.emit(record)
 end
 
 -- Delivers one dt to the callbacks committed at the start of this update.
--- Their typed publications share one callback transaction and therefore
+-- Their typed publications share one callback batch and therefore
 -- reconcile only after every frame subscriber has run.
 function host:_runFrames(dt)
     if #self._frames == 0 then return end
@@ -3075,15 +2914,12 @@ end
 
 function host:update(dt)
     assert(self._mounted, "Host is not mounted")
+    assertOperational(self, "update")
     assertPresentationAllowed(self, "advance")
     assertInputBoundary(self)
     assert(type(dt) == "number" and dt >= 0, "Host:update dt must be non-negative")
     self:_runFrames(dt)
-    local time = self._rawClock:now()
-    local motionInstances = Motion.snapshot(self._motions)
-    local effectInstances = Effect.snapshot(self._effects)
-    local interactionState = Interaction.snapshot(self)
-    local feedback = deepCopy(self._feedbackQueue)
+    local feedbackMark = #self._feedbackQueue
     local motionCompletions, effectCompletions
     local ok, err = pcall(function()
         self._rawClock:advance(dt)
@@ -3096,41 +2932,31 @@ function host:update(dt)
         Effect.updateBounds(self._effects, self)
     end)
     if not ok then
-        self._rawClock:reset(time)
-        self._motions = motionInstances
-        self._effects = effectInstances
-        Interaction.restore(self, interactionState)
-        self._feedbackQueue = feedback
-        Motion.bindAll(self._motions)
-        Effect.bindAll(self._effects)
-        Motion.transformTree(self._tree)
-        self:_refreshCommittedRefs()
-        Effect.updateBounds(self._effects, self)
+        self:_trimFeedback(feedbackMark)
+        faultHost(self, "Host:update", err)
         error(err, 0)
     end
     local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
-    local firstError = not feedbackOk and feedbackError or nil
+    if not feedbackOk then
+        faultHost(self, "Host:update feedback", feedbackError)
+        error(feedbackError, 0)
+    end
     for _, completion in ipairs(motionCompletions or {}) do
         if self._mounted
                 and Motion.completionIsMounted(self._motions, completion) then
-            local delivered, deliveryError = pcall(
-                self._runTerminalCallback, self, completion.callback,
+            self:_runCallback(completion.callback,
                 "juice:" .. completion.identity .. ":" .. completion.name,
                 completion.source)
-            if not delivered and not firstError then firstError = deliveryError end
         end
     end
     for _, completion in ipairs(effectCompletions or {}) do
         if self._mounted
                 and Effect.completionIsMounted(self._effects, completion) then
-            local delivered, deliveryError = pcall(
-                self._runTerminalCallback, self, completion.callback,
+            self:_runCallback(completion.callback,
                 "effect:" .. completion.identity .. ":" .. completion.kind,
                 completion.source)
-            if not delivered and not firstError then firstError = deliveryError end
         end
     end
-    if firstError then error(firstError, 0) end
 end
 
 function host:draw(customPainter)
@@ -3146,29 +2972,29 @@ end
 
 function host:resize(width, height)
     assert(self._mounted, "Host is not mounted")
+    assertOperational(self, "resize")
     assertPresentationAllowed(self, "resize")
     assertFramePublication(self, "resize")
-    local checkpoint = snapshotHost(self)
+    local previousPhysicalWidth = self._viewport.physicalWidth
+    local previousPhysicalHeight = self._viewport.physicalHeight
     self._viewport:resize(width, height)
     local ok, candidate, context = pcall(self._build, self, self._rootDescriptor)
     if not ok then
-        local rollbackError = restoreHost(self, checkpoint)
-        error(appendFailure(candidate, "Host resize rollback failed",
-            rollbackError), 0)
+        self._viewport:resize(previousPhysicalWidth, previousPhysicalHeight)
+        error(candidate, 0)
     end
     local previous = {
-        actors = checkpoint.actors,
-        modals = checkpoint.modals or {},
-        modalIdentity = checkpoint.modal and checkpoint.modal.identity or nil,
-        tree = checkpoint.tree,
-        modal = checkpoint.modal,
-        chrome = checkpoint.chrome,
-        focusedIdentity = checkpoint.focusedIdentity,
-        hoveredIdentity = checkpoint.interaction.hoveredIdentity,
+        actors = self._actors,
+        modals = self._modals or {},
+        modalIdentity = self._modal and self._modal.identity or nil,
+        tree = self._tree,
+        modal = self._modal,
+        chrome = self._chrome,
+        focusedIdentity = self._focusedIdentity,
+        hoveredIdentity = self._hoveredIdentity,
     }
-    local commitFinished = false
+    local published = false
     local function commit()
-        self:_stageActorUnmounts(previous.actors, context.actors)
         self._tree = candidate
         self._actors = context.actors
         self._addresses = context.addresses
@@ -3181,6 +3007,11 @@ function host:resize(width, height)
         self._modal = context.modal
         self._chrome = context.chrome
         self._generation = self._generation + 1
+        for identity in pairs(self._spentAuthorities) do
+            if not findIdentity(self._tree, identity) then
+                self._spentAuthorities[identity] = nil
+            end
+        end
         reconcileModalFocus(self, previous.modals, previous.focusedIdentity)
         if self._selectedIdentity
                 and not Interaction.findActiveIdentity(self,
@@ -3188,9 +3019,10 @@ function host:resize(width, height)
             self._selectedIdentity = nil
         end
         self:_publishRenderHooks(context)
+        published = true
+        self:_stageActorUnmounts(previous.actors, context.actors)
         Interaction.cancel(self, "resize")
         Interaction.afterCommit(self, previous)
-        commitFinished = true
     end
     local committed, commitError
     if self._callbackDepth == 0 then
@@ -3200,16 +3032,15 @@ function host:resize(width, height)
         committed, commitError = pcall(commit)
     end
     if not committed then
-        local rollbackError
-        if not commitFinished then rollbackError = restoreHost(self, checkpoint) end
-        local cleanupError = self:_disposeResources(
-            context.createdResources, "Candidate resource rollback")
-        local failure = appendFailure(commitError,
-            "Host resize rollback failed", rollbackError)
-        error(appendFailure(failure,
-            "candidate resource rollback failed", cleanupError), 0)
+        local cleanupError
+        if not published then
+            cleanupError = self:_disposeResources(
+                context.createdResources, "Unpublished candidate cleanup")
+        end
+        faultHost(self, "Host:resize commit", commitError)
+        error(appendFailure(commitError,
+            "unpublished candidate cleanup failed", cleanupError), 0)
     end
-    if self._callbackDepth == 0 then self:_commitFeedback() end
 end
 
 function host:_pointerId(pointerId)
@@ -3225,6 +3056,7 @@ end
 
 function host:pointerDown(x, y, pointerId, button)
     assert(self._mounted, "Host is not mounted")
+    assertOperational(self, "route pointer input")
     assertPresentationAllowed(self, "route pointer input through")
     assertInputBoundary(self)
     if self._inspectorVisible then
@@ -3238,6 +3070,7 @@ end
 
 function host:pointerMove(x, y, pointerId)
     assert(self._mounted, "Host is not mounted")
+    assertOperational(self, "route pointer input")
     assertPresentationAllowed(self, "route pointer input through")
     assertInputBoundary(self)
     local virtualX, virtualY = self:_virtual(x, y)
@@ -3247,6 +3080,7 @@ end
 
 function host:pointerUp(x, y, pointerId, button)
     assert(self._mounted, "Host is not mounted")
+    assertOperational(self, "route pointer input")
     assertPresentationAllowed(self, "route pointer input through")
     assertInputBoundary(self)
     local virtualX, virtualY = self:_virtual(x, y)
@@ -3256,6 +3090,7 @@ end
 
 function host:keyDown(key, scancode, isrepeat)
     assert(self._mounted, "Host is not mounted")
+    assertOperational(self, "route key input")
     assertPresentationAllowed(self, "route key input through")
     assertInputBoundary(self)
     if key == "f6" then
@@ -3329,6 +3164,7 @@ end
 
 function host:keyUp(key)
     assert(self._mounted, "Host is not mounted")
+    assertOperational(self, "route key input")
     assertPresentationAllowed(self, "route key input through")
     assertInputBoundary(self)
     if key == "f6" then
@@ -3341,6 +3177,7 @@ end
 
 function host:textInput(text)
     assert(self._mounted, "Host is not mounted")
+    assertOperational(self, "route text input")
     assertPresentationAllowed(self, "route text input through")
     assertInputBoundary(self)
     assert(type(text) == "string", "Host:textInput expects text")
@@ -3352,7 +3189,7 @@ function host:setInspectorVisible(visible)
     assert(self._mounted, "Host is not mounted")
     assertPresentationAllowed(self, "change inspector state in")
     assert(type(visible) == "boolean", "inspector visibility must be boolean")
-    if visible and not self._inspectorVisible then
+    if visible and not self._inspectorVisible and not self._fault then
         Interaction.cancel(self, "inspector")
     end
     self._inspectorVisible = visible
@@ -3421,6 +3258,7 @@ function host:inspectionTree()
     end
     return {
         visible = self._inspectorVisible,
+        fault = deepCopy(self._fault),
         nodes = nodes,
         selected = selected,
         messages = self:messageTrace(),
@@ -3438,7 +3276,14 @@ function host:unmount()
     assert(self._mounted, "Host is not mounted")
     assertPresentationAllowed(self, "unmount")
     assertFramePublication(self, "unmount")
-    Interaction.cancel(self, "unmount")
+    if self._fault then
+        -- A faulted Host is no longer allowed to run authored callbacks.
+        self._interactionSession = nil
+        self._pressedIdentity = nil
+        self._hoveredIdentity = nil
+    else
+        Interaction.cancel(self, "unmount")
+    end
     self:_stageActorUnmounts(self._actors, {})
     self:_stageResourceDisposals(self._resources, {})
     self._captures = {}
@@ -3565,6 +3410,7 @@ end
 
 function host:wheelMoved(dx, dy)
     assert(self._mounted, "Host is not mounted")
+    assertOperational(self, "route wheel input")
     assertPresentationAllowed(self, "route wheel input through")
     assertInputBoundary(self)
     assert(finite(dx) and finite(dy), "wheel delta must be finite")

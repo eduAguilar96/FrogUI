@@ -67,16 +67,6 @@ function ref.inspect(handle)
     }
 end
 
--- Captures committed rectangles for a surrounding Host rollback boundary.
-function ref.snapshot(handles)
-    local snapshot = {}
-    for handle in pairs(handles or {}) do
-        local state = assert(states[handle], "invalid committed FrogUI ref")
-        snapshot[handle] = copyRect(state.current)
-    end
-    return snapshot
-end
-
 -- Publishes one complete successful arrange, clearing absent attachments.
 function ref.publish(previous, current, rectangles)
     for handle in pairs(previous or {}) do
@@ -84,16 +74,6 @@ function ref.publish(previous, current, rectangles)
     end
     for handle in pairs(current or {}) do
         states[handle].current = copyRect(rectangles[handle])
-    end
-end
-
--- Restores all rectangles after a wider Host callback transaction fails.
-function ref.restore(current, previous, snapshot)
-    for handle in pairs(current or {}) do
-        if not previous[handle] then states[handle].current = nil end
-    end
-    for handle in pairs(previous or {}) do
-        states[handle].current = copyRect(snapshot[handle])
     end
 end
 

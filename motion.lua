@@ -751,26 +751,6 @@ function motion.inspect(instance)
     }
 end
 
--- Copies the committed registry for callback/render rollback.
-function motion.snapshot(instances)
-    local out = {}
-    for identity, instance in pairs(instances or {}) do
-        out[identity] = cloneInstance(instance)
-    end
-    return out
-end
-
--- Reattaches a restored registry to its committed nodes after transaction
--- rollback without rebuilding application components.
-function motion.bindAll(instances)
-    for _, instance in pairs(instances or {}) do
-        if instance.node then
-            instance.node._motion = instance
-            instance.node.presentation = copyValues(instance.values)
-        end
-    end
-end
-
 local function multiply(left, right)
     return {
         a = left.a * right.a + left.c * right.b,

@@ -233,9 +233,10 @@ transient `Frog.Motion` paint transform does not rewrite them.
 
 Host-owned retained layout changes do update refs without rerendering the
 component. Scroll drag, snap, wheel, momentum, keyboard focus reveal, and
-rollback restore each republish the newly arranged descendant rectangles before
-their observers run. A failed surrounding transaction restores the previous
-Scroll position and ref rectangles together.
+other committed arrangements republish the newly arranged descendant
+rectangles before their observers run. A failed candidate render or resize
+never publishes its tree, Scroll geometry, or ref rectangles, so the previous
+committed geometry remains readable.
 
 For dynamic authored atoms, call one keyed hook instead of looping over
 `useRef`:
@@ -273,11 +274,14 @@ local playback = Frog.useResource(function()
 end)
 
 Frog.useFrame(function(dt)
-    local revision, snapshot = playback:update(dt)
+    local revision = playback:update(dt)
     if revision then
-        send(SnapshotCommitted { revision = revision, view = snapshot })
+        send(RevisionPublished { revision = revision })
     end
 end)
+
+local view = playback:snapshot() -- once in the semantic render
+assert(view.revision == state.revision)
 ```
 
 `useResource(create)` calls `create` once for that component, actor, or
@@ -289,11 +293,10 @@ creates a fresh value; the old cleanup runs only after the replacement commits.
 Stateful owner modules remain restart-only in the current gallery hot-reloader.
 
 Failed candidate renders clean their unpublished resources and leave the live
-resource alone. Failed outer callbacks also dispose any resource created by a
-nested render and restore the previous lifetime. Successful removal and Host
-unmount call cleanup exactly once. Cleanup is terminal: FrogUI tries every
-pending cleanup, surfaces the first failure, never replays a disposed cleanup,
-and forbids cleanup from sending messages or changing presentation.
+resource alone. Successful removal and Host unmount call cleanup exactly once.
+Cleanup is terminal: FrogUI tries every pending cleanup, surfaces the first
+failure, never replays a disposed cleanup, and forbids cleanup from sending
+messages or changing presentation.
 
 `useFrame(callback)` receives the raw non-negative `dt` exactly once for every
 Host update. It remains active under reduced motion; pausing a process is an
@@ -301,18 +304,26 @@ explicit condition inside the callback. Rerenders replace the closure without
 adding a second subscription. Multiple frame callbacks run in semantic source
 order against the tree committed at the start of the update.
 
-Publish visible changes with typed `send` or `Frog.emit`. FrogUI queues every
-frame publication, then reconciles once after all subscribers finish. Calling
-`Host:render` directly from a frame callback rejects. If a callback fails, its
-queued UI publications roll back. FrogUI cannot and does not pretend to roll
-back arbitrary mutations already made inside the owned resource; a frame error
-is therefore a development failure that must be fixed, not normal control flow.
+When a retained process exposes a broad view, publish only a scalar semantic
+revision with typed `send` or `Frog.emit`, then read the process's current
+detached snapshot once during the resulting render. A small process may publish
+a directly useful semantic scalar such as an elapsed checkpoint; it must not
+put a broad view into actor state or message history. FrogUI queues every frame
+publication, then reconciles once after all subscribers finish. Calling
+`Host:render` directly from a frame callback rejects. A frame callback or
+runtime reconciliation error fails loudly and faults that Host; FrogUI never
+pretends it can rewind process internals.
+
+Semantic reconciliation and per-frame advance are separate jobs. Actor
+actions, events, route props, and process revisions rebuild the readable tree.
+Motion, effects, clocks, painting, and a retained process's internal advance do
+not rebuild it merely because another frame elapsed.
 
 Both hooks are positional and unconditional. Keep them on separate lines and
 never put them behind a branch or loop. Hold F6 on the owner's visible root to
 see its stable resource id, frame id, and mounted state. The generic gallery
-story demonstrates pause, resize retention, snapshot publication, and explicit
-resource reset without importing game code.
+story demonstrates pause, resize retention, scalar revision publication, and
+explicit resource reset without importing game code.
 
 ## Images, sprite sheets, and shader wrappers
 
@@ -674,12 +685,22 @@ mount cleanup together.
 Do not put menu state into a root component merely because the root can see the
 menu.
 
+Typed actions and events become one validated canonical copy when they cross
+into the Host. Each actor reaction receives a detached delivery copy, so one
+impure reducer cannot alter the event observed by later recipients. Reducers
+return replacement semantic state; a non-nil result requests one
+reconciliation. F6 keeps a bounded diagnostic trace of token, origin, ordered
+recipients, acceptance, and reconciliation only. It deliberately retains no
+message payloads or full before/after actor states.
+
 An actor may declare `unmount(props, state)` when the actor itself owns an
 external capability that must be released if its exact mount leaves the
 committed tree. Cleanup runs once after a successful removal or Host teardown,
-never for a failed render, same-key rerender, or resize. It is a terminal
-domain boundary: use the actor's captured token and validate that it is still
-current; do not send FrogUI messages or change presentation from cleanup.
+never for an unpublished candidate, same-key rerender, or resize. If a
+post-commit cleanup itself fails, the removal remains committed and the Host
+faults. Cleanup is a terminal domain boundary: use the actor's captured token
+and validate that it is still current; do not send FrogUI messages or change
+presentation from cleanup.
 
 The current public vocabulary is:
 
@@ -890,7 +911,7 @@ The sole `Chrome` portal is also Host-owned. It joins the top input plane only
 when that Modal explicitly sets `allowChrome = true`; any later ordinary Modal
 isolates it again.
 
-An ordinary `Button.onPress` is reversible UI work. Use the explicit
+An ordinary `Button.onPress` is presentation work. Use the explicit
 `onCommit`/`onResult` pair only when one press crosses an irreversible domain
 boundary such as claiming or skipping a Reward:
 
@@ -914,16 +935,28 @@ Frog.Button {
 `onCommit` cannot send messages, rerender, route input, or mutate the Host; it
 must return `ok, detail`. A successful call spends that exact mounted Button
 before `onResult` runs. `detail` is defensively snapshotted as finite, acyclic
-plain data before delivery; a malformed successful result remains spent while
-a malformed rejection remains retryable. If notification, navigation, or the first truthful
-render then throws, FrogUI still settles queued actor state and never exposes
-the spent control for a retry. A rejected call remains available. This narrow
-boundary is for authoritative mutations only, not ordinary menu callbacks.
+plain data before delivery. Malformed detail faults the Host; a successful
+authority remains spent, while a rejected result has made no authoritative
+mutation but still requires a fresh Host. If notification, navigation, or the
+first truthful render then throws, the Host faults and the spent control cannot
+retry the committed domain call. A rejected call remains available after valid,
+successful UI follow-up. This narrow boundary is for authoritative mutations
+only, not ordinary menu callbacks.
 
 Platform input is root-only and cannot be called again from an active callback.
-Messages drain breadth-first to quiescence: if a dirty render opens a Modal or
-removes a drag source, the resulting cancellation fact drains before the input
-transaction completes instead of being discarded.
+Messages establish their canonical snapshot at the typed delivery boundary,
+then drain breadth-first to quiescence through detached actor deliveries. If a
+dirty render opens a Modal or removes a drag
+source, the resulting cancellation fact follows in the next semantic batch.
+Runtime callback, reducer, or reconciliation failures fault the Host instead of
+restoring a broad pre-input snapshot.
+
+After a fault, use `tree`, `viewport`, `inspectionTree`, `messageTrace`, or
+`draw` only to diagnose the last committed presentation. The Host rejects
+render, resize, theme refresh, update, messages, and input. Call `unmount`;
+faulted unmount skips authored interaction callbacks while still cleaning every
+mounted actor/resource exactly once. Then create a fresh Host. Never resume the
+faulted instance.
 
 An actor's local `send` keeps one mount-lifetime identity across ordinary
 reconciliation, so a retained drag callback may safely report its result after
@@ -1034,8 +1067,8 @@ Frog.PopupText {
 The key must be a stable scalar that changes once per semantic occurrence. A
 rerender with the same key does not replay the sound. A typed event reaction
 may instead use `do_ = Frog.play("claimed")` on an element with that named
-recipe. Both paths use the Host feedback transaction: failed callbacks,
-messages, or renders emit no sound.
+recipe. Both paths stage feedback until their successful semantic commit. A
+runtime failure discards unplayed staged feedback and faults the Host.
 
 ### Registering a new sound
 
@@ -1260,7 +1293,11 @@ it reports LÖVE's real render FPS and average frame duration, independent of
 Battle playback speed. F6 shows the resolved component/primitive tree. F7
 cycles viewport sizes. The gallery polls watched file contents and reloads
 saved presentation theme/data tables, stories, and stateless components in
-place; F5 forces that same scoped set. A bad reload keeps the last good tree.
+place; F5 forces that same scoped set. A bad candidate reload keeps the last
+good tree. Failed candidate renders and resizes likewise leave the previously
+committed tree, viewport, resources, and refs active. Runtime callback,
+process, or effect failures are different: they fail loudly and fault the Host
+instead of attempting to resume from a partial runtime advance.
 Stateful actors/processes and FrogUI framework core require a restart because
 their live instance schema cannot be safely replaced.
 
