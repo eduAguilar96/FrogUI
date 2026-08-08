@@ -1255,8 +1255,10 @@ and follow helpers only as needed.
 
 ## Development loop
 
-Run `love . --frogui gallery`. F6 shows the resolved component/primitive tree.
-F7 cycles viewport sizes. The gallery polls watched file contents and reloads
+Run `love . --frogui gallery`. F3 toggles the development frame-rate overlay;
+it reports LÖVE's real render FPS and average frame duration, independent of
+Battle playback speed. F6 shows the resolved component/primitive tree. F7
+cycles viewport sizes. The gallery polls watched file contents and reloads
 saved presentation theme/data tables, stories, and stateless components in
 place; F5 forces that same scoped set. A bad reload keeps the last good tree.
 Stateful actors/processes and FrogUI framework core require a restart because
