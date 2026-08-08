@@ -480,6 +480,13 @@ projections, companion style files, or geometry files.
   surface without copying that state into ShopScreen. Do not mount a hidden
   owner elsewhere or project its state through screen callbacks or generic
   render slots.
+- A long-running simulation playback may separate three named responsibilities
+  in one feature folder: `playback.lua` owns the event queue and clocks,
+  `visible_state.lua` folds only committed events into detached display data,
+  and `screen.lua` renders that data. Components never read the simulation,
+  the reducer never arranges geometry, and the screen never advances time.
+  This is an explicit process boundary, not permission to split ordinary
+  component state into generic adapters or hidden state files.
 
 ## 14. Updating this guide
 
