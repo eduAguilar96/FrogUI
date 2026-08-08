@@ -1288,10 +1288,17 @@ and follow helpers only as needed.
 
 ## Development loop
 
-Run `love . --frogui gallery`. F3 toggles the development frame-rate overlay;
-it reports LÖVE's real render FPS and average frame duration, independent of
-Battle playback speed. F6 shows the resolved component/primitive tree. F7
-cycles viewport sizes. The gallery polls watched file contents and reloads
+Run `love . --frogui gallery`. Press L in the gallery to open the deterministic
+Battle load acceptance fixture, then Space to play, R to replay the exact
+captured fight, and the speed dial to increase playback pressure. It uses a
+code-owned seed, pinned full-board spell deal, increasing dice pressure, large
+HP pools, and a bounded long fight; its exact identity and pressure inputs stay
+visible in the trace and live only in `tools/frogui/battle_load_fixture.lua`.
+F3 toggles the development frame-rate
+overlay; it reports LÖVE's real render FPS and average frame duration,
+independent of Battle playback speed. F4 expands it into the FrogUI execution
+profiler. F6 shows the resolved component/primitive tree. F7 cycles viewport
+sizes. The gallery polls watched file contents and reloads
 saved presentation theme/data tables, stories, and stateless components in
 place; F5 forces that same scoped set. A bad candidate reload keeps the last
 good tree. Failed candidate renders and resizes likewise leave the previously
@@ -1324,3 +1331,95 @@ rearranges the existing owner. The trace is deliberately bounded and displays
 only committed event addresses. `src/presentation/battle/playback.lua` is a
 stateful process, so edits to it require restarting the gallery; Battle's
 ordinary visible component files remain hot-reloadable.
+
+### Reading the F4 profiler
+
+The gallery opts its Host into a fixed 180-frame diagnostic ring. Ordinary
+Hosts retain no profiling history unless explicitly enabled. The expanded
+overlay reports current, 95th-percentile, and maximum FrogUI CPU time, then
+shows current/p95 update and paint cost plus p95 attribution by phase:
+
+| Label | Work it includes |
+|---|---|
+| `frame` | Retained `useFrame` callbacks, including BattlePlayback advancement |
+| `msg` | Typed action/event validation and reducer delivery |
+| `reconcile` | The complete dirty semantic rebuild and publication |
+| `expand` | Component/actor/view execution and primitive-tree construction |
+| `layout` | Two-pass measure and arrange of that candidate tree |
+| `runtime` | Retained interaction, Motion, refs, and Effect updates |
+| `motion` | Motion runner sampling plus committed-tree visual transforms |
+| `refs` | Republish arranged ref rectangles after retained updates |
+| `effects` | Projectile/Flipbook anchor refresh, advancement, and bounds |
+| `external` | Complete public input routing, direct render, resize, or Host theme-refresh work before update |
+| `paint` | Painter traversal and LÖVE draw submission |
+
+`FrogUI CPU` is `external + update + paint`; nested phase lines are attribution,
+not additional work. `reconcile` contains `expand`, `layout`, and the smaller
+commit work; do not add
+those numbers together. `runtime` contains the retained per-frame interaction,
+Motion, ref, and effect work; `motion` also attributes whole-tree transforms
+performed inside a semantic event or candidate reconciliation, so it may be
+nested under `msg` or `reconcile` instead. `msg` deliberately excludes
+reconciliation. The
+activity line shows semantic messages and rebuilds for the most recently
+sampled frame plus the retained tree's nodes, render owners, effects, and
+motions. `dirty` ranks the rolling window's typed message/reflow causes without
+retaining their payloads. The overlay refreshes this aggregate four times per second so reading
+the profiler does not become its own hot path. The Lua-memory delta is the net
+heap change for the sampled frame, so a large negative value normally means
+collection rather than free work.
+
+`slowest` keeps one correlated completed frame from that same rolling window:
+its total, frame callback, reconcile/layout, runtime, and paint timings stay
+beside the exact dirty causes that occurred in that frame. Use it to distinguish
+a simulation/playback spike from a rebuild or steady traversal cost; unlike
+independent phase p95 values, these numbers all describe one frame.
+
+This profiler answers where a spike lives; it is not a production telemetry
+system and stores no props, actor states, messages, simulation events, or
+component descriptions. A standalone development Host can opt in explicitly
+and read the same detached aggregate. The read returns completed frames only;
+an update that has not reached draw never contaminates rolling statistics:
+
+```lua
+local host = Frog.host {
+    diagnostics = true,
+}
+
+local profile = host:diagnostics()
+```
+
+### Battle performance gate
+
+Run `love . --frogui battle-performance` for the explicit B4p comparison. It
+mounts the reviewed deterministic 6v6 load fixture twice: once through the
+shipped retained Battle presenter and once through FrogUI's real
+`BattlePlayback` and `BattleScreen`. Both use a 540×960 battle-screen-only
+scope with app HUD, Inspection, hot reload, profiler instrumentation, and audio
+excluded. The command owns its warmup, frame counts, late-round boundary, and
+provisional pass targets in `tools/frogui/battle_performance.lua`; do not copy
+those values into documentation or another check.
+
+The command is deliberately self-bounding: late-round setup alone uses the
+fastest supported playback speed, then both presenters return to one-times
+speed before measurement. Console/window heartbeats keep the synchronous run
+visible and cancellable; setup and whole-command wall clocks, an advance-frame
+limit, and a GC-stopped allocation cap abort a runaway probe. Every exit
+restarts collection, releases the active Host or retained Battle tree, and
+restores the shipped audio policy. A window close cancels the probe cleanly.
+
+The printed timing window runs with normal garbage collection and separates
+update from draw. A second, shorter window stops collection to report gross Lua
+allocation per frame, then reports the full cleanup time separately. Timing is
+machine-specific, so acceptance uses shipped/FrogUI mean and p95 ratios, a
+one-frame budget, and the fraction of over-budget frames; allocation has ratio
+and absolute ceilings. The late sample is aligned at the committed-round level,
+not to an identical within-round event address, so treat it as coarse pressure
+evidence. An `alloc_capped=yes` row stopped at the safety ceiling: its printed
+per-frame rate is a censored lower bound, not a complete-window mean. The
+command exits nonzero while any
+B4p target is missed. It is deliberately not part of `--check frogui` and is
+unavailable in fused builds. This compares the currently implemented presenter
+surfaces, not final visual parity: FrogUI does not yet carry the remaining B5
+feel/FX work, so current ratios are conservative and must be re-run as parity
+lands.

@@ -12,6 +12,7 @@ local Effect = require("src.frogui.effects.runtime")
 local Shader = require("src.frogui.shader")
 local Interaction = require("src.frogui.interaction")
 local Ref = require("src.frogui.ref")
+local Diagnostics = require("src.frogui.diagnostics")
 
 local host = {}
 host.__index = host
@@ -1370,6 +1371,11 @@ function host.new(options)
             "feedback." .. name .. " must be a function")
     end
     self._customPainter = options.painter
+    assert(options.diagnostics == nil or type(options.diagnostics) == "boolean",
+        "diagnostics must be a boolean")
+    self._diagnostics = Diagnostics.new {
+        enabled = options.diagnostics == true,
+    }
     local viewportOptions = shallowCopy(options)
     if viewportOptions.wideRatio == nil and self.theme.breakpoints then
         viewportOptions.wideRatio = self.theme.breakpoints.wideRatio
@@ -2186,6 +2192,43 @@ local function assignEventOrder(node, nextOrder)
     return nextOrder
 end
 
+-- Applies committed-tree Motion geometry through one diagnostic boundary.
+-- Ordinary Hosts take the direct path without timer calls or allocations.
+function host:_transformTree(root)
+    root = root or self._tree
+    if not self._diagnostics.enabled then
+        Motion.transformTree(root)
+        return
+    end
+    local started = self._diagnostics:start()
+    Motion.transformTree(root)
+    self._diagnostics:finish("motion", started)
+end
+
+-- Publishes structural pressure only while the development profiler is active.
+-- This extra walk never runs in an ordinary production Host.
+local function publishDiagnosticStructure(self, root, context)
+    if not self._diagnostics.enabled then return end
+    local nodes = 0
+    local function visit(node)
+        nodes = nodes + 1
+        if node._dragPreview then visit(node._dragPreview) end
+        for _, child in ipairs(node.children or {}) do visit(child) end
+    end
+    visit(root)
+    local function count(entries)
+        local total = 0
+        for _ in pairs(entries or {}) do total = total + 1 end
+        return total
+    end
+    self._diagnostics:setCount("nodes", nodes)
+    self._diagnostics:setCount("renderOwners", count(context.hookOwners))
+    self._diagnostics:setCount("actors", count(context.actors))
+    self._diagnostics:setCount("motions", count(context.motions))
+    self._diagnostics:setCount("effects", count(context.effects))
+    self._diagnostics:setCount("refs", count(context.refs))
+end
+
 function host:_build(root)
     local feedbackMark = #self._feedbackQueue
     local context = {
@@ -2210,6 +2253,7 @@ function host:_build(root)
         nextEffectOrder = 1,
     }
     local function buildCandidate()
+        local expansionStarted = self._diagnostics:start()
         local rootPath = childPath("root", root, 1)
         local rootLogicalPath = logicalChildPath("logical-root", root, 1)
         local candidate = self:_resolve(root, nil, rootPath, nil, context,
@@ -2230,8 +2274,11 @@ function host:_build(root)
                 nextEventOrder = nextEventOrder + 1
             end
         end
+        self._diagnostics:finish("componentExpansion", expansionStarted)
+        local layoutStarted = self._diagnostics:start()
         candidate = Layout.run(candidate,
             self._viewport.width, self._viewport.height, self)
+        self._diagnostics:finish("layout", layoutStarted)
         annotateCanvasBranches(candidate)
         for handle, node in pairs(context.refAttachments) do
             context.refRectangles[handle] = {
@@ -2242,10 +2289,11 @@ function host:_build(root)
             }
         end
         Effect.arrangeAll(context.effects, context.refRectangles, self)
-        Motion.transformTree(candidate)
+        self:_transformTree(candidate)
         Effect.updateBounds(context.effects, self)
         context.modals, context.chrome = Interaction.planesFromTree(candidate)
         context.modal = context.modals[#context.modals]
+        publishDiagnosticStructure(self, candidate, context)
         return candidate
     end
     local ok, candidate = pcall(buildCandidate)
@@ -2267,10 +2315,25 @@ function host:render(root)
     assertOperational(self, "render")
     assertPresentationAllowed(self, "render")
     assertFramePublication(self, "render")
+    self._diagnostics:ensureFrame()
+    local externalStarted = not self._diagnosticUpdateActive
+            and self._callbackDepth == 0
+            and (self._diagnosticExternalDepth or 0) == 0
+        and self._diagnostics:start() or nil
+    if externalStarted then
+        self._diagnostics:increment("externalRenderOperations")
+        self._diagnostics:cause("render")
+    end
+    local reconcileStarted = self._diagnostics:start()
+    self._diagnostics:increment("reconciles")
     local requested = root or self._rootDescriptor
     assert(Element.isDescriptor(requested), "Host:render expects a FrogUI element/component")
     local ok, candidate, context = pcall(self._build, self, requested)
-    if not ok then error(candidate, 0) end
+    if not ok then
+        self._diagnostics:finish("reconcile", reconcileStarted)
+        self._diagnostics:finish("external", externalStarted)
+        error(candidate, 0)
+    end
     local previous = {
         actors = self._actors,
         modals = self._modals or {},
@@ -2313,12 +2376,14 @@ function host:render(root)
         Interaction.afterCommit(self, previous)
     end
     local committed, commitError
+    local commitStarted = self._diagnostics:start()
     if self._callbackDepth == 0 then
         committed, commitError = pcall(self._runCallback, self, commit,
             "Host:render")
     else
         committed, commitError = pcall(commit)
     end
+    self._diagnostics:finish("commit", commitStarted)
     if not committed then
         local cleanupError
         if not published then
@@ -2326,16 +2391,49 @@ function host:render(root)
                 context.createdResources, "Unpublished candidate cleanup")
         end
         faultHost(self, "Host:render commit", commitError)
+        self._diagnostics:finish("reconcile", reconcileStarted)
+        self._diagnostics:finish("external", externalStarted)
         error(appendFailure(commitError,
             "unpublished candidate cleanup failed", cleanupError), 0)
     end
+    self._diagnostics:finish("reconcile", reconcileStarted)
+    self._diagnostics:finish("external", externalStarted)
     return candidate
+end
+
+-- Measures one complete public Host operation that happens outside update and
+-- draw. Nested callbacks and rebuilds remain attributed to their own phases,
+-- while this outer boundary captures routing work such as hit testing.
+local function runExternal(self, kind, operation, ...)
+    assert(type(kind) == "string" and kind ~= "",
+        "external diagnostic operation needs a kind")
+    if not self._diagnostics.enabled then
+        return operation(self, ...)
+    end
+    self._diagnostics:ensureFrame()
+    local depth = self._diagnosticExternalDepth or 0
+    local outer = not self._diagnosticUpdateActive and depth == 0
+    local started = outer
+        and self._diagnostics:start() or nil
+    if outer then
+        self._diagnostics:increment("external" .. kind .. "Operations")
+        if kind == "ThemeRefresh" then
+            self._diagnostics:cause("theme-refresh")
+        end
+    end
+    self._diagnosticExternalDepth = depth + 1
+    local results = { pcall(operation, self, ...) }
+    self._diagnosticExternalDepth = depth
+    self._diagnostics:finish("external", started)
+    if not results[1] then error(results[2], 0) end
+    table.remove(results, 1)
+    return unpack(results)
 end
 
 -- Dev presentation reload keeps mounted actors/processes, but drops font and
 -- asset caches before rebuilding the committed tree. Component modules
 -- reload separately by preserving their token-table identity.
-function host:refreshTheme(theme, assets, root)
+function host:_refreshTheme(theme, assets, root)
     assert(self._mounted and activeHost == self, "Host is not mounted")
     assertOperational(self, "refresh theme")
     assertPresentationAllowed(self, "refresh")
@@ -2367,6 +2465,11 @@ function host:refreshTheme(theme, assets, root)
         error(result, 0)
     end
     return result
+end
+
+function host:refreshTheme(theme, assets, root)
+    return runExternal(self, "ThemeRefresh", host._refreshTheme,
+        theme, assets, root)
 end
 
 function host:tree()
@@ -2750,7 +2853,7 @@ function host:_processEvent(entry)
             end
         end
     end
-    Motion.transformTree(self._tree)
+    self:_transformTree()
     local traceIndex = self:_appendTrace({
         kind = "event",
         token = token.name,
@@ -2778,6 +2881,11 @@ function host:_drainMessages(budget)
         local changed, traceIndex
         if entry.kind == "action" then changed, traceIndex = self:_processAction(entry)
         else changed, traceIndex = self:_processEvent(entry) end
+        if changed and traceIndex and self._diagnostics.enabled then
+            local trace = self._messageTrace[traceIndex]
+            self._diagnostics:cause((trace.kind or entry.kind)
+                .. ":" .. tostring(trace.token))
+        end
         dirty = dirty or changed
         lastTraceIndex = traceIndex or lastTraceIndex
     end
@@ -2788,6 +2896,11 @@ function host:_runCallback(callback, origin, originSource, ...)
     assert(type(callback) == "function", "FrogUI callback must be a function")
     assertOperational(self, "run another callback")
     if self._callbackDepth > 0 then return callback(...) end
+    self._diagnostics:ensureFrame()
+    local externalStarted = not self._diagnosticUpdateActive
+            and (self._diagnosticExternalDepth or 0) == 0
+            and origin ~= "Host:render" and origin ~= "Host:resize"
+        and self._diagnostics:start() or nil
     local previousQueue = self._messageQueue
     local feedbackMark = #self._feedbackQueue
     self._messageQueue = {}
@@ -2795,13 +2908,19 @@ function host:_runCallback(callback, origin, originSource, ...)
     self._currentOrigin = origin or "callback"
     self._currentOriginSource = originSource
     local args = { ... }
+    local callbackStarted = self._diagnostics:start()
     local results = { pcall(function() return callback(unpack(args)) end) }
+    if origin == "Host:update frames" then
+        self._diagnostics:finish("frameCallbacks", callbackStarted)
+    end
     if results[1] then
         local budget = { processed = 0 }
         local settled = false
         while not settled do
+            local deliveryStarted = self._diagnostics:start()
             local ok, dirty, traceIndex = pcall(
                 self._drainMessages, self, budget)
+            self._diagnostics:finish("messageDelivery", deliveryStarted)
             if not ok then
                 results = { false, dirty }
                 break
@@ -2818,6 +2937,7 @@ function host:_runCallback(callback, origin, originSource, ...)
             end
             settled = #self._messageQueue == 0
         end
+        self._diagnostics:increment("messages", budget.processed)
     end
     self._callbackDepth = 0
     self._currentOrigin = nil
@@ -2834,6 +2954,7 @@ function host:_runCallback(callback, origin, originSource, ...)
     failure = failure or (not feedbackOk and feedbackError or nil)
     failure = appendFailure(failure, "resource cleanup failed", resourceError)
     failure = appendFailure(failure, "actor cleanup failed", actorError)
+    self._diagnostics:finish("external", externalStarted)
     if failure then
         faultHost(self, origin or "callback", failure)
         error(failure, 0)
@@ -2918,26 +3039,41 @@ function host:update(dt)
     assertPresentationAllowed(self, "advance")
     assertInputBoundary(self)
     assert(type(dt) == "number" and dt >= 0, "Host:update dt must be non-negative")
+    self._diagnostics:beginFrame()
+    self._diagnosticUpdateActive = true
+    local updateStarted = self._diagnostics:start()
     self:_runFrames(dt)
     local feedbackMark = #self._feedbackQueue
     local motionCompletions, effectCompletions
+    local runtimeStarted = self._diagnostics:start()
     local ok, err = pcall(function()
+        local interactionStarted = self._diagnostics:start()
         self._rawClock:advance(dt)
         Interaction.update(self, dt)
+        self._diagnostics:finish("interaction", interactionStarted)
+        local motionStarted = self._diagnostics:start()
         _, motionCompletions = Motion.updateAll(self._motions, self)
-        Motion.transformTree(self._tree)
+        self._diagnostics:finish("motion", motionStarted)
+        self:_transformTree()
+        local refsStarted = self._diagnostics:start()
         self:_refreshCommittedRefs()
+        self._diagnostics:finish("refs", refsStarted)
+        local effectsStarted = self._diagnostics:start()
         Effect.refreshAll(self._effects, self)
         effectCompletions = Effect.updateAll(self._effects)
         Effect.updateBounds(self._effects, self)
+        self._diagnostics:finish("effects", effectsStarted)
     end)
+    self._diagnostics:finish("runtime", runtimeStarted)
     if not ok then
+        self._diagnosticUpdateActive = nil
         self:_trimFeedback(feedbackMark)
         faultHost(self, "Host:update", err)
         error(err, 0)
     end
     local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
     if not feedbackOk then
+        self._diagnosticUpdateActive = nil
         faultHost(self, "Host:update feedback", feedbackError)
         error(feedbackError, 0)
     end
@@ -2957,17 +3093,29 @@ function host:update(dt)
                 completion.source)
         end
     end
+    self._diagnostics:finishUpdate(updateStarted)
+    self._diagnosticUpdateActive = nil
 end
 
 function host:draw(customPainter)
     assert(self._mounted, "Host is not mounted")
     assert(not self._drawing, "Host:draw cannot re-enter its drawing phase")
     assertInputBoundary(self)
+    self._diagnostics:ensureFrame()
     self._drawing = true
+    local paintStarted = self._diagnostics:start()
     local ok, reason = pcall(Painter.draw, self,
         customPainter or self._customPainter)
     self._drawing = nil
+    self._diagnostics:finishDraw(paintStarted)
     if not ok then error(reason, 0) end
+end
+
+-- Returns the development profiler's detached rolling summary. Ordinary Hosts
+-- keep diagnostics disabled and therefore retain no per-frame history.
+---@return FrogUIDiagnosticsSnapshot
+function host:diagnostics()
+    return self._diagnostics:snapshot()
 end
 
 function host:resize(width, height)
@@ -2975,12 +3123,24 @@ function host:resize(width, height)
     assertOperational(self, "resize")
     assertPresentationAllowed(self, "resize")
     assertFramePublication(self, "resize")
+    self._diagnostics:ensureFrame()
+    local externalStarted = not self._diagnosticUpdateActive
+            and (self._diagnosticExternalDepth or 0) == 0
+        and self._diagnostics:start() or nil
+    if externalStarted then
+        self._diagnostics:increment("externalResizeOperations")
+    end
+    local reconcileStarted = self._diagnostics:start()
+    self._diagnostics:increment("reconciles")
+    self._diagnostics:cause("resize")
     local previousPhysicalWidth = self._viewport.physicalWidth
     local previousPhysicalHeight = self._viewport.physicalHeight
     self._viewport:resize(width, height)
     local ok, candidate, context = pcall(self._build, self, self._rootDescriptor)
     if not ok then
         self._viewport:resize(previousPhysicalWidth, previousPhysicalHeight)
+        self._diagnostics:finish("reconcile", reconcileStarted)
+        self._diagnostics:finish("external", externalStarted)
         error(candidate, 0)
     end
     local previous = {
@@ -3025,12 +3185,14 @@ function host:resize(width, height)
         Interaction.afterCommit(self, previous)
     end
     local committed, commitError
+    local commitStarted = self._diagnostics:start()
     if self._callbackDepth == 0 then
         committed, commitError = pcall(self._runCallback, self, commit,
             "Host:resize")
     else
         committed, commitError = pcall(commit)
     end
+    self._diagnostics:finish("commit", commitStarted)
     if not committed then
         local cleanupError
         if not published then
@@ -3038,9 +3200,13 @@ function host:resize(width, height)
                 context.createdResources, "Unpublished candidate cleanup")
         end
         faultHost(self, "Host:resize commit", commitError)
+        self._diagnostics:finish("reconcile", reconcileStarted)
+        self._diagnostics:finish("external", externalStarted)
         error(appendFailure(commitError,
             "unpublished candidate cleanup failed", cleanupError), 0)
     end
+    self._diagnostics:finish("reconcile", reconcileStarted)
+    self._diagnostics:finish("external", externalStarted)
 end
 
 function host:_pointerId(pointerId)
@@ -3054,7 +3220,7 @@ function host:_virtual(x, y)
     return self._viewport:toVirtual(x, y)
 end
 
-function host:pointerDown(x, y, pointerId, button)
+function host:_pointerDown(x, y, pointerId, button)
     assert(self._mounted, "Host is not mounted")
     assertOperational(self, "route pointer input")
     assertPresentationAllowed(self, "route pointer input through")
@@ -3068,7 +3234,12 @@ function host:pointerDown(x, y, pointerId, button)
     return Interaction.pointerDown(self, virtualX, virtualY, id, button)
 end
 
-function host:pointerMove(x, y, pointerId)
+function host:pointerDown(x, y, pointerId, button)
+    return runExternal(self, "Input", host._pointerDown,
+        x, y, pointerId, button)
+end
+
+function host:_pointerMove(x, y, pointerId)
     assert(self._mounted, "Host is not mounted")
     assertOperational(self, "route pointer input")
     assertPresentationAllowed(self, "route pointer input through")
@@ -3078,7 +3249,12 @@ function host:pointerMove(x, y, pointerId)
         self:_pointerId(pointerId))
 end
 
-function host:pointerUp(x, y, pointerId, button)
+function host:pointerMove(x, y, pointerId)
+    return runExternal(self, "Input", host._pointerMove,
+        x, y, pointerId)
+end
+
+function host:_pointerUp(x, y, pointerId, button)
     assert(self._mounted, "Host is not mounted")
     assertOperational(self, "route pointer input")
     assertPresentationAllowed(self, "route pointer input through")
@@ -3088,7 +3264,12 @@ function host:pointerUp(x, y, pointerId, button)
         self:_pointerId(pointerId), button)
 end
 
-function host:keyDown(key, scancode, isrepeat)
+function host:pointerUp(x, y, pointerId, button)
+    return runExternal(self, "Input", host._pointerUp,
+        x, y, pointerId, button)
+end
+
+function host:_keyDown(key, scancode, isrepeat)
     assert(self._mounted, "Host is not mounted")
     assertOperational(self, "route key input")
     assertPresentationAllowed(self, "route key input through")
@@ -3162,7 +3343,12 @@ function host:keyDown(key, scancode, isrepeat)
     return self._modal ~= nil
 end
 
-function host:keyUp(key)
+function host:keyDown(key, scancode, isrepeat)
+    return runExternal(self, "Input", host._keyDown,
+        key, scancode, isrepeat)
+end
+
+function host:_keyUp(key)
     assert(self._mounted, "Host is not mounted")
     assertOperational(self, "route key input")
     assertPresentationAllowed(self, "route key input through")
@@ -3175,7 +3361,11 @@ function host:keyUp(key)
     return self._modal ~= nil
 end
 
-function host:textInput(text)
+function host:keyUp(key)
+    return runExternal(self, "Input", host._keyUp, key)
+end
+
+function host:_textInput(text)
     assert(self._mounted, "Host is not mounted")
     assertOperational(self, "route text input")
     assertPresentationAllowed(self, "route text input through")
@@ -3183,6 +3373,10 @@ function host:textInput(text)
     assert(type(text) == "string", "Host:textInput expects text")
     self._lastInputText = text
     return self._modal ~= nil
+end
+
+function host:textInput(text)
+    return runExternal(self, "Input", host._textInput, text)
 end
 
 function host:setInspectorVisible(visible)
@@ -3196,7 +3390,7 @@ function host:setInspectorVisible(visible)
     if not visible then self._selectedIdentity = nil end
 end
 
-function host:inspect(x, y)
+function host:_inspect(x, y)
     assert(self._mounted, "Host is not mounted")
     assertPresentationAllowed(self, "change inspection selection in")
     local virtualX, virtualY = self:_virtual(x, y)
@@ -3227,6 +3421,10 @@ function host:inspect(x, y)
     for _, entry in ipairs(nodes) do
         if entry.identity == selected.identity then return entry end
     end
+end
+
+function host:inspect(x, y)
+    return runExternal(self, "Input", host._inspect, x, y)
 end
 
 function host:inspectionTree()
@@ -3408,13 +3606,17 @@ function host:touchreleased(id, x, y)
     return self:pointerUp(x, y, id, 1)
 end
 
-function host:wheelMoved(dx, dy)
+function host:_wheelMoved(dx, dy)
     assert(self._mounted, "Host is not mounted")
     assertOperational(self, "route wheel input")
     assertPresentationAllowed(self, "route wheel input through")
     assertInputBoundary(self)
     assert(finite(dx) and finite(dy), "wheel delta must be finite")
     return Interaction.wheelMoved(self, dx, dy)
+end
+
+function host:wheelMoved(dx, dy)
+    return runExternal(self, "Input", host._wheelMoved, dx, dy)
 end
 
 host.keypressed = host.keyDown

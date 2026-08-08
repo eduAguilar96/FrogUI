@@ -156,7 +156,7 @@ end
 -- same pointer frame without asking application code to rerender.
 local function refreshRadial(host, node)
     require("src.frogui.layout").arrangeRadialDial(node, host)
-    Motion.transformTree(host._tree)
+    host:_transformTree()
     host:_refreshCommittedRefs()
 end
 
@@ -819,7 +819,7 @@ function interaction.pointerMove(host, x, y, pointerId)
             session.lastAxis, session.lastMoveTime = axis, now
             if scroll.node then
                 require("src.frogui.layout").arrangeScroll(scroll.node, host)
-                Motion.transformTree(host._tree)
+                host:_transformTree()
                 host:_refreshCommittedRefs()
             end
         end
@@ -915,7 +915,7 @@ function interaction.pointerUp(host, x, y, pointerId, button)
                     math.floor(scroll.offset / interval + 0.5) * interval))
                 scroll.velocity = 0
                 require("src.frogui.layout").arrangeScroll(node, host)
-                Motion.transformTree(host._tree)
+                host:_transformTree()
                 host:_refreshCommittedRefs()
             end
             callback = node and node.props.onScrollEnd or nil
@@ -1071,7 +1071,7 @@ function interaction.wheelMoved(host, dx, dy)
         scroll.offset + amount * interaction.WHEEL_STEP))
     scroll.velocity = 0
     require("src.frogui.layout").arrangeScroll(node, host)
-    Motion.transformTree(host._tree)
+    host:_transformTree()
     host:_refreshCommittedRefs()
     return true
 end
@@ -1101,7 +1101,7 @@ function interaction.revealFocus(host, identity)
             require("src.frogui.layout").arrangeScroll(node, host)
         end
     end
-    Motion.transformTree(host._tree)
+    host:_transformTree()
     host:_refreshCommittedRefs()
 end
 

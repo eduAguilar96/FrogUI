@@ -47,6 +47,33 @@ local Interaction = require("src.frogui.interaction")
 ---@field now fun(self:FrogUIClock):number Read the current deterministic time.
 ---@field reset fun(self:FrogUIClock, time?:number):number Reset to a finite non-negative time.
 
+---@class FrogUIDiagnosticPhase
+---@field current number Most recently completed frame in milliseconds.
+---@field average number Rolling-window mean in milliseconds.
+---@field p95 number Rolling-window 95th percentile in milliseconds.
+---@field max number Rolling-window maximum in milliseconds.
+
+---@class FrogUIDiagnosticCause
+---@field name string Typed message or explicit rebuild origin.
+---@field count integer Occurrences retained in the rolling window.
+
+---@class FrogUIDiagnosticSlowFrame
+---@field totalMs number Complete FrogUI CPU time for this correlated frame.
+---@field phases table<string,number> Same-frame phase timings in milliseconds.
+---@field counts table<string,number> Same-frame activity and structure counts.
+---@field causes FrogUIDiagnosticCause[] Rebuild causes from this exact frame.
+---@field memoryDeltaKB number Net heap change during this exact frame.
+
+---@class FrogUIDiagnosticsSnapshot
+---@field enabled boolean Whether this Host opted into profiling.
+---@field samples integer Number of completed frames in the bounded window.
+---@field phases table<string,FrogUIDiagnosticPhase> Timings keyed by the documented F4 phase names.
+---@field counts table<string,number> Latest activity and retained structure counts.
+---@field causes FrogUIDiagnosticCause[] Top three rolling rebuild causes.
+---@field slowest? FrogUIDiagnosticSlowFrame Slowest completed frame in the rolling window.
+---@field memoryKB number Current Lua heap size in kilobytes.
+---@field memoryDeltaKB number Net heap change during the latest completed frame.
+
 ---@class FrogUIRef
 ---@field current? FrogUIRect Read-only property returning a detached rectangle copy, or nil while unattached/unmounted; mutating the copy never changes FrogUI.
 ---A stable handle created by a render hook and attached to one primitive.
@@ -767,6 +794,28 @@ Frog.play = Juice.play
 ---@type fun(time?:number):FrogUIClock
 Frog.clock = Clock.new
 
+---@class FrogUIHostOptions
+---@field width? number Initial physical viewport width.
+---@field height? number Initial physical viewport height.
+---@field theme? table Semantic colors, fonts, assets, and interaction defaults.
+---@field assets? table Semantic asset-token lookup.
+---@field reducedMotion? boolean Settle finite motion while preserving completion.
+---@field diagnostics? boolean Enable the bounded development execution profiler; disabled by default.
+---@field designWidth? number Minimum virtual layout width; defaults to 540.
+---@field designHeight? number Minimum virtual layout height; defaults to 960.
+---@field wideRatio? number Virtual aspect ratio at which `useViewport().wide` becomes true.
+---@field viewport? {x?:number,y?:number,width?:number,height?:number} Optional physical subregion.
+---@field safe? {left?:number,right?:number,top?:number,bottom?:number} Platform safe-area insets.
+---@field feedback? {sound?:fun(cue:string),haptic?:fun(cue:string)} Semantic feedback providers.
+---@field painter? table Optional custom painter used by focused checks/tools.
+---@field inspectorActive? boolean Begin with F6 inspection visible.
+---@field messageTraceLimit? integer Bounded F6 typed-message history; defaults to 80.
+---@field messageLoopLimit? integer Maximum deliveries in one callback transaction; defaults to 256.
+
+--- Creates the one mounted tree owner. Set `diagnostics = true` only on a
+--- development surface, then read its detached rolling summary with
+--- `host:diagnostics()`.
+---@param options? FrogUIHostOptions
 function Frog.host(options)
     return Host.new(options)
 end
