@@ -1366,6 +1366,7 @@ shows current/p95 update and paint cost plus p95 attribution by phase:
 | `deferred/ownership/order` | Deferred-view traversal, effect ownership validation, and event/hidden-actor ordering |
 | `layout` | Two-pass measure and arrange of that candidate tree |
 | `candidate transform` | The arranged candidate's post-layout Motion geometry walk |
+| `interaction transform` | An immediate Scroll/RadialDial transform consumed during input or settling, before the next committed update |
 | `runtime` | Retained interaction, Motion, refs, and Effect updates |
 | `motion` | Runtime Motion runner sampling plus its committed-tree transform; the two child phases are also exposed |
 | `refs` | Republish arranged ref rectangles after retained updates |
@@ -1381,6 +1382,9 @@ bookkeeping, primitive, retained-reconciliation, and post-walk buckets.
 `runtime` contains interaction, Motion, refs, and effects; Motion and effects
 then expose their own children. A transform caused directly by event delivery
 has a separate `messageTransform` bucket and cannot inflate runtime Motion.
+An immediate Scroll or RadialDial mutation likewise uses
+`interactionTransform`; if it consumes the dirty bit, the later committed call
+is truthfully recorded as a zero-visit skip.
 `msg` deliberately excludes reconciliation. `action`, `event`, and
 `transition` are nested within `msg`.
 `observer` is profiler overhead, not application work; it remains visible so
@@ -1442,57 +1446,185 @@ after a bounded measurement; never poll it from an overlay or normal update.
 It contains timings, signed heap context, bounded semantic-owner rankings,
 activity, structural counts, and compact dirty causes—not component
 descriptions, messages, actor state, or simulation payloads.
+
+Each trace row also has two B4p.7 observer tables:
+
+- `transformAttribution.candidate|message|committed|interaction` reports calls,
+  runs/skips, nodes visited, exact invalidation/coalescing counts, source-family
+  counts, changing Motion owners, dirty roots, LCA/branch coverage, and active
+  geometry Motion owners. Motion labels are an exact count/name-ranked top five
+  plus `other`; they contain only the semantic owner and each active geometry
+  recipe on a changing owner as declared recipe name, root recipe kind, and
+  geometry mask;
+  they never contain paths, keys, props, state, or payloads.
+  The Battle TSV writes every nonempty bounded category beside its exact phase,
+  context, and frame. It preserves the row's named top five plus `other`
+  without phase aggregation, reranking, or a second truncation, so owner/recipe
+  evidence remains correlated with the locality and Battle activity row.
+- `refAttribution.committed|interaction` reports collection visits, handles
+  published/cleared, rectangles actually changed, and whether that publication
+  followed visual Motion or a retained interaction invalidation. The latter is
+  a cause flag, not proof that layout values differed; `changedRectangles` is
+  the exact arranged-geometry comparison. Visual Motion can
+  run while changing zero arranged ref rectangles; the two facts deliberately
+  remain separate.
+
+A committed run without an exact invalidation family is a framework invariant
+failure. A skipped call always reports zero visits. Candidate layout is the one
+explicit exception because a new tree needs its first transform before it can
+be committed. These fields observe the existing full-tree/publication policy;
+they do not implement subtree skipping or ref gating.
+
+Transform geometry still has one implementation: a non-recursive node writer
+shared by production's direct recursion and the diagnostics-only observed
+recursion. The wrapper is selected once at the root, so an observed run remains
+one transform walk and an ordinary run carries no observer tables or branches.
 Both one-shot methods require a mounted, operational, diagnostics-enabled Host
 at a quiet public boundary: never call them during update, draw, a component
 callback, or external input routing.
 
 ### Battle performance gate
 
-Run `love . --frogui battle-performance` for the explicit B4p comparison. It
-mounts the reviewed deterministic 6v6 load fixture twice: once through the
-shipped retained Battle presenter and once through FrogUI's real
-`BattlePlayback` and `BattleScreen`. Both use a 540×960 battle-screen-only
-scope with app HUD, Inspection, hot reload, profiler instrumentation, and audio
-excluded from both acceptance measurements. Afterward, fresh opt-in FrogUI-only
-early/late sessions clear setup history and export one bounded diagnostic trace;
-those observer-inflated timings provide attribution and never affect pass/fail.
-Only those diagnostic engines time `BattlePlayback:update()` and
+On macOS, run `tools/frogui/run_battle_performance_macos.sh` from any directory.
+This exact-PID launcher is the only supported source of B4p evidence. The raw
+`--frogui battle-performance acceptance|diagnostics` modes are internal halves
+of the launcher and reject an unbounded direct invocation.
+
+The launcher creates one task-specific directory under `build/frogui/`, then
+runs two fresh LÖVE processes. `acceptance` mounts the reviewed deterministic
+6v6 load fixture through the shipped retained Battle presenter and through
+FrogUI's real `BattlePlayback` and `BattleScreen`. Both use a 540×960
+battle-screen-only scope with app HUD, Inspection, hot reload, profiler
+instrumentation, and audio excluded. `diagnostics` then runs fresh opt-in
+FrogUI-only early/late observer sessions. The split prevents diagnostic history,
+heap pressure, and retained engine state from contaminating pass/fail timing.
+Observer-inflated timings provide attribution only.
+
+Acceptance prints compact tables to the terminal and its captured stdout log.
+Diagnostics prints only completion and artifact path, while writing the large
+trace to `diagnostics-*.tsv.partial`. It atomically renames that file to
+`diagnostics-*.tsv` only after every row, flush, and close succeeds. A partial
+file, missing final file, missing completion stage, killed process, canceled
+run, or machine restart is **INVALID evidence**. It may help diagnose a harness
+failure but supports no FrogUI performance conclusion or optimization.
+
+The pair becomes durable evidence only when the launcher atomically publishes
+`battle-performance.complete`. That manifest records both statuses, every
+result/artifact name and digest, the Git commit, whether the checkout was dirty,
+and digests for tracked changes, status, and untracked source contents. A dirty
+pre-commit checkpoint is valid because its exact source identity is explicit;
+the commit name alone is never treated as the measured source. The launcher
+recaptures the same identity after diagnostics and requires an exact match, so
+an edit between the two processes invalidates the pair. It also requires each
+child stderr log to contain its exact report-complete and quit-complete stages.
+No manifest is published after source drift, a missing completion stage,
+invalid acceptance, diagnostic failure, timeout, or launcher interruption.
+
+Every expensive boundary writes and immediately flushes a structured stderr
+stage containing elapsed time and cooperative-deadline state. Stages begin in
+`src/game.lua` before the heavy probe module is required and cover window
+creation, engine factory/setup, each measurement, diagnostic export, disposal,
+GC, reporting, and quit. Lua cooperatively refuses new work after its code-owned
+deadline. The outer launcher independently applies a longer code-owned deadline,
+sends TERM, waits its short code-owned grace, then sends KILL to that PID only.
+It captures child stdout and stderr byte-for-byte in separate regular files,
+then replays each to its original terminal channel; no pipe or `tee` enters the
+measurement. It always cancels/reaps its own watchdog and never uses a process
+name, process group, `pkill`, or `killall`.
+HUP, INT, or TERM sent to the outer launcher is forwarded to its one active
+watchdog; the launcher boundedly reaps that exact process, which in turn stops
+and reaps its exact LÖVE child. Cancellation gives the watchdog a short bounded
+chance to run its TERM cleanup and reap its private deadline sleeper before an
+exact-PID KILL fallback.
+
+The non-graphical harness checks are
+`tools/frogui/exact_pid_watchdog_check.sh` and
+`tools/frogui/battle_performance_launcher_check.sh`. They use deterministic
+shell fixtures, including a fake LÖVE executable; neither opens a game window.
+
+Exit status has one meaning across the launcher: `0` is a completed acceptance
+PASS plus completed diagnostics, `1` is a completed and valid acceptance target
+miss plus completed diagnostics, `2` is invalid input/runtime/harness failure,
+and `124` is the external deadline. Diagnostics still runs after acceptance
+status 0 or 1, but not after 2 or 124. On any timeout or runtime failure cleanup
+restarts a stopped collector but deliberately skips explicit full collection;
+process exit reclaims the heap without adding another unbounded cleanup step.
+
+Only diagnostic engines time `BattlePlayback:update()` and
 `BattlePlayback:snapshot()` with tool-local cumulative scalars; the trace joins
 their per-frame deltas after the sampled loop. FrogUI exposes no domain-call
 registry or profiling API, and profiler-free acceptance calls both methods
-directly without a timer.
-Disabled Hosts allocate no diagnostic histogram/counter tables and perform no
-diagnostic timer or heap calls. Expansion still crosses cheap nil-profiler
-guards so one implementation remains authoritative; the Battle tool likewise
-crosses false observer-selection branches instead of duplicating its root.
-Per-frame `last_event` and `last_address` fields identify only the latest
-presented Playback record for context; they are not asserted as the cause of a
-rebuild. Revision-stable rows are labelled `(no playback change)`, while an
-unchanged address with a new revision is labelled `(clock-only)`.
-The command owns its warmup, frame counts, late-round boundary, and
-provisional pass targets in `tools/frogui/battle_performance.lua`; do not copy
-those values into documentation or another check.
+directly without a timer. Disabled Hosts allocate no diagnostic
+histogram/counter tables and perform no diagnostic timer or heap calls.
+Expansion still crosses cheap nil-profiler guards so one implementation remains
+authoritative; the Battle tool likewise crosses false observer-selection
+branches instead of duplicating its root. Per-frame `last_event` and
+`last_address` identify only the latest presented Playback record for context;
+they are not asserted as the cause of a rebuild. Revision-stable rows are
+labelled `(no playback change)`, while an unchanged address with a new revision
+is labelled `(clock-only)`.
 
-The command is deliberately self-bounding: late-round setup alone uses the
-fastest supported playback speed, then both presenters return to one-times
-speed before measurement. Console/window heartbeats keep the synchronous run
-visible and cancellable; setup and whole-command wall clocks, an advance-frame
-limit, and a GC-stopped allocation cap abort a runaway probe. Every exit
-restarts collection, releases the active Host or retained Battle tree, and
-restores the shipped audio policy. A window close cancels the probe cleanly.
+Late-round setup alone uses the fastest supported playback speed, then both
+presenters return to one-times speed before measurement. Heartbeats sit outside
+the timed update/draw interval. Setup clocks, an advance-frame limit, and a
+GC-stopped allocation cap provide narrower fail-fast boundaries inside the two
+process-level deadlines. Completed runs release the active Host or retained
+Battle tree and restore shipped audio/window policy. A window close is a
+runtime cancellation and therefore invalid evidence.
 
-The printed timing window runs with normal garbage collection and separates
-update from draw. A second, shorter window stops collection to report gross Lua
-allocation per frame, then reports the full cleanup time separately. Timing is
+The timing window runs with normal garbage collection and separates update
+from draw. A second, shorter window stops collection to report gross Lua
+allocation per frame, then reports full cleanup time separately. Timing is
 machine-specific, so acceptance uses shipped/FrogUI mean and p95 ratios, a
 one-frame budget, and the fraction of over-budget frames; allocation has ratio
 and absolute ceilings. The late sample is aligned at the committed-round level,
 not to an identical within-round event address, so treat it as coarse pressure
 evidence. An `alloc_capped=yes` row stopped at the safety ceiling: its printed
 per-frame rate is a censored lower bound, not a complete-window mean. The
-command exits nonzero while any
-B4p target is missed. It is deliberately not part of `--check frogui` and is
-unavailable in fused builds. This compares the currently implemented presenter
-surfaces, not final visual parity: FrogUI does not yet carry the remaining B5
-feel/FX work, so current ratios are conservative and must be re-run as parity
-lands.
+launcher exits 1 while any B4p target is missed. It is deliberately not part of
+`--check frogui` and is unavailable in fused builds. This compares the currently
+implemented presenter surfaces, not final visual parity: FrogUI does not yet
+carry the remaining B5 feel/FX work, so current ratios are conservative and
+must be re-run as parity lands. Warmup, frame counts, late-round boundary, and
+provisional targets live only in `tools/frogui/battle_performance.lua`; do not
+copy them into documentation or another check.
+
+#### Current measured checkpoint
+
+B4p.7 closed on 2026-08-09 with the valid manifest at
+`build/frogui/battle-performance-20260809T081409Z-18649`. The manifest records
+commit `aef46899a5d3907d0e03d02a2560074ca47e2878`, an exact dirty source identity
+unchanged across both processes, acceptance status 1 (completed target miss),
+diagnostics status 0, and a 2,733-row TSV.
+
+| window | shipped mean / p95 / allocation | FrogUI mean / p95 / allocation | result |
+|---|---:|---:|---|
+| paused | 1.157 / 2.001 ms / 248.458 KB/frame | 1.414 / 1.608 ms / 38.568 KB/frame | pass |
+| early | 1.014 / 1.503 ms / 263.432 KB/frame | 2.109 / 7.529 ms / 351.669 KB/frame | fail |
+| late | 1.846 / 1.714 ms / 283.381 KB/frame | 4.662 / 17.647 ms / 2554.159 KB/frame | fail |
+
+Allocation is effectively unchanged from B4p.6. Late FrogUI mean/p95 moved
+only +0.034/+0.424 ms; the larger early p95 move is an unexplained single-run
+difference, not regression proof. These rows provide no evidence of a new broad
+allocation cost. Locality is decisive: late committed full
+transforms visited 159,657 nodes, while exact disjoint dirty branches cover
+9,227 (5.78%) and their LCAs cover 57,924 (36.28%). Early exact coverage is
+513/22,422 (2.29%); late interaction is 1,500/56,701 (2.65%). The verified late
+committed total is 776 dirty roots. All measured committed/interaction ref
+publications changed zero rectangles, but that Battle-specific observation is
+not a general ref-skip rule.
+
+The next checkpoint is B4p.8a: optimize only committed, Motion-only transforms
+over exact non-overlapping dirty branches, retain the existing geometry writer,
+and rerun with ref publication unchanged. Candidate/message/structural,
+Scroll/RadialDial, mixed, stale, ambiguous, or over-limit cases stay on the
+full traversal. Runtime metadata is scalar acyclic generation/plane/preorder/
+subtree/boundary data plus a single-use node set and compact source mask. Any
+non-Motion or mixed bit forces the full path; both facts clear together. This
+adds no parent pointers, full-tree discovery, component cache, or generic
+invalidation graph. B4p.8b may later
+gate refs from an explicit arranged-geometry revision, but candidate commit and
+every Scroll/Radial arrange remain conservative. The full invariants, fallbacks,
+and acceptance requirements live in
+`design/reference/frog-ui-battle-migration.md`. No repair is implemented by
+this documentation checkpoint; B4p remains open and B5 remains blocked.

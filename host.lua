@@ -1238,8 +1238,9 @@ local function findIdentity(node, identity)
 end
 
 -- Collects exact arranged rectangles from the one currently committed tree.
-local function collectCommittedRefRectangles(node, rectangles)
+local function collectCommittedRefRectangles(node, rectangles, stats)
     if not node then return end
+    if stats then stats.treeVisits = stats.treeVisits + 1 end
     if node._ref then
         rectangles[node._ref] = {
             x = node.x,
@@ -1249,7 +1250,7 @@ local function collectCommittedRefRectangles(node, rectangles)
         }
     end
     for _, child in ipairs(node.children or {}) do
-        collectCommittedRefRectangles(child, rectangles)
+        collectCommittedRefRectangles(child, rectangles, stats)
     end
 end
 
@@ -1330,6 +1331,7 @@ local function faultHost(self, origin, reason)
             message = tostring(reason),
         }
     end
+    self._pendingTransformAttribution = nil
     return self._fault.message
 end
 
@@ -1425,6 +1427,7 @@ function host.new(options)
     self._modalFocusStack = {}
     self._pointerX, self._pointerY = 0, 0
     self._motionStartSequence = 0
+    self._pendingTransformAttribution = nil
     self._feedbackQueue = {}
     self._pendingActorUnmounts = {}
     self._pendingActorUnmountLifetimes = {}
@@ -1526,10 +1529,34 @@ end
 
 -- Republishes geometry after retained layout mutates the committed tree, such
 -- as Scroll drag, snap, wheel, momentum, or focus reveal.
-function host:_refreshCommittedRefs()
+function host:_refreshCommittedRefs(context, transformRow)
     local rectangles = {}
-    collectCommittedRefRectangles(self._tree, rectangles)
-    Ref.publish(self._refs, self._refs, rectangles)
+    local profiling = self._diagnostics.enabled
+    local collection = profiling and { treeVisits = 0 } or nil
+    collectCommittedRefRectangles(self._tree, rectangles, collection)
+    local publication = Ref.publish(self._refs, self._refs, rectangles, profiling)
+    if not profiling then return end
+    context = context or "interaction"
+    local families = transformRow and transformRow.families or {}
+    local visualChanged = transformRow and transformRow.runs > 0
+        and (families.Motion or 0) > 0
+    local interactionInvalidated = transformRow and transformRow.runs > 0
+        and ((families.Scroll or 0) + (families.RadialDial or 0)
+            + (families.interaction or 0)) > 0
+    self._diagnostics:recordRefs(context, {
+        calls = 1,
+        treeVisits = collection.treeVisits,
+        published = publication.published,
+        cleared = publication.cleared,
+        changedRectangles = publication.changed,
+        visualTransformChanged = visualChanged and 1 or 0,
+        interactionInvalidated = interactionInvalidated and 1 or 0,
+    })
+    self._diagnostics:increment(context .. "RefPublications")
+    self._diagnostics:increment(context .. "RefTreeVisits",
+        collection.treeVisits)
+    self._diagnostics:increment(context .. "ChangedRefRectangles",
+        publication.changed)
 end
 
 -- Implements the public positional single-ref hook.
@@ -1726,6 +1753,7 @@ function host:mount(root)
     self._mounted = true
     self._rootDescriptor = root
     self._tree = candidate
+    self._pendingTransformAttribution = nil
     self._actors = context.actors
     self._addresses = context.addresses
     self._semanticTokens = context.semanticTokens
@@ -2365,17 +2393,153 @@ local function assignEventOrder(node, nextOrder)
     return nextOrder
 end
 
--- Applies committed-tree Motion geometry through one diagnostic boundary.
--- Ordinary Hosts take the direct path without timer calls or allocations.
-function host:_transformTree(root, phase)
+local TRANSFORM_FAMILIES = {
+    Motion = true,
+    Scroll = true,
+    RadialDial = true,
+    interaction = true,
+}
+
+local TRANSFORM_DETAILS = {
+    Motion = { ["event-play"] = true, ["frame-sample"] = true },
+    Scroll = {
+        drag = true, snap = true, momentum = true, wheel = true, focus = true,
+    },
+    RadialDial = {
+        drag = true, settle = true, ["controlled-refresh"] = true,
+    },
+    interaction = { other = true },
+}
+
+local TRANSFORM_CONTEXTS = {
+    candidateTransform = "candidate",
+    messageTransform = "message",
+    committedTransform = "committed",
+    interactionTransform = "interaction",
+}
+
+-- Keeps semantic diagnostic labels readable and bounded. Logical identities,
+-- source paths, binding keys, and message payloads never enter this channel.
+local function transformLabel(value)
+    value = tostring(value or "unknown")
+    value = value:gsub("[^%w_:%.$%-]", "?")
+    if #value > 64 then value = value:sub(1, 61) .. "..." end
+    return value
+end
+
+local function incrementMap(map, name, amount)
+    map[name] = (map[name] or 0) + (amount or 1)
+end
+
+-- Marks committed geometry stale and, only for an opted-in diagnostic Host,
+-- retains the exact bounded cause batch until one transform consumes it.
+function host:_invalidateTransform(node, family, detail, recipes)
+    Motion.invalidate(self._tree)
+    if not self._diagnostics.enabled then return end
+    assert(TRANSFORM_FAMILIES[family],
+        "unknown FrogUI transform invalidation family " .. tostring(family))
+    assert(TRANSFORM_DETAILS[family][detail],
+        "unknown FrogUI " .. family .. " transform detail " .. tostring(detail))
+    assert(node, "FrogUI transform invalidation requires its changed node")
+    local batch = self._pendingTransformAttribution
+    if not batch then
+        batch = {
+            invalidations = 0,
+            nodes = {},
+            changingOwners = {},
+            families = {},
+            details = {},
+            owners = {},
+            recipes = {},
+        }
+        self._pendingTransformAttribution = batch
+    end
+    batch.invalidations = batch.invalidations + 1
+    batch.nodes[node] = true
+    incrementMap(batch.families, family)
+    incrementMap(batch.details, family .. ":" .. detail)
+    if family == "Motion" then
+        batch.changingOwners[node] = true
+        local owner = transformLabel(node.owner or node.type)
+        incrementMap(batch.owners, owner)
+        for _, recipe in ipairs(recipes or {}) do
+            if recipe then
+                local name = transformLabel(recipe.name)
+                local kind = transformLabel(recipe.kind)
+                local geometry = transformLabel(recipe.geometry)
+                incrementMap(batch.recipes,
+                    name .. "|" .. kind .. "|" .. geometry)
+            end
+        end
+    end
+end
+
+local function mapCount(values)
+    local count = 0
+    for _ in pairs(values or {}) do count = count + 1 end
+    return count
+end
+
+-- Applies transformed geometry and consumes one exact diagnostic cause batch.
+-- Candidate layout is the only run allowed without an invalidation. Skips
+-- always report zero recursive visits.
+function host:_transformTree(root, phase, activeMotion)
     root = root or self._tree
     if not self._diagnostics.enabled or not phase then
-        Motion.transformTree(root)
-        return
+        return Motion.transformTree(root)
     end
+    local context = assert(TRANSFORM_CONTEXTS[phase],
+        "unknown FrogUI transform phase " .. tostring(phase))
+    local batch = root == self._tree and self._pendingTransformAttribution or nil
+    local targets = context == "candidate" and { [root] = true }
+        or batch and batch.nodes or {}
     local started = self._diagnostics:start()
-    Motion.transformTree(root)
+    local ran, stats = Motion.transformTree(root, targets)
     self._diagnostics:finish(phase, started)
+    local invalidations = batch and batch.invalidations or 0
+    local row = {
+        calls = 1,
+        runs = ran and 1 or 0,
+        skips = ran and 0 or 1,
+        nodesVisited = stats.nodesVisited or 0,
+        invalidations = invalidations,
+        coalescedInvalidations = ran and math.max(0, invalidations - 1) or 0,
+        changingOwners = batch and mapCount(batch.changingOwners) or 0,
+        dirtyRoots = stats.dirtyRoots or 0,
+        lcaCoverage = stats.lcaCoverage or 0,
+        branchCoverage = stats.branchCoverage or 0,
+        activeGeometryMotions = activeMotion
+            and activeMotion.activeGeometryMotions or 0,
+        families = batch and batch.families or {},
+        owners = batch and batch.owners or {},
+        recipes = batch and batch.recipes or {},
+        details = context == "candidate" and { ["candidate-layout"] = 1 }
+            or batch and batch.details or {},
+    }
+    if ran then
+        assert(row.nodesVisited > 0,
+            "FrogUI transform run visited no nodes")
+        if context ~= "candidate" then
+            assert(invalidations > 0 and next(row.families) ~= nil,
+                "FrogUI " .. context .. " transform ran without a cause")
+            assert(row.dirtyRoots > 0,
+                "FrogUI transform cause did not belong to the committed tree")
+        end
+        assert(row.branchCoverage <= row.lcaCoverage
+                and row.lcaCoverage <= row.nodesVisited,
+            "FrogUI transform locality coverage is inconsistent")
+        if root == self._tree then self._pendingTransformAttribution = nil end
+    else
+        assert(row.nodesVisited == 0,
+            "FrogUI skipped transform performed recursive work")
+        assert(invalidations == 0,
+            "FrogUI skipped transform retained an unconsumed cause")
+    end
+    self._diagnostics:recordTransform(context, row)
+    self._diagnostics:increment(context .. "TransformCalls")
+    self._diagnostics:increment(context
+        .. (ran and "TransformRuns" or "TransformSkips"))
+    return ran, row
 end
 
 -- Publishes structural pressure only while the development profiler is active.
@@ -2567,6 +2731,7 @@ function host:render(root)
     local function commit()
         self._rootDescriptor = requested
         self._tree = candidate
+        self._pendingTransformAttribution = nil
         self._actors = context.actors
         self._addresses = context.addresses
         self._semanticTokens = context.semanticTokens
@@ -3310,18 +3475,21 @@ function host:update(dt)
         local motionStarted = self._diagnostics:start()
         local motionUpdateStarted = profiling
             and self._diagnostics:start() or nil
-        _, motionCompletions = Motion.updateAll(self._motions, self)
+        local motionAttribution
+        _, motionCompletions, motionAttribution =
+            Motion.updateAll(self._motions, self)
         if profiling then
             self._diagnostics:finish("motionUpdate", motionUpdateStarted)
         end
-        self:_transformTree(nil, "committedTransform")
+        local _, transformAttribution = self:_transformTree(nil,
+            "committedTransform", motionAttribution)
         self._diagnostics:finish("motion", motionStarted)
         if profiling then
             runtimeHeapCursor = self._diagnostics:heapMark(
                 "motion", runtimeHeapCursor)
         end
         local refsStarted = self._diagnostics:start()
-        self:_refreshCommittedRefs()
+        self:_refreshCommittedRefs("committed", transformAttribution)
         self._diagnostics:finish("refs", refsStarted)
         if profiling then
             runtimeHeapCursor = self._diagnostics:heapMark(
@@ -3475,6 +3643,7 @@ function host:resize(width, height)
     local published = false
     local function commit()
         self._tree = candidate
+        self._pendingTransformAttribution = nil
         self._actors = context.actors
         self._addresses = context.addresses
         self._semanticTokens = context.semanticTokens
@@ -3808,6 +3977,7 @@ function host:unmount()
     self._hoveredIdentity = nil
     self._focusedIdentity = nil
     self._selectedIdentity = nil
+    self._pendingTransformAttribution = nil
     self._tree = nil
     self._rootDescriptor = nil
     self._actors = {}

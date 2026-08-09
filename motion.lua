@@ -157,6 +157,32 @@ local function writtenProperties(recipe, out)
     return out
 end
 
+local function geometryMask(recipe)
+    local written = writtenProperties(recipe)
+    local translated = written.x ~= nil or written.y ~= nil
+    local rotated = written.rotation ~= nil
+    local scaled = written.scale ~= nil
+    local kinds = (translated and 1 or 0) + (rotated and 1 or 0)
+        + (scaled and 1 or 0)
+    if kinds == 0 then return nil end
+    if kinds > 1 then return "mixed" end
+    if translated then return "translate" end
+    if rotated then return "rotate" end
+    return "scale"
+end
+
+-- Returns bounded recipe vocabulary for development diagnostics. It never
+-- includes a binding key, event payload, logical identity, or source path.
+local function diagnosticRecipe(name, recipe)
+    local mask = geometryMask(recipe)
+    if not mask then return nil end
+    return {
+        name = name,
+        kind = recipe.kind,
+        geometry = mask,
+    }
+end
+
 local sample
 
 local function finalValues(recipe, base)
@@ -601,7 +627,15 @@ function motion.play(instance, instruction, host)
     if instance.node then
         instance.node.presentation = copyValues(instance.values)
         if not previous or not sameGeometry(previous, instance.values) then
-            motion.invalidate(host._tree)
+            if host._diagnostics.enabled then
+                local binding = instance.recipes[instruction.name]
+                host:_invalidateTransform(instance.node, "Motion",
+                    "event-play", binding and {
+                        diagnosticRecipe(instruction.name, binding.recipe),
+                    } or nil)
+            else
+                motion.invalidate(host._tree)
+            end
         end
     end
 end
@@ -641,12 +675,26 @@ end
 -- Samples one active owner. Keeping this separate lets updateAll preserve
 -- pending-completion delivery while idle owners take a plain conditional fast
 -- path with no runner/value allocations.
-local function updateActive(instance, host, completions)
+local function updateActive(instance, host, completions, attribution)
     local ordered = {}
     for name, runner in pairs(instance.active) do
         ordered[#ordered + 1] = { name = name, runner = runner }
     end
     table.sort(ordered, runnerOrder)
+    local geometryRecipes
+    if attribution then
+        geometryRecipes = {}
+        for _, entry in ipairs(ordered) do
+            local binding = instance.recipes[entry.name]
+            local recipe = diagnosticRecipe(entry.name,
+                binding and binding.recipe or entry.runner.recipe)
+            if recipe then geometryRecipes[#geometryRecipes + 1] = recipe end
+        end
+        if #geometryRecipes > 0 then
+            attribution.activeGeometryMotions =
+                attribution.activeGeometryMotions + 1
+        end
+    end
     local values = copyValues(instance.settled)
     local completed = {}
     for _, entry in ipairs(ordered) do
@@ -688,7 +736,14 @@ local function updateActive(instance, host, completions)
     instance.values = values
     if instance.node and visualChanged then
         instance.node.presentation = copyValues(instance.values)
-        if geometryChanged then motion.invalidate(host._tree) end
+        if geometryChanged then
+            if attribution then
+                host:_invalidateTransform(instance.node, "Motion",
+                    "frame-sample", geometryRecipes)
+            else
+                motion.invalidate(host._tree)
+            end
+        end
     end
 end
 
@@ -699,6 +754,8 @@ function motion.updateAll(instances, host)
     local changed = false
     local completions = {}
     local orderedInstances = {}
+    local attribution = host._diagnostics.enabled
+        and { activeGeometryMotions = 0 } or nil
     for _, instance in pairs(instances) do
         orderedInstances[#orderedInstances + 1] = instance
     end
@@ -726,7 +783,7 @@ function motion.updateAll(instances, host)
         -- completions above still deliver, but an idle owner does not need a
         -- runner array, value snapshot, or replacement presentation table.
         if next(instance.active) ~= nil then
-            updateActive(instance, host, completions)
+            updateActive(instance, host, completions, attribution)
             changed = true
         end
     end
@@ -735,7 +792,7 @@ function motion.updateAll(instances, host)
         if left.identity ~= right.identity then return left.identity < right.identity end
         return left.name < right.name
     end)
-    return changed, completions
+    return changed, completions, attribution
 end
 
 -- Confirms that a completed recipe still belongs to the same mounted element
@@ -841,9 +898,37 @@ local function writeBounds(out, x1, y1, x2, y2, x3, y3, x4, y4)
     return out
 end
 
-local function transformNode(node, parent)
-    -- Portals are painted and hit-tested in the Host root plane. Their
-    -- authored tree position must not inherit Motion or Scroll transforms.
+local function noteDiagnosticTarget(observer, plane, node)
+    if not observer.targets[node] then return false end
+    local planeState = observer.planes[plane]
+    if not planeState then
+        planeState = {}
+        observer.planes[plane] = planeState
+    end
+    if not planeState.lcaInitialized then
+        planeState.lcaInitialized = true
+        planeState.lcaPath = {}
+        for index, ancestor in ipairs(observer.path) do
+            planeState.lcaPath[index] = ancestor
+        end
+    else
+        local shared = 0
+        local limit = math.min(#planeState.lcaPath, #observer.path)
+        while shared < limit
+                and planeState.lcaPath[shared + 1]
+                    == observer.path[shared + 1] do
+            shared = shared + 1
+        end
+        for index = #planeState.lcaPath, shared + 1, -1 do
+            planeState.lcaPath[index] = nil
+        end
+    end
+    return true
+end
+
+-- Writes one node's authoritative transform geometry. Production and observed
+-- recursion share this exact writer; only their traversal bookkeeping differs.
+local function transformNodeGeometry(node, parent)
     if node._portal then parent = IDENTITY end
     node.presentation = node.presentation or copyValues()
     node._localTransform = localMatrix(node, node._localTransform)
@@ -867,9 +952,54 @@ local function transformNode(node, parent)
         node.contentX + node.contentWidth, node.contentY + node.contentHeight)
     node._visualContentBounds = writeBounds(node._visualContentBounds,
         cx1, cy1, cx2, cy2, cx3, cy3, cx4, cy4)
+end
+
+-- Production recursion carries no observer tables or per-node branches.
+local function transformNode(node, parent)
+    transformNodeGeometry(node, parent)
     for _, child in ipairs(node.children) do
         transformNode(child, node._worldTransform)
     end
+end
+
+-- The diagnostics recursion performs the same transform in one pass while
+-- counting locality. A portal begins an independent transform plane, so LCA
+-- coverage is summed per plane instead of using the broad authored root.
+local function transformNodeObserved(node, parent, observer, dirtyAncestor,
+        plane)
+    local previousPath
+    if node._portal then
+        dirtyAncestor = nil
+        plane = node
+        previousPath = observer.path
+        observer.path = {}
+    end
+    observer.nodesVisited = observer.nodesVisited + 1
+    observer.path[#observer.path + 1] = node
+    local isTarget = noteDiagnosticTarget(observer, plane, node)
+    local isDirtyRoot = isTarget and dirtyAncestor == nil
+    if isTarget then dirtyAncestor = node end
+    transformNodeGeometry(node, parent)
+    local samePlaneCount = 1
+    for _, child in ipairs(node.children) do
+        local childCount = transformNodeObserved(child, node._worldTransform,
+            observer, dirtyAncestor, plane)
+        if not child._portal then
+            samePlaneCount = samePlaneCount + childCount
+        end
+    end
+    if isDirtyRoot then
+        observer.dirtyRoots = observer.dirtyRoots + 1
+        observer.branchCoverage = observer.branchCoverage + samePlaneCount
+    end
+    local planeState = observer.planes[plane]
+    if planeState and planeState.lcaPath
+            and planeState.lcaPath[#planeState.lcaPath] == node then
+        planeState.lcaCoverage = samePlaneCount
+    end
+    observer.path[#observer.path] = nil
+    if previousPath then observer.path = previousPath end
+    return samePlaneCount
 end
 
 -- Marks the committed root's geometry stale. Motion and the two retained
@@ -886,16 +1016,39 @@ end
 -- Recomputes paint/input/F6 transforms only after layout or a clock tick
 -- invalidates committed geometry. Matrix and bounds tables retain identity so
 -- an active frame updates numbers without recreating five tables per node.
-function motion.transformTree(root)
-    if not root then return false end
-    if root._motionTransformReady and not root._motionTransformDirty then
-        return false
+function motion.transformTree(root, diagnosticTargets)
+    if not root then
+        return false, diagnosticTargets and { nodesVisited = 0 } or nil
     end
-    transformNode(root, IDENTITY)
+    if root._motionTransformReady and not root._motionTransformDirty then
+        return false, diagnosticTargets and { nodesVisited = 0 } or nil
+    end
+    local observer
+    if diagnosticTargets then
+        observer = {
+            targets = diagnosticTargets,
+            path = {},
+            planes = {},
+            nodesVisited = 0,
+            dirtyRoots = 0,
+            branchCoverage = 0,
+            lcaCoverage = 0,
+        }
+        transformNodeObserved(root, IDENTITY, observer, nil, root)
+        for _, planeState in pairs(observer.planes) do
+            observer.lcaCoverage = observer.lcaCoverage
+                + (planeState.lcaCoverage or 0)
+        end
+        observer.targets = nil
+        observer.path = nil
+        observer.planes = nil
+    else
+        transformNode(root, IDENTITY)
+    end
     root._motionTransformRevision = (root._motionTransformRevision or 0) + 1
     root._motionTransformReady = true
     root._motionTransformDirty = false
-    return true
+    return true, observer
 end
 
 -- Converts a virtual pointer into a node's untransformed layout space.

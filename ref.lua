@@ -18,6 +18,13 @@ local function copyRect(rect)
     }
 end
 
+local function sameRect(left, right)
+    if left == right then return true end
+    if not left or not right then return false end
+    return left.x == right.x and left.y == right.y
+        and left.width == right.width and left.height == right.height
+end
+
 local handleMeta = {
     __index = function(handle, key)
         local state = states[handle]
@@ -68,13 +75,25 @@ function ref.inspect(handle)
 end
 
 -- Publishes one complete successful arrange, clearing absent attachments.
-function ref.publish(previous, current, rectangles)
+function ref.publish(previous, current, rectangles, observe)
+    local stats = observe and { published = 0, cleared = 0, changed = 0 } or nil
     for handle in pairs(previous or {}) do
-        if not current[handle] then states[handle].current = nil end
+        if not current[handle] then
+            if stats and states[handle].current ~= nil then
+                stats.cleared = stats.cleared + 1
+            end
+            states[handle].current = nil
+        end
     end
     for handle in pairs(current or {}) do
-        states[handle].current = copyRect(rectangles[handle])
+        local rectangle = rectangles[handle]
+        if stats then stats.published = stats.published + 1 end
+        if stats and not sameRect(states[handle].current, rectangle) then
+            stats.changed = stats.changed + 1
+        end
+        states[handle].current = copyRect(rectangle)
     end
+    return stats
 end
 
 return ref

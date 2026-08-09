@@ -154,11 +154,11 @@ end
 
 -- Keeps arranged option centers and transformed/F6 bounds truthful in the
 -- same pointer frame without asking application code to rerender.
-local function refreshRadial(host, node)
+local function refreshRadial(host, node, detail)
     require("src.frogui.layout").arrangeRadialDial(node, host)
-    Motion.invalidate(host._tree)
-    host:_transformTree()
-    host:_refreshCommittedRefs()
+    host:_invalidateTransform(node, "RadialDial", detail)
+    local _, transform = host:_transformTree(nil, "interactionTransform")
+    host:_refreshCommittedRefs("interaction", transform)
 end
 
 -- Internal check seam. Returns a copy so tests cannot mutate input policy.
@@ -403,7 +403,7 @@ local function moveRadial(host, session, x, y)
         session.radialPreviewIndex = radialIndex(
             session.radialPreviewAngle, #node._radialDial.values)
         node._radialDial.previewAngle = session.radialPreviewAngle
-        refreshRadial(host, node)
+        refreshRadial(host, node, "drag")
     end
 end
 
@@ -414,7 +414,7 @@ local function armRadialSettle(host, node, restartBounce)
     dial.targetAngle = radialTarget(dial.angle, dial.index, #dial.values)
     if restartBounce then dial.bounce = host.reducedMotion and 0 or 1 end
     if host.reducedMotion then dial.angle = dial.targetAngle end
-    refreshRadial(host, node)
+    refreshRadial(host, node, "settle")
 end
 
 local function commitRadial(host, node, value, restartBounce, origin)
@@ -594,7 +594,7 @@ function interaction.cancel(host, reason)
                 dial.targetAngle = radialTarget(
                     dial.angle, dial.index, #dial.values)
                 if host.reducedMotion then dial.angle = dial.targetAngle end
-                refreshRadial(host, radial)
+                refreshRadial(host, radial, "settle")
             end
         end
         host._interactionSession = nil
@@ -820,9 +820,10 @@ function interaction.pointerMove(host, x, y, pointerId)
             session.lastAxis, session.lastMoveTime = axis, now
             if scroll.node then
                 require("src.frogui.layout").arrangeScroll(scroll.node, host)
-                Motion.invalidate(host._tree)
-                host:_transformTree()
-                host:_refreshCommittedRefs()
+                host:_invalidateTransform(scroll.node, "Scroll", "drag")
+                local _, transform = host:_transformTree(
+                    nil, "interactionTransform")
+                host:_refreshCommittedRefs("interaction", transform)
             end
         end
     elseif session.claimed == "drag" then
@@ -917,9 +918,10 @@ function interaction.pointerUp(host, x, y, pointerId, button)
                     math.floor(scroll.offset / interval + 0.5) * interval))
                 scroll.velocity = 0
                 require("src.frogui.layout").arrangeScroll(node, host)
-                Motion.invalidate(host._tree)
-                host:_transformTree()
-                host:_refreshCommittedRefs()
+                host:_invalidateTransform(node, "Scroll", "snap")
+                local _, transform = host:_transformTree(
+                    nil, "interactionTransform")
+                host:_refreshCommittedRefs("interaction", transform)
             end
             callback = node and node.props.onScrollEnd or nil
             -- A completion observer defines the release position as terminal,
@@ -1021,7 +1023,7 @@ function interaction.update(host, dt)
             scroll.offset = nextOffset
             if scroll.node then
                 require("src.frogui.layout").arrangeScroll(scroll.node, host)
-                Motion.invalidate(host._tree)
+                host:_invalidateTransform(scroll.node, "Scroll", "momentum")
             end
         elseif math.abs(scroll.velocity or 0) <= 0.1 then
             scroll.velocity = 0
@@ -1061,7 +1063,7 @@ function interaction.update(host, dt)
             changed = true
         end
         if changed and dial.node then
-            refreshRadial(host, dial.node)
+            refreshRadial(host, dial.node, "settle")
         end
     end
 end
@@ -1077,9 +1079,9 @@ function interaction.wheelMoved(host, dx, dy)
         scroll.offset + amount * interaction.WHEEL_STEP))
     scroll.velocity = 0
     require("src.frogui.layout").arrangeScroll(node, host)
-    Motion.invalidate(host._tree)
-    host:_transformTree()
-    host:_refreshCommittedRefs()
+    host:_invalidateTransform(node, "Scroll", "wheel")
+    local _, transform = host:_transformTree(nil, "interactionTransform")
+    host:_refreshCommittedRefs("interaction", transform)
     return true
 end
 
@@ -1106,11 +1108,11 @@ function interaction.revealFocus(host, identity)
             elseif high > viewHigh then scroll.offset = scroll.offset + high - viewHigh end
             scroll.offset = math.max(0, math.min(scroll.extent, scroll.offset))
             require("src.frogui.layout").arrangeScroll(node, host)
-            Motion.invalidate(host._tree)
+            host:_invalidateTransform(node, "Scroll", "focus")
         end
     end
-    host:_transformTree()
-    host:_refreshCommittedRefs()
+    local _, transform = host:_transformTree(nil, "interactionTransform")
+    host:_refreshCommittedRefs("interaction", transform)
 end
 
 function interaction.keyBack(host)
@@ -1173,7 +1175,7 @@ function interaction.rebind(host)
             return
         end
         radial._radialDial.previewAngle = session.radialPreviewAngle
-        refreshRadial(host, radial)
+        refreshRadial(host, radial, "controlled-refresh")
     end
     if session.swipeIdentity and not findActiveIdentity(host,
             session.swipeIdentity) then

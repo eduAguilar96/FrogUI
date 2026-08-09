@@ -6,6 +6,7 @@ local diagnostics = {}
 diagnostics.__index = diagnostics
 
 local DEFAULT_HISTORY = 180
+local ATTRIBUTION_NAME_LIMIT = 5
 local PHASES = {
     "update", "frameCallbacks", "messageDelivery", "actionProcessing",
     "eventProcessing", "actorTransitions", "reconcile",
@@ -16,6 +17,7 @@ local PHASES = {
     "radialReconciliation", "motionReconciliation",
     "effectReconciliation", "deferredResolution", "effectOwnership",
     "eventOrdering", "layout", "candidateTransform", "messageTransform",
+    "interactionTransform",
     "commit",
     "runtime", "interaction", "motion", "motionUpdate",
     "committedTransform", "refs", "effects", "effectRefresh",
@@ -56,6 +58,18 @@ local function shallowCopy(source)
     return copy
 end
 
+local function copyAttribution(source)
+    local output = {}
+    for context, row in pairs(source or {}) do
+        local copy = {}
+        for name, value in pairs(row) do
+            copy[name] = type(value) == "table" and shallowCopy(value) or value
+        end
+        output[context] = copy
+    end
+    return output
+end
+
 -- Creates one disabled-by-default profiler. A fixed ring prevents the tool
 -- itself from creating unbounded history during long Battle sessions.
 function diagnostics.new(options)
@@ -90,8 +104,95 @@ function diagnostics:ensureFrame()
             memoryStartKB = collectgarbage("count"),
             heapDeltasKB = {},
             ownerRenders = {},
+            transformAttribution = {},
+            refAttribution = {},
         }
     end
+end
+
+local function addCategories(target, source)
+    for name, count in pairs(source or {}) do
+        target[name] = (target[name] or 0) + count
+    end
+end
+
+-- Selects the exact largest five categories after a frame is complete. Equal
+-- counts use name order, making the retained set independent of pairs() order.
+local function boundedCategories(source)
+    local entries = {}
+    for name, count in pairs(source or {}) do
+        entries[#entries + 1] = { name = name, count = count }
+    end
+    table.sort(entries, function(left, right)
+        if left.count ~= right.count then return left.count > right.count end
+        return left.name < right.name
+    end)
+    local output, overflow = {}, 0
+    for index, entry in ipairs(entries) do
+        if index <= ATTRIBUTION_NAME_LIMIT then
+            output[entry.name] = entry.count
+        else
+            overflow = overflow + entry.count
+        end
+    end
+    if overflow > 0 then output.other = overflow end
+    return output
+end
+
+local function boundTransformCategories(rows)
+    for _, row in pairs(rows or {}) do
+        row.families = boundedCategories(row.families)
+        row.owners = boundedCategories(row.owners)
+        row.recipes = boundedCategories(row.recipes)
+        row.details = boundedCategories(row.details)
+    end
+end
+
+local function addFields(target, source, fields)
+    for _, name in ipairs(fields) do
+        target[name] = (target[name] or 0) + (source[name] or 0)
+    end
+end
+
+-- Records one transform call without retaining nodes, paths, props, or state.
+-- The four contexts remain separate so an immediate interaction transform can
+-- never be misreported as the later committed update call.
+function diagnostics:recordTransform(context, row)
+    if not self.enabled or not self.current then return end
+    assert(context == "candidate" or context == "message"
+            or context == "committed" or context == "interaction",
+        "unknown FrogUI transform diagnostic context " .. tostring(context))
+    local aggregate = self.current.transformAttribution[context]
+    if not aggregate then
+        aggregate = { families = {}, owners = {}, recipes = {}, details = {} }
+        self.current.transformAttribution[context] = aggregate
+    end
+    addFields(aggregate, row, {
+        "calls", "runs", "skips", "nodesVisited", "invalidations",
+        "coalescedInvalidations", "changingOwners", "dirtyRoots",
+        "lcaCoverage", "branchCoverage", "activeGeometryMotions",
+    })
+    addCategories(aggregate.families, row.families)
+    addCategories(aggregate.owners, row.owners)
+    addCategories(aggregate.recipes, row.recipes)
+    addCategories(aggregate.details, row.details)
+end
+
+-- Records one committed-ref publication. Ref comparison stays observational:
+-- the Host still publishes the same complete rectangle set on every call.
+function diagnostics:recordRefs(context, row)
+    if not self.enabled or not self.current then return end
+    assert(context == "committed" or context == "interaction",
+        "unknown FrogUI ref diagnostic context " .. tostring(context))
+    local aggregate = self.current.refAttribution[context]
+    if not aggregate then
+        aggregate = {}
+        self.current.refAttribution[context] = aggregate
+    end
+    addFields(aggregate, row, {
+        "calls", "treeVisits", "published", "cleared", "changedRectangles",
+        "visualTransformChanged", "interactionInvalidated",
+    })
 end
 
 -- Starts the update portion of a graphical frame. Input/reload work may have
@@ -198,6 +299,7 @@ end
 
 function diagnostics:_commit()
     local sample = assert(self.current, "FrogUI diagnostics has no current sample")
+    boundTransformCategories(sample.transformAttribution)
     local memory = collectgarbage("count")
     sample.memoryKB = memory
     sample.memoryDeltaKB = memory - sample.memoryStartKB
@@ -400,6 +502,9 @@ function diagnostics:trace()
             memoryDeltaKB = sample.memoryDeltaKB or 0,
             heapDeltasKB = shallowCopy(sample.heapDeltasKB),
             topSemanticOwners = ownerSummary { sample },
+            transformAttribution = copyAttribution(
+                sample.transformAttribution),
+            refAttribution = copyAttribution(sample.refAttribution),
         }
     end
     return output
