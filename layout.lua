@@ -123,9 +123,17 @@ local function wrappedLines(node, availableWidth)
     return lines
 end
 
-local function measure(node, maxWidth, maxHeight, host)
+local function measure(node, maxWidth, maxHeight, host, session)
     maxWidth = math.max(0, maxWidth or math.huge)
     maxHeight = math.max(0, maxHeight or math.huge)
+    if session and node._measureSession == session
+            and node._measureMaxWidth == maxWidth
+            and node._measureMaxHeight == maxHeight
+            and node._measurePortalLayout == (node._portalLayout == true) then
+        -- The immediately preceding completed measurement left its padding,
+        -- resolved font/axes, and dimensions on this fresh candidate node.
+        return node.measuredWidth, node.measuredHeight
+    end
     local pad = padding(node.props.padding)
     node._padding = pad
     local width, height = explicit(node, maxWidth, maxHeight)
@@ -150,7 +158,7 @@ local function measure(node, maxWidth, maxHeight, host)
         assert(type(gap) == "number" and gap >= 0, "gap must be non-negative")
         local main, cross = 0, 0
         for index, child in ipairs(node.children) do
-            measure(child, innerMaxWidth, innerMaxHeight, host)
+            measure(child, innerMaxWidth, innerMaxHeight, host, session)
             local childMain = node.type == "Row" and child.measuredWidth or child.measuredHeight
             local childCross = node.type == "Row" and child.measuredHeight or child.measuredWidth
             if index > 1 then main = main + gap end
@@ -172,14 +180,14 @@ local function measure(node, maxWidth, maxHeight, host)
         end
     elseif node.type == "Overlay" then
         for _, child in ipairs(node.children) do
-            measure(child, innerMaxWidth, innerMaxHeight, host)
+            measure(child, innerMaxWidth, innerMaxHeight, host, session)
             naturalWidth = math.max(naturalWidth, child.measuredWidth)
             naturalHeight = math.max(naturalHeight, child.measuredHeight)
         end
     elseif node.type == "EffectLayer" then
         for _, child in ipairs(node.children) do
             if child.type == "PopupText" then
-                measure(child, innerMaxWidth, innerMaxHeight, host)
+                measure(child, innerMaxWidth, innerMaxHeight, host, session)
                 local at = child.props.at
                 naturalWidth = math.max(naturalWidth,
                     at.x + child.measuredWidth / 2)
@@ -190,7 +198,7 @@ local function measure(node, maxWidth, maxHeight, host)
     elseif node.type == "RadialDial" then
         local largestWidth, largestHeight = 0, 0
         for _, child in ipairs(node.children) do
-            measure(child, innerMaxWidth, innerMaxHeight, host)
+            measure(child, innerMaxWidth, innerMaxHeight, host, session)
             largestWidth = math.max(largestWidth, child.measuredWidth)
             largestHeight = math.max(largestHeight, child.measuredHeight)
         end
@@ -205,14 +213,14 @@ local function measure(node, maxWidth, maxHeight, host)
                 and math.huge or innerMaxWidth
             local childMaxHeight = node.props.axis == "vertical"
                 and math.huge or innerMaxHeight
-            measure(child, childMaxWidth, childMaxHeight, host)
+            measure(child, childMaxWidth, childMaxHeight, host, session)
             naturalWidth, naturalHeight = child.measuredWidth, child.measuredHeight
         end
     else -- One-child wrappers: Box, Button, Pressable, HorizontalSwipe,
          -- DragSource, and DropTarget.
         local child = node.children[1]
         if child then
-            measure(child, innerMaxWidth, innerMaxHeight, host)
+            measure(child, innerMaxWidth, innerMaxHeight, host, session)
             naturalWidth, naturalHeight = child.measuredWidth, child.measuredHeight
         end
     end
@@ -241,12 +249,18 @@ local function measure(node, maxWidth, maxHeight, host)
     node._derivedHeight = derivedHeight and height or nil
     node.measuredWidth = node._derivedWidth or clamp(width, 0, maxWidth)
     node.measuredHeight = node._derivedHeight or clamp(height, 0, maxHeight)
+    if session then
+        node._measureSession = session
+        node._measureMaxWidth = maxWidth
+        node._measureMaxHeight = maxHeight
+        node._measurePortalLayout = node._portalLayout == true
+    end
     return node.measuredWidth, node.measuredHeight
 end
 
 -- Places every keyed dial option around the Host-owned visual angle. Children
 -- move along the track but keep their own upright paint orientation.
-function layout.arrangeRadialDial(node, host)
+local function arrangeRadialDial(node, host, session)
     local dial = assert(node._radialDial, "unprepared Frog.RadialDial")
     local centerX = node.contentX + node.contentWidth / 2
     local centerY = node.contentY + node.contentHeight / 2
@@ -254,7 +268,7 @@ function layout.arrangeRadialDial(node, host)
     local measured = {}
     local largestHalfDiagonal = 0
     for index, child in ipairs(node.children) do
-        measure(child, node.contentWidth, node.contentHeight, host)
+        measure(child, node.contentWidth, node.contentHeight, host, session)
         local width = resolveSize(child.props.width, node.contentWidth)
             or child.measuredWidth
         local height = resolveSize(child.props.height, node.contentHeight)
@@ -290,8 +304,14 @@ function layout.arrangeRadialDial(node, host)
         layout.arrange(child,
             centerX + math.cos(childAngle) * trackRadius - size.width / 2,
             centerY + math.sin(childAngle) * trackRadius - size.height / 2,
-            size.width, size.height, host)
+            size.width, size.height, host, session)
     end
+end
+
+-- Retained dial motion is outside candidate reconciliation and never receives
+-- a measurement session.
+function layout.arrangeRadialDial(node, host)
+    return arrangeRadialDial(node, host, nil)
 end
 
 local function alignedStart(align, start, available, size)
@@ -300,10 +320,10 @@ local function alignedStart(align, start, available, size)
     return start
 end
 
-local function arrangeWrappedRow(node, host)
+local function arrangeWrappedRow(node, host, session)
     local gap = node.props.gap or 0
     for _, child in ipairs(node.children) do
-        measure(child, node.contentWidth, node.contentHeight, host)
+        measure(child, node.contentWidth, node.contentHeight, host, session)
     end
     local lines = wrappedLines(node, node.contentWidth)
     local y = node.contentY
@@ -334,7 +354,7 @@ local function arrangeWrappedRow(node, host)
             local grow = child.props.grow or 0
             local width = grow > 0 and remaining * grow / totalGrow
                 or child.measuredWidth
-            measure(child, width, node.contentHeight, host)
+            measure(child, width, node.contentHeight, host, session)
             allocations[index] = width
             arrangedHeight = math.max(arrangedHeight, child.measuredHeight)
         end
@@ -348,22 +368,22 @@ local function arrangeWrappedRow(node, host)
                 height = line.height
             end
             local childY = alignedStart(align, y, line.height, height)
-            layout.arrange(child, x, childY, width, height, host)
+            layout.arrange(child, x, childY, width, height, host, session)
             x = x + width + actualGap
         end
         y = y + line.height + gap
     end
 end
 
-local function arrangeFlow(node, horizontal, host)
+local function arrangeFlow(node, horizontal, host, session)
     local children = node.children
     local gap = node.props.gap or 0
     local contentMain = horizontal and node.contentWidth or node.contentHeight
     local contentCross = horizontal and node.contentHeight or node.contentWidth
     local fixed, totalGrow = 0, 0
     for _, child in ipairs(children) do
-        if horizontal then measure(child, contentMain, contentCross, host)
-        else measure(child, contentCross, contentMain, host) end
+        if horizontal then measure(child, contentMain, contentCross, host, session)
+        else measure(child, contentCross, contentMain, host, session) end
         local grow = child.props.grow or 0
         assert(type(grow) == "number" and grow >= 0, "grow must be non-negative")
         if grow > 0 then totalGrow = totalGrow + grow
@@ -388,8 +408,8 @@ local function arrangeFlow(node, horizontal, host)
         local grow = child.props.grow or 0
         local main = grow > 0 and remaining * grow / totalGrow
             or (horizontal and child.measuredWidth or child.measuredHeight)
-        if horizontal then measure(child, main, contentCross, host)
-        else measure(child, contentCross, main, host) end
+        if horizontal then measure(child, main, contentCross, host, session)
+        else measure(child, contentCross, main, host, session) end
         local cross = horizontal and child.measuredHeight or child.measuredWidth
         local align = node.props.align or "stretch"
         if align == "stretch"
@@ -402,16 +422,16 @@ local function arrangeFlow(node, horizontal, host)
         local crossStart = alignedStart(align,
             horizontal and node.contentY or node.contentX, contentCross, cross)
         if horizontal then
-            layout.arrange(child, cursor, crossStart, main, cross, host)
+            layout.arrange(child, cursor, crossStart, main, cross, host, session)
         else
-            layout.arrange(child, crossStart, cursor, cross, main, host)
+            layout.arrange(child, crossStart, cursor, cross, main, host, session)
         end
         cursor = cursor + main + actualGap
     end
 end
 
-local function childBox(node, child, host)
-    measure(child, node.contentWidth, node.contentHeight, host)
+local function childBox(node, child, host, session)
+    measure(child, node.contentWidth, node.contentHeight, host, session)
     local width = resolveSize(child.props.width, node.contentWidth) or child.measuredWidth
     local height = resolveSize(child.props.height, node.contentHeight) or child.measuredHeight
     local align = node.props.align
@@ -435,12 +455,12 @@ local function childBox(node, child, host)
     end
     local x = alignedStart(align, node.contentX, node.contentWidth, width)
     local y = alignedStart(justify, node.contentY, node.contentHeight, height)
-    layout.arrange(child, x, y, width, height, host)
+    layout.arrange(child, x, y, width, height, host, session)
 end
 
 -- Repositions one retained Scroll child after layout, wheel input, or
 -- momentum without asking application components to rerender.
-function layout.arrangeScroll(node, host)
+local function arrangeScroll(node, host, session)
     local child = node.children[1]
     local scroll = node._scroll
     if not child or not scroll then return end
@@ -448,7 +468,7 @@ function layout.arrangeScroll(node, host)
     if vertical then
         assert(type(child.props.height) ~= "string",
             "vertical Scroll child height must be naturally measured")
-        measure(child, node.contentWidth, math.huge, host)
+        measure(child, node.contentWidth, math.huge, host, session)
         local width = resolveSize(child.props.width, node.contentWidth)
             or math.max(node.contentWidth, child.measuredWidth)
         local height = child.measuredHeight
@@ -456,11 +476,11 @@ function layout.arrangeScroll(node, host)
         scroll.extent = math.max(0, height - node.contentHeight)
         scroll.offset = clamp(scroll.offset or 0, 0, scroll.extent)
         layout.arrange(child, node.contentX, node.contentY - scroll.offset,
-            width, height, host)
+            width, height, host, session)
     else
         assert(type(child.props.width) ~= "string",
             "horizontal Scroll child width must be naturally measured")
-        measure(child, math.huge, node.contentHeight, host)
+        measure(child, math.huge, node.contentHeight, host, session)
         local width = child.measuredWidth
         local height = resolveSize(child.props.height, node.contentHeight)
             or math.max(node.contentHeight, child.measuredHeight)
@@ -468,12 +488,27 @@ function layout.arrangeScroll(node, host)
         scroll.extent = math.max(0, width - node.contentWidth)
         scroll.offset = clamp(scroll.offset or 0, 0, scroll.extent)
         layout.arrange(child, node.contentX - scroll.offset, node.contentY,
-            width, height, host)
+            width, height, host, session)
     end
     scroll.node = node
 end
 
-function layout.arrange(node, x, y, width, height, host)
+-- Retained wheel/touch/momentum movement measures normally; candidate reuse
+-- cannot survive into this public arrangement boundary.
+function layout.arrangeScroll(node, host)
+    return arrangeScroll(node, host, nil)
+end
+
+function layout.arrange(node, x, y, width, height, host, session)
+    -- Measuring a descendant under its final allocation can change state that
+    -- contributed to this ancestor's natural size. Retire the node's own
+    -- last-entry stamp before arranging it; descendant stamps remain eligible
+    -- until their own arrange begins. This avoids a dependency graph while
+    -- making every exact reuse local to the still-valid traversal prefix.
+    node._measureSession = nil
+    node._measureMaxWidth = nil
+    node._measureMaxHeight = nil
+    node._measurePortalLayout = nil
     local offset = node.props.offset
     if offset then
         x = x + (offset.x or 0)
@@ -491,17 +526,19 @@ function layout.arrange(node, x, y, width, height, host)
             and not node._portalLayout then return end
 
     if node.type == "Row" and node.props.wrap then
-        arrangeWrappedRow(node, host)
+        arrangeWrappedRow(node, host, session)
     elseif node.type == "Row" then
-        arrangeFlow(node, true, host)
+        arrangeFlow(node, true, host, session)
     elseif node.type == "Column" then
-        arrangeFlow(node, false, host)
+        arrangeFlow(node, false, host, session)
     elseif node.type == "Overlay" then
-        for _, child in ipairs(node.children) do childBox(node, child, host) end
+        for _, child in ipairs(node.children) do
+            childBox(node, child, host, session)
+        end
     elseif node.type == "EffectLayer" then
         for _, child in ipairs(node.children) do
             if child.type == "PopupText" then
-                measure(child, node.contentWidth, node.contentHeight, host)
+                measure(child, node.contentWidth, node.contentHeight, host, session)
                 local width = resolveSize(child.props.width, node.contentWidth)
                     or child.measuredWidth
                 local height = resolveSize(child.props.height, node.contentHeight)
@@ -510,7 +547,7 @@ function layout.arrange(node, x, y, width, height, host)
                 layout.arrange(child,
                     node.contentX + at.x - width / 2,
                     node.contentY + at.y - height / 2,
-                    width, height, host)
+                    width, height, host, session)
             elseif child.type == "Canvas" then
                 local width = assert(resolveSize(child.props.width,
                     node.contentWidth),
@@ -519,10 +556,10 @@ function layout.arrange(node, x, y, width, height, host)
                     node.contentHeight),
                     "Canvas needs an explicit EffectLayer height")
                 layout.arrange(child, node.contentX, node.contentY,
-                    width, height, host)
+                    width, height, host, session)
             else
                 layout.arrange(child, node.contentX, node.contentY,
-                    node.contentWidth, node.contentHeight, host)
+                    node.contentWidth, node.contentHeight, host, session)
                 child._effectLayerRect = {
                     x = node.contentX,
                     y = node.contentY,
@@ -532,51 +569,57 @@ function layout.arrange(node, x, y, width, height, host)
             end
         end
     elseif node.type == "RadialDial" then
-        layout.arrangeRadialDial(node, host)
+        arrangeRadialDial(node, host, session)
     elseif node.type == "Scroll" then
-        layout.arrangeScroll(node, host)
+        arrangeScroll(node, host, session)
     elseif node.children[1] then
-        childBox(node, node.children[1], host)
+        childBox(node, node.children[1], host, session)
     end
 end
 
-local function arrangePortal(node, width, height, host)
+local function arrangePortal(node, width, height, host, session)
     node._portal, node._portalLayout = true, true
     node._padding = padding(node.props.padding)
-    layout.arrange(node, 0, 0, width, height, host)
+    layout.arrange(node, 0, 0, width, height, host, session)
     node._portalLayout = nil
 end
 
-local function prepareDetached(node, maxWidth, maxHeight, host)
-    measure(node, maxWidth, maxHeight, host)
+local function prepareDetached(node, maxWidth, maxHeight, host, session)
+    measure(node, maxWidth, maxHeight, host, session)
     local width = resolveSize(node.props.width, maxWidth) or node.measuredWidth
     local height = resolveSize(node.props.height, maxHeight) or node.measuredHeight
-    layout.arrange(node, 0, 0, width, height, host)
+    layout.arrange(node, 0, 0, width, height, host, session)
     for _, child in ipairs(node.children or {}) do
         if child._dragPreview then
-            prepareDetached(child._dragPreview, maxWidth, maxHeight, host)
+            prepareDetached(child._dragPreview,
+                maxWidth, maxHeight, host, session)
         end
     end
 end
 
-local function preparePlanes(node, width, height, host)
+local function preparePlanes(node, width, height, host, session)
     if node.type == "Modal" or node.type == "Chrome" then
-        arrangePortal(node, width, height, host)
+        arrangePortal(node, width, height, host, session)
     end
     if node._dragPreview then
-        prepareDetached(node._dragPreview, width, height, host)
+        prepareDetached(node._dragPreview, width, height, host, session)
     end
     for _, child in ipairs(node.children or {}) do
-        preparePlanes(child, width, height, host)
+        preparePlanes(child, width, height, host, session)
     end
 end
 
 function layout.run(root, width, height, host)
-    measure(root, width, height, host)
+    -- One opaque token scopes last-entry reuse to this fresh candidate, exact
+    -- normalized constraints, and portal mode. Public retained arrangement
+    -- supplies no token, so Scroll/RadialDial updates always perform ordinary
+    -- measurement and clear any obsolete candidate stamp while arranging.
+    local session = {}
+    measure(root, width, height, host, session)
     local arrangedWidth = resolveSize(root.props.width, width) or width
     local arrangedHeight = resolveSize(root.props.height, height) or height
-    layout.arrange(root, 0, 0, arrangedWidth, arrangedHeight, host)
-    preparePlanes(root, width, height, host)
+    layout.arrange(root, 0, 0, arrangedWidth, arrangedHeight, host, session)
+    preparePlanes(root, width, height, host, session)
     return root
 end
 

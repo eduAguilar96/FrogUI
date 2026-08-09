@@ -48,6 +48,18 @@ Frog.Column { Text, Text }      primitive descriptions
 resolved nodes with x/y/w/h     painted and hit-tested tree
 ```
 
+Each fresh candidate has one layout session. Within that single
+`Layout.run`, a node may reuse only its immediately preceding measurement for
+the exact normalized width/height constraints and portal mode. The result and
+all measurement side effects already live on that fresh node. Arrangement
+always still runs and invalidates the node's own entry before descendants can
+be measured under final allocations.
+
+This is traversal-local reuse, not retained layout caching. It never crosses a
+candidate, frame, viewport, or theme refresh. Host-owned retained Scroll and
+RadialDial arrangements deliberately run outside the candidate session and
+measure normally.
+
 ## Component versus primitive
 
 `Frog.component` and `Frog.Overlay` are not alternatives at the same level.
