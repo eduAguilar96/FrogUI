@@ -53,6 +53,24 @@ local Interaction = require("src.frogui.interaction")
 ---@field p95 number Rolling-window 95th percentile in milliseconds.
 ---@field max number Rolling-window maximum in milliseconds.
 
+---@class FrogUIDiagnosticMetric
+---@field current number Latest signed scalar value.
+---@field average number Rolling-window mean.
+---@field p95 number Rolling-window 95th percentile.
+---@field min number Rolling-window minimum.
+---@field max number Rolling-window maximum.
+
+---@class FrogUIDiagnosticMemory
+---@field frameDeltaKB FrogUIDiagnosticMetric Signed net Lua-heap change per frame; GC can make it negative.
+---@field phases table<string,FrogUIDiagnosticMetric> Signed observer-sensitive net heap movement by runtime phase.
+---@field heapDropFrames integer Frames whose complete net heap delta was negative; context only, not a GC event counter.
+
+---@class FrogUIDiagnosticOwner
+---@field name string Semantic kind and token name; no identity path, props, or state.
+---@field count integer Render callback calls in the selected window.
+---@field totalMs number Total measured callback-body time.
+---@field averageMs number Mean measured callback-body time.
+
 ---@class FrogUIDiagnosticCause
 ---@field name string Typed message or explicit rebuild origin.
 ---@field count integer Occurrences retained in the rolling window.
@@ -64,12 +82,24 @@ local Interaction = require("src.frogui.interaction")
 ---@field causes FrogUIDiagnosticCause[] Rebuild causes from this exact frame.
 ---@field memoryDeltaKB number Net heap change during this exact frame.
 
+---@class FrogUIDiagnosticCohort
+---@field samples integer Completed frames in this cohort.
+---@field phases table<string,FrogUIDiagnosticPhase> Timings for only these frames.
+---@field memory FrogUIDiagnosticMemory Signed net-heap context for only these frames.
+---@field topSemanticOwners FrogUIDiagnosticOwner[] At most five owners ranked by total callback time.
+---@field activityTotals table<string,number> Diagnostic activity summed only across these frames.
+---@field causes FrogUIDiagnosticCause[] Top rebuild causes in these frames.
+
 ---@class FrogUIDiagnosticsSnapshot
 ---@field enabled boolean Whether this Host opted into profiling.
 ---@field samples integer Number of completed frames in the bounded window.
 ---@field phases table<string,FrogUIDiagnosticPhase> Timings keyed by the documented F4 phase names.
+---@field memory FrogUIDiagnosticMemory Signed net-heap context; never gross allocation.
+---@field topSemanticOwners FrogUIDiagnosticOwner[] At most five owners ranked by total callback time.
 ---@field counts table<string,number> Latest activity and retained structure counts.
+---@field activityTotals table<string,number> Activity summed across the rolling window.
 ---@field causes FrogUIDiagnosticCause[] Top three rolling rebuild causes.
+---@field cohorts {reconciled:FrogUIDiagnosticCohort,quiet:FrogUIDiagnosticCohort} Correlated dirty and quiet frame groups.
 ---@field slowest? FrogUIDiagnosticSlowFrame Slowest completed frame in the rolling window.
 ---@field memoryKB number Current Lua heap size in kilobytes.
 ---@field memoryDeltaKB number Net heap change during the latest completed frame.

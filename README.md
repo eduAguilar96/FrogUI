@@ -1358,39 +1358,56 @@ shows current/p95 update and paint cost plus p95 attribution by phase:
 | `action` / `event` | The corresponding typed-message validation, routing, and processing inside `msg` |
 | `transition` | Actor reducer/transition work inside action or event processing |
 | `reconcile` | The complete dirty semantic rebuild and publication |
-| `expand` | Component/actor/view execution and primitive-tree construction |
+| `expand` | The complete semantic-description expansion before layout |
+| `semantic` | Component/actor/view callback bodies only; hook setup/finalization is excluded |
+| `prepare` / `bookkeeping` | Owner-local props/state copies versus actor/view/hook/path administration; neither wraps descendant resolution |
+| `primitive validation/materialization/post` | Primitive prop validation, resolved-node/ref construction, then child-dependent validation |
+| `Scroll/Radial/Motion/Effect reconcile` | Retention work for those exact primitive families during expansion |
+| `deferred/ownership/order` | Deferred-view traversal, effect ownership validation, and event/hidden-actor ordering |
 | `layout` | Two-pass measure and arrange of that candidate tree |
+| `candidate transform` | The arranged candidate's post-layout Motion geometry walk |
 | `runtime` | Retained interaction, Motion, refs, and Effect updates |
-| `motion` | Motion runner sampling plus committed-tree visual transforms |
+| `motion` | Runtime Motion runner sampling plus its committed-tree transform; the two child phases are also exposed |
 | `refs` | Republish arranged ref rectangles after retained updates |
-| `effects` | Projectile/Flipbook anchor refresh, advancement, and bounds |
+| `effects` | Projectile/Flipbook refresh, advancement, and bounds; each child phase is also exposed |
 | `observer` | The profiler-only committed-tree counting walk performed on a rebuild |
 | `external` | Complete public input routing, direct render, resize, or Host theme-refresh work before update |
 | `paint` | Painter traversal and LÖVE draw submission |
 
-`FrogUI CPU` is `external + update + paint`; nested phase lines are attribution,
-not additional work. `reconcile` contains `expand`, `layout`, and the smaller
-commit work; do not add
-those numbers together. `runtime` contains the retained per-frame interaction,
-Motion, ref, and effect work; `motion` also attributes whole-tree transforms
-performed inside a semantic event or candidate reconciliation, so it may be
-nested under `msg` or `reconcile` instead. `msg` deliberately excludes
-reconciliation. `action`, `event`, and `transition` are nested within `msg`.
+`FrogUI CPU` is `external + update + paint`; parent and child phase lines are
+attribution, not additional work. `reconcile` contains `expand`, `layout`, the
+candidate transform, and commit. `expand` contains the semantic, preparation,
+bookkeeping, primitive, retained-reconciliation, and post-walk buckets.
+`runtime` contains interaction, Motion, refs, and effects; Motion and effects
+then expose their own children. A transform caused directly by event delivery
+has a separate `messageTransform` bucket and cannot inflate runtime Motion.
+`msg` deliberately excludes reconciliation. `action`, `event`, and
+`transition` are nested within `msg`.
 `observer` is profiler overhead, not application work; it remains visible so
 it cannot be mistaken for unlabelled reconciliation cost. The
 activity line shows semantic messages and rebuilds for the most recently
 sampled frame plus the retained tree's nodes, render owners, effects, and
-motions. `dirty` ranks the rolling window's typed message/reflow causes without
+motions. The detached profile also retains descriptor/primitive totals, a
+primitive histogram, identity/logical-path byte pressure, a descriptor-source
+capture count, and the five semantic token kinds/names with the most callback
+time. The source count is only a pressure proxy: descriptor source capture
+happens before Host resolution and is intentionally not globally intercepted.
+`dirty` ranks the rolling window's typed message/reflow causes without
 retaining their payloads. The overlay refreshes this aggregate four times per second so reading
-the profiler does not become its own hot path. The Lua-memory delta is the net
-heap change for the sampled frame, so a large negative value normally means
-collection rather than free work.
+the profiler does not become its own hot path. Frame and runtime-phase heap
+deltas are signed, observer-sensitive **net** movement. A negative value is GC
+context, not negative allocation; these values are neither additive nor a
+substitute for the separate GC-stopped gross-allocation pass.
 
 `slowest` keeps one correlated completed frame from that same rolling window:
 its total, frame callback, reconcile/layout, runtime, and paint timings stay
 beside the exact dirty causes that occurred in that frame. Use it to distinguish
 a simulation/playback spike from a rebuild or steady traversal cost; unlike
 independent phase p95 values, these numbers all describe one frame.
+The bounded Battle performance report additionally ranks five quiet frames by
+runtime, breaking ties by chronological frame number, and prints their complete
+Motion/transform/ref/Effect split plus signed frame heap delta. Rebuilt frames
+therefore cannot crowd the quiet-runtime regression out of the evidence.
 
 This profiler answers where a spike lives; it is not a production telemetry
 system and stores no props, actor states, messages, simulation events, or
@@ -1422,8 +1439,9 @@ local frames = host:diagnosticTrace()
 
 `diagnosticTrace()` allocates one detached row per retained frame. Call it once
 after a bounded measurement; never poll it from an overlay or normal update.
-It contains timings, activity, structural counts, and compact dirty causes,
-not component descriptions, messages, actor state, or simulation payloads.
+It contains timings, signed heap context, bounded semantic-owner rankings,
+activity, structural counts, and compact dirty causes—not component
+descriptions, messages, actor state, or simulation payloads.
 Both one-shot methods require a mounted, operational, diagnostics-enabled Host
 at a quiet public boundary: never call them during update, draw, a component
 callback, or external input routing.
@@ -1438,6 +1456,15 @@ scope with app HUD, Inspection, hot reload, profiler instrumentation, and audio
 excluded from both acceptance measurements. Afterward, fresh opt-in FrogUI-only
 early/late sessions clear setup history and export one bounded diagnostic trace;
 those observer-inflated timings provide attribution and never affect pass/fail.
+Only those diagnostic engines time `BattlePlayback:update()` and
+`BattlePlayback:snapshot()` with tool-local cumulative scalars; the trace joins
+their per-frame deltas after the sampled loop. FrogUI exposes no domain-call
+registry or profiling API, and profiler-free acceptance calls both methods
+directly without a timer.
+Disabled Hosts allocate no diagnostic histogram/counter tables and perform no
+diagnostic timer or heap calls. Expansion still crosses cheap nil-profiler
+guards so one implementation remains authoritative; the Battle tool likewise
+crosses false observer-selection branches instead of duplicating its root.
 Per-frame `last_event` and `last_address` fields identify only the latest
 presented Playback record for context; they are not asserted as the cause of a
 rebuild. Revision-stable rows are labelled `(no playback change)`, while an

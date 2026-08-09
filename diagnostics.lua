@@ -9,8 +9,22 @@ local DEFAULT_HISTORY = 180
 local PHASES = {
     "update", "frameCallbacks", "messageDelivery", "actionProcessing",
     "eventProcessing", "actorTransitions", "reconcile",
-    "componentExpansion", "layout", "commit", "runtime", "interaction",
-    "motion", "refs", "effects", "diagnosticObserver", "external", "paint",
+    "componentExpansion", "semanticRender", "semanticPreparation",
+    "semanticBookkeeping", "primitiveValidation",
+    "primitiveMaterialization", "primitivePostValidation",
+    "scrollReconciliation",
+    "radialReconciliation", "motionReconciliation",
+    "effectReconciliation", "deferredResolution", "effectOwnership",
+    "eventOrdering", "layout", "candidateTransform", "messageTransform",
+    "commit",
+    "runtime", "interaction", "motion", "motionUpdate",
+    "committedTransform", "refs", "effects", "effectRefresh",
+    "effectUpdate", "effectBounds",
+    "diagnosticObserver", "external", "paint",
+}
+
+local HEAP_PHASES = {
+    "runtime", "interaction", "motion", "refs", "effects",
 }
 
 -- Uses LÖVE's monotonic wall clock when available and a portable fallback in
@@ -74,6 +88,8 @@ function diagnostics:ensureFrame()
             activity = {},
             causes = {},
             memoryStartKB = collectgarbage("count"),
+            heapDeltasKB = {},
+            ownerRenders = {},
         }
     end
 end
@@ -97,9 +113,50 @@ end
 -- Adds elapsed wall time to one named phase. Nested phases are intentional:
 -- reconcile includes expansion, layout, and commit for easy top-level reading.
 function diagnostics:finish(name, started)
-    if not started or not self.current then return end
+    if not started or not self.current then return nil end
     local elapsed = math.max(0, now() - started)
     self.current.timings[name] = (self.current.timings[name] or 0) + elapsed
+    return elapsed
+end
+
+-- Attributes one completed semantic render to its token name. The bounded
+-- profiler keeps only count and elapsed time; props, state, and paths never
+-- cross this boundary.
+function diagnostics:ownerRender(name, elapsed)
+    if not elapsed or not self.current then return end
+    local owner = self.current.ownerRenders[name]
+    if not owner then
+        owner = { count = 0, seconds = 0 }
+        self.current.ownerRenders[name] = owner
+    end
+    owner.count = owner.count + 1
+    owner.seconds = owner.seconds + elapsed
+end
+
+-- Starts one diagnostic-only net-heap interval. This deliberately uses Lua's
+-- current heap size, not an allocation claim: a collection may make the
+-- matching delta negative.
+function diagnostics:heapStart()
+    if not self.enabled or not self.current then return nil end
+    return collectgarbage("count")
+end
+
+-- Closes one sequential heap interval and returns the new cursor so adjacent
+-- runtime phases need only one heap sample at their shared boundary.
+function diagnostics:heapMark(name, startedKB)
+    if not startedKB or not self.current then return nil end
+    local currentKB = collectgarbage("count")
+    local deltas = self.current.heapDeltasKB
+    deltas[name] = (deltas[name] or 0) + currentKB - startedKB
+    return currentKB
+end
+
+-- Records a nested heap interval from two already-sampled cursors. Host uses
+-- this for the complete runtime total without adding another GC observation.
+function diagnostics:heapRecord(name, startedKB, finishedKB)
+    if not startedKB or not finishedKB or not self.current then return end
+    local deltas = self.current.heapDeltasKB
+    deltas[name] = (deltas[name] or 0) + finishedKB - startedKB
 end
 
 -- Increments one per-frame activity counter such as messages or reconciles.
@@ -144,7 +201,6 @@ function diagnostics:_commit()
     local memory = collectgarbage("count")
     sample.memoryKB = memory
     sample.memoryDeltaKB = memory - sample.memoryStartKB
-    sample.memoryStartKB = nil
     sample.timings.total = (sample.timings.update or 0)
         + (sample.timings.external or 0)
         + (sample.timings.paint or 0)
@@ -206,6 +262,80 @@ local function phaseSummary(history, phaseNames)
     return phases
 end
 
+-- Summarizes signed scalar samples without the milliseconds conversion used
+-- by phaseSummary. Net heap movement may be negative when GC runs.
+local function valueSummary(history, valueFor)
+    local values, sum, minimum, maximum = {}, 0, math.huge, -math.huge
+    for _, sample in ipairs(history) do
+        local value = valueFor(sample) or 0
+        values[#values + 1] = value
+        sum = sum + value
+        minimum = math.min(minimum, value)
+        maximum = math.max(maximum, value)
+    end
+    return {
+        current = history[#history] and valueFor(history[#history]) or 0,
+        average = #values > 0 and sum / #values or 0,
+        p95 = percentile(values, 0.95),
+        min = #values > 0 and minimum or 0,
+        max = #values > 0 and maximum or 0,
+    }
+end
+
+local function memorySummary(history)
+    local phases = {}
+    for _, name in ipairs(HEAP_PHASES) do
+        phases[name] = valueSummary(history, function(sample)
+            return (sample.heapDeltasKB or {})[name] or 0
+        end)
+    end
+    local heapDropFrames = 0
+    for _, sample in ipairs(history) do
+        if (sample.memoryDeltaKB or 0) < 0 then
+            heapDropFrames = heapDropFrames + 1
+        end
+    end
+    return {
+        frameDeltaKB = valueSummary(history,
+            function(sample) return sample.memoryDeltaKB or 0 end),
+        phases = phases,
+        heapDropFrames = heapDropFrames,
+    }
+end
+
+local function ownerSummary(history)
+    local totals = {}
+    for _, sample in ipairs(history) do
+        for name, owner in pairs(sample.ownerRenders or {}) do
+            local total = totals[name]
+            if not total then
+                total = { name = name, count = 0, seconds = 0 }
+                totals[name] = total
+            end
+            total.count = total.count + owner.count
+            total.seconds = total.seconds + owner.seconds
+        end
+    end
+    local owners = {}
+    for _, owner in pairs(totals) do
+        owners[#owners + 1] = {
+            name = owner.name,
+            count = owner.count,
+            totalMs = owner.seconds * 1000,
+            averageMs = owner.count > 0
+                    and owner.seconds * 1000 / owner.count
+                or 0,
+        }
+    end
+    table.sort(owners, function(left, right)
+        if left.totalMs ~= right.totalMs then return left.totalMs > right.totalMs end
+        if left.count ~= right.count then return left.count > right.count end
+        return left.name < right.name
+    end)
+    while #owners > 5 do table.remove(owners) end
+    return owners
+end
+
 local function activitySummary(history)
     local totals = {}
     for _, sample in ipairs(history) do
@@ -241,6 +371,8 @@ local function cohortSummary(history, phaseNames)
     return {
         samples = #history,
         phases = phaseSummary(history, phaseNames),
+        memory = memorySummary(history),
+        topSemanticOwners = ownerSummary(history),
         activityTotals = activitySummary(history),
         causes = causeSummary(history),
     }
@@ -263,7 +395,11 @@ function diagnostics:trace()
             counts = shallowCopy(sample.counts),
             activity = shallowCopy(sample.activity),
             causes = causeSummary { sample },
+            memoryStartKB = sample.memoryStartKB or 0,
+            memoryKB = sample.memoryKB or 0,
             memoryDeltaKB = sample.memoryDeltaKB or 0,
+            heapDeltasKB = shallowCopy(sample.heapDeltasKB),
+            topSemanticOwners = ownerSummary { sample },
         }
     end
     return output
@@ -316,6 +452,8 @@ function diagnostics:snapshot()
         enabled = self.enabled,
         samples = #history,
         phases = phaseSummary(history, phaseNames),
+        memory = memorySummary(history),
+        topSemanticOwners = ownerSummary(history),
         counts = shallowCopy(latest and latest.counts or self.retainedCounts),
         activityTotals = activitySummary(history),
         causes = causeSummary(history),

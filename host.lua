@@ -1376,6 +1376,7 @@ function host.new(options)
     self._diagnostics = Diagnostics.new {
         enabled = options.diagnostics == true,
     }
+    self._diagnosticPrimitiveNames = options.diagnostics == true and {} or nil
     local viewportOptions = shallowCopy(options)
     if viewportOptions.wideRatio == nil and self.theme.breakpoints then
         viewportOptions.wideRatio = self.theme.breakpoints.wideRatio
@@ -1759,6 +1760,7 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
         "FrogUI render owners may not render another owner synchronously")
     assert(not context.hookOwners[logicalPath],
         "duplicate FrogUI render-owner identity " .. logicalPath)
+    local profiler = context.diagnostics
     local previous = self._hookOwners[logicalPath]
     assert(not previous or previous.token == token,
         label .. " replaced a retained hook owner with a different token")
@@ -1773,7 +1775,23 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
         index = 0,
     }
     self._renderHook = session
-    local results = { pcall(self._withRender, self, label, callback, ...) }
+    local results, renderElapsed
+    if profiler then
+        local function observedCallback(...)
+            local renderStarted = profiler:start()
+            local observed = { pcall(callback, ...) }
+            renderElapsed = profiler:finish("semanticRender", renderStarted)
+            if not observed[1] then error(observed[2], 0) end
+            table.remove(observed, 1)
+            return unpack(observed)
+        end
+        results = {
+            pcall(self._withRender, self, label, observedCallback, ...),
+        }
+    else
+        -- Preserve the ordinary render path exactly when diagnostics are off.
+        results = { pcall(self._withRender, self, label, callback, ...) }
+    end
     self._renderHook = nil
     if not results[1] then error(results[2], 0) end
     if previous then
@@ -1787,6 +1805,10 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
         renderCallback = callback,
         hooks = session.hooks,
     }
+    if profiler then
+        profiler:increment("semanticRenders")
+        profiler:ownerRender(token.kind .. ":" .. label, renderElapsed)
+    end
     table.remove(results, 1)
     return unpack(results)
 end
@@ -1829,11 +1851,17 @@ end
 
 function host:_registerActor(descriptor, owner, path, descendantPath, context,
         logicalPath)
+    local profiler = context.diagnostics
+    local bookkeepingStarted = profiler and profiler:start() or nil
     assert((context.previewDepth or 0) == 0,
         "DragSource preview must be stateless presentation")
     local token = descriptor.token
     assert(not context.actors[logicalPath],
         "duplicate mounted actor identity " .. logicalPath)
+    if profiler then
+        profiler:finish("semanticBookkeeping", bookkeepingStarted)
+    end
+    local preparationStarted = profiler and profiler:start() or nil
     local props = shallowCopy(descriptor.props)
     props.children = descriptor.children
     local old = self._actors[logicalPath]
@@ -1843,6 +1871,10 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
     else
         retainedState = self:_initialState(token, props)
     end
+    if profiler then
+        profiler:finish("semanticPreparation", preparationStarted)
+    end
+    bookkeepingStarted = profiler and profiler:start() or nil
     local instance = {
         token = token,
         identity = logicalPath,
@@ -1878,41 +1910,81 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
     end
     instance.reactions = reactions
     context.actors[logicalPath] = instance
+    if profiler then
+        profiler:finish("semanticBookkeeping", bookkeepingStarted)
+    end
 
     -- Render receives one detached state snapshot. Mutating it is ignored;
     -- semantic state changes belong to an action/reaction return value.
+    preparationStarted = profiler and profiler:start() or nil
     local stateForRender = deepCopy(instance.state)
+    local actorSend = self:_actorSend(instance)
+    if profiler then
+        profiler:finish("semanticPreparation", preparationStarted)
+    end
     local rendered = self:_withOwnerRender(token.name, token, logicalPath,
         context, token.definition.render, props, stateForRender,
-        self:_actorSend(instance))
-    if rendered == nil or rendered == false then return nil end
+        actorSend)
+    bookkeepingStarted = profiler and profiler:start() or nil
+    if rendered == nil or rendered == false then
+        if profiler then
+            profiler:finish("semanticBookkeeping", bookkeepingStarted)
+        end
+        return nil
+    end
     assert(Element.isDescriptor(rendered), token.name .. " must return one FrogUI element or nil")
     local outputPath = childPath(path .. "/output", rendered, 1)
+    if profiler then
+        profiler:finish("semanticBookkeeping", bookkeepingStarted)
+    end
     local resolved = self:_resolve(rendered, token.name, outputPath, path, context,
         logicalOutputPath(logicalPath, rendered))
     if resolved then
+        bookkeepingStarted = profiler and profiler:start() or nil
         annotateProcesses(resolved, context.hookOwners[logicalPath],
             token.name, logicalPath)
         resolved._actorInstances = resolved._actorInstances or {}
         table.insert(resolved._actorInstances, 1, instance)
         if descriptor.key ~= nil then resolved.key = descriptor.key end
+        if profiler then
+            profiler:finish("semanticBookkeeping", bookkeepingStarted)
+        end
+        preparationStarted = profiler and profiler:start() or nil
+        local inspectedState = deepCopy(instance.state)
+        if profiler then
+            profiler:finish("semanticPreparation", preparationStarted)
+        end
+        bookkeepingStarted = profiler and profiler:start() or nil
         resolved.actor = {
             name = token.name,
-            state = deepCopy(instance.state),
+            state = inspectedState,
             address = address and address.name or nil,
             reactions = #reactions,
         }
+        if profiler then
+            profiler:finish("semanticBookkeeping", bookkeepingStarted)
+        end
     end
     return resolved
 end
 
 function host:_resolveView(descriptor, owner, path, descendantPath, context,
         logicalPath)
+    local profiler = context.diagnostics
+    local bookkeepingStarted = profiler and profiler:start() or nil
     assert((context.previewDepth or 0) == 0,
         "DragSource preview cannot mount an actor view")
     local token = descriptor.token
+    if profiler then
+        profiler:finish("semanticBookkeeping", bookkeepingStarted)
+    end
+    local preparationStarted = profiler and profiler:start() or nil
     local props = shallowCopy(descriptor.props)
     props.children = descriptor.children
+    if profiler then
+        profiler:finish("semanticPreparation", preparationStarted)
+    end
+    bookkeepingStarted = profiler and profiler:start() or nil
     local address = props.target
     assert(Message.isAddress(address), token.name .. " target prop must come from Actor:address")
     assert(address.actor == token.actor,
@@ -1928,17 +2000,35 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
         return instance.token == token.actor and self._host:_accepts(instance, action)
     end
     status._host = self
+    if profiler then
+        profiler:finish("semanticBookkeeping", bookkeepingStarted)
+    end
     -- Views observe the same detached render snapshot as their actor owner.
+    preparationStarted = profiler and profiler:start() or nil
     local stateForRender = instance and deepCopy(instance.state) or nil
+    local addressSend = self:_addressSend(address)
+    if profiler then
+        profiler:finish("semanticPreparation", preparationStarted)
+    end
     local rendered = self:_withOwnerRender(token.name, token, logicalPath,
         context, token.render, props, stateForRender,
-        self:_addressSend(address), status)
-    if rendered == nil or rendered == false then return nil end
+        addressSend, status)
+    bookkeepingStarted = profiler and profiler:start() or nil
+    if rendered == nil or rendered == false then
+        if profiler then
+            profiler:finish("semanticBookkeeping", bookkeepingStarted)
+        end
+        return nil
+    end
     assert(Element.isDescriptor(rendered), token.name .. " must return one FrogUI element or nil")
     local outputPath = childPath(path .. "/output", rendered, 1)
+    if profiler then
+        profiler:finish("semanticBookkeeping", bookkeepingStarted)
+    end
     local resolved = self:_resolve(rendered, token.name, outputPath,
         descendantPath or path, context, logicalOutputPath(logicalPath, rendered))
     if resolved then
+        bookkeepingStarted = profiler and profiler:start() or nil
         annotateProcesses(resolved, context.hookOwners[logicalPath],
             token.name, logicalPath)
         if descriptor.key ~= nil then resolved.key = descriptor.key end
@@ -1947,6 +2037,9 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
             target = address.name,
             mounted = instance ~= nil,
         }
+        if profiler then
+            profiler:finish("semanticBookkeeping", bookkeepingStarted)
+        end
     end
     return resolved
 end
@@ -1954,6 +2047,18 @@ end
 function host:_resolve(descriptor, owner, path, descendantPath, context,
         logicalPath)
     local token = descriptor.token
+    local profiler = context.diagnostics
+    if profiler then
+        context.descriptorTotal = context.descriptorTotal + 1
+        context.identityBytes = context.identityBytes + #path
+        context.logicalIdentityBytes = context.logicalIdentityBytes + #logicalPath
+        if descriptor.source then
+            context.sourceCapturedDescriptors =
+                context.sourceCapturedDescriptors + 1
+        end
+    end
+    local semanticStarted = token.kind ~= "primitive" and profiler
+        and profiler:start() or nil
     if token.kind ~= "primitive" then
         assert(descriptor.props.ref == nil,
             token.name .. " is a semantic " .. token.kind
@@ -1972,21 +2077,41 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 .. " against the committed tree")
         context.semanticTokens[semanticName] = token
     end
+    if semanticStarted then
+        profiler:finish("semanticBookkeeping", semanticStarted)
+    end
     if token.kind == "component" then
+        local preparationStarted = profiler and profiler:start() or nil
         local props = shallowCopy(descriptor.props)
         props.children = descriptor.children
+        if profiler then
+            profiler:finish("semanticPreparation", preparationStarted)
+        end
         local rendered = self:_withOwnerRender(token.name, token, logicalPath,
             context, token.render, props)
-        if rendered == nil or rendered == false then return nil end
+        local bookkeepingStarted = profiler and profiler:start() or nil
+        if rendered == nil or rendered == false then
+            if profiler then
+                profiler:finish("semanticBookkeeping", bookkeepingStarted)
+            end
+            return nil
+        end
         assert(Element.isDescriptor(rendered),
             token.name .. " must return one FrogUI element or nil")
         local outputPath = childPath(path .. "/output", rendered, 1)
+        if profiler then
+            profiler:finish("semanticBookkeeping", bookkeepingStarted)
+        end
         local resolved = self:_resolve(rendered, token.name, outputPath, path,
             context, logicalOutputPath(logicalPath, rendered))
+        bookkeepingStarted = profiler and profiler:start() or nil
         if resolved then
             annotateProcesses(resolved, context.hookOwners[logicalPath],
                 token.name, logicalPath)
             if descriptor.key ~= nil then resolved.key = descriptor.key end
+        end
+        if profiler then
+            profiler:finish("semanticBookkeeping", bookkeepingStarted)
         end
         return resolved
     elseif token.kind == "actor" then
@@ -2007,6 +2132,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             context, logicalPath)
     end
 
+    local primitiveStarted = profiler and profiler:start() or nil
     validatePrimitive(token.name, descriptor.children)
     validatePrimitiveProps(self, token.name, descriptor.props)
     if (context.previewDepth or 0) > 0 then
@@ -2023,6 +2149,10 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 and descriptor.props.reactions == nil,
             "DragSource preview cannot own Motion or event reactions")
     end
+    if profiler then
+        profiler:finish("primitiveValidation", primitiveStarted)
+    end
+    local materializationStarted = profiler and profiler:start() or nil
     local node = {
         type = token.name,
         key = descriptor.key,
@@ -2033,6 +2163,11 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         props = shallowCopy(descriptor.props),
         children = {},
     }
+    if profiler then
+        context.primitiveTotal = context.primitiveTotal + 1
+        context.primitiveHistogram[token.name] =
+            (context.primitiveHistogram[token.name] or 0) + 1
+    end
     local attachedRef = descriptor.props.ref
     if attachedRef then
         assert(context.refs[attachedRef],
@@ -2043,29 +2178,52 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         context.refAttachments[attachedRef] = node
         node._ref = attachedRef
     end
+    if profiler then
+        profiler:finish("primitiveMaterialization", materializationStarted)
+    end
     if token.name == "Scroll" then
+        local started = profiler and profiler:start() or nil
         local instance = Interaction.reconcileScroll(
             self._scrolls[logicalPath], node, node.props, logicalPath)
         context.scrolls[logicalPath] = instance
+        if profiler then
+            profiler:increment("scrollReconciliations")
+            profiler:finish("scrollReconciliation", started)
+        end
     end
     if token.name == "RadialDial" then
+        local started = profiler and profiler:start() or nil
         local instance = Interaction.reconcileRadialDial(
             self._radials[logicalPath], node, node.props, logicalPath,
             self.reducedMotion)
         context.radials[logicalPath] = instance
+        if profiler then
+            profiler:increment("radialReconciliations")
+            profiler:finish("radialReconciliation", started)
+        end
     end
     if token.name == "Motion" or descriptor.props.juice
             or descriptor.props.reactions then
+        local started = profiler and profiler:start() or nil
         local instance = Motion.reconcile(self._motions[logicalPath], node,
             node.props, logicalPath, context.nextReceiverOrder, self)
         context.nextReceiverOrder = context.nextReceiverOrder + 1
         context.motions[logicalPath] = instance
+        if profiler then
+            profiler:increment("motionReconciliations")
+            profiler:finish("motionReconciliation", started)
+        end
     end
     if token.name == "Projectile" or token.name == "Flipbook" then
+        local started = profiler and profiler:start() or nil
         local instance = Effect.reconcile(self._effects[logicalPath], node,
             logicalPath, context.nextEffectOrder, self)
         context.nextEffectOrder = context.nextEffectOrder + 1
         context.effects[logicalPath] = instance
+        if profiler then
+            profiler:increment("effectReconciliations")
+            profiler:finish("effectReconciliation", started)
+        end
     end
     local childrenPath = descendantPath or path
     for index, child in ipairs(descriptor.children) do
@@ -2074,6 +2232,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             logicalChildPath(logicalPath, child, index))
         if resolved then node.children[#node.children + 1] = resolved end
     end
+    local validationStarted = profiler and profiler:start() or nil
     if token.name == "EffectLayer" then
         for _, child in ipairs(node.children) do
             assert(child.type == "PopupText" or child.type == "Projectile"
@@ -2120,6 +2279,9 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             checkStatic(child)
         end
     end
+    if profiler then
+        profiler:finish("primitivePostValidation", validationStarted)
+    end
     if token.name == "DragSource" then
         context.previewDepth = (context.previewDepth or 0) + 1
         local preview = descriptor.props.preview
@@ -2133,17 +2295,28 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
 end
 
 function host:_resolveDeferred(node, context)
-    if not node then return nil end
+    local profiler = context.diagnostics
+    local started = profiler and profiler:start() or nil
+    if not node then
+        if profiler then profiler:finish("deferredResolution", started) end
+        return nil
+    end
     if node.__frogDeferredView then
+        if profiler then profiler:finish("deferredResolution", started) end
         return self:_resolveView(node.descriptor, node.owner, node.path,
             node.descendantPath, context, node.logicalPath)
     end
     local children = {}
+    if profiler then profiler:finish("deferredResolution", started) end
     for _, child in ipairs(node.children or {}) do
         local resolved = self:_resolveDeferred(child, context)
+        started = profiler and profiler:start() or nil
         if resolved then children[#children + 1] = resolved end
+        if profiler then profiler:finish("deferredResolution", started) end
     end
+    started = profiler and profiler:start() or nil
     node.children = children
+    if profiler then profiler:finish("deferredResolution", started) end
     return node
 end
 
@@ -2194,15 +2367,15 @@ end
 
 -- Applies committed-tree Motion geometry through one diagnostic boundary.
 -- Ordinary Hosts take the direct path without timer calls or allocations.
-function host:_transformTree(root)
+function host:_transformTree(root, phase)
     root = root or self._tree
-    if not self._diagnostics.enabled then
+    if not self._diagnostics.enabled or not phase then
         Motion.transformTree(root)
         return
     end
     local started = self._diagnostics:start()
     Motion.transformTree(root)
-    self._diagnostics:finish("motion", started)
+    self._diagnostics:finish(phase, started)
 end
 
 -- Publishes structural pressure only while the development profiler is active.
@@ -2227,6 +2400,32 @@ local function publishDiagnosticStructure(self, root, context)
     self._diagnostics:setCount("motions", count(context.motions))
     self._diagnostics:setCount("effects", count(context.effects))
     self._diagnostics:setCount("refs", count(context.refs))
+    self._diagnostics:setCount("descriptors", context.descriptorTotal)
+    self._diagnostics:setCount("primitives", context.primitiveTotal)
+    self._diagnostics:setCount("identityBytes", context.identityBytes)
+    self._diagnostics:setCount("logicalIdentityBytes",
+        context.logicalIdentityBytes)
+    -- Descriptor source capture happens in Element construction, before Host
+    -- can time it without adding global instrumentation. This retained count
+    -- is a pressure proxy, not a duration measurement.
+    self._diagnostics:setCount("sourceCapturedDescriptors",
+        context.sourceCapturedDescriptors)
+    self._diagnostics:setCount("popupTexts",
+        context.primitiveHistogram.PopupText or 0)
+    self._diagnostics:setCount("canvases",
+        context.primitiveHistogram.Canvas or 0)
+    local previousPrimitiveNames = self._diagnosticPrimitiveNames or {}
+    for name in pairs(previousPrimitiveNames) do
+        if context.primitiveHistogram[name] == nil then
+            self._diagnostics:setCount("primitive." .. name, 0)
+        end
+    end
+    local primitiveNames = {}
+    for name, total in pairs(context.primitiveHistogram) do
+        self._diagnostics:setCount("primitive." .. name, total)
+        primitiveNames[name] = true
+    end
+    self._diagnosticPrimitiveNames = primitiveNames
 end
 
 function host:_build(root)
@@ -2252,6 +2451,15 @@ function host:_build(root)
         nextReceiverOrder = 1,
         nextEffectOrder = 1,
     }
+    if self._diagnostics.enabled then
+        context.diagnostics = self._diagnostics
+        context.descriptorTotal = 0
+        context.primitiveTotal = 0
+        context.primitiveHistogram = {}
+        context.identityBytes = 0
+        context.logicalIdentityBytes = 0
+        context.sourceCapturedDescriptors = 0
+    end
     local function buildCandidate()
         local expansionStarted = self._diagnostics:start()
         local rootPath = childPath("root", root, 1)
@@ -2260,7 +2468,10 @@ function host:_build(root)
             rootLogicalPath)
         candidate = self:_resolveDeferred(candidate, context)
         assert(candidate, "Host root component returned nil")
+        local ownershipStarted = self._diagnostics:start()
         validateEffectOwnership(candidate, false)
+        self._diagnostics:finish("effectOwnership", ownershipStarted)
+        local orderingStarted = self._diagnostics:start()
         local nextEventOrder = assignEventOrder(candidate, 1)
         local hiddenActors = {}
         for _, instance in pairs(context.actors) do
@@ -2273,6 +2484,10 @@ function host:_build(root)
                 instance.eventOrder = nextEventOrder
                 nextEventOrder = nextEventOrder + 1
             end
+        end
+        if context.diagnostics then
+            context.diagnostics:increment("postResolutionPasses")
+            context.diagnostics:finish("eventOrdering", orderingStarted)
         end
         self._diagnostics:finish("componentExpansion", expansionStarted)
         local layoutStarted = self._diagnostics:start()
@@ -2289,7 +2504,7 @@ function host:_build(root)
             }
         end
         Effect.arrangeAll(context.effects, context.refRectangles, self)
-        self:_transformTree(candidate)
+        self:_transformTree(candidate, "candidateTransform")
         Effect.updateBounds(context.effects, self)
         context.modals, context.chrome = Interaction.planesFromTree(candidate)
         context.modal = context.modals[#context.modals]
@@ -2879,7 +3094,7 @@ function host:_processEvent(entry)
             end
         end
     end
-    self:_transformTree()
+    self:_transformTree(nil, "messageTransform")
     local traceIndex = self:_appendTrace({
         kind = "event",
         token = token.name,
@@ -3080,24 +3295,65 @@ function host:update(dt)
     local feedbackMark = #self._feedbackQueue
     local motionCompletions, effectCompletions
     local runtimeStarted = self._diagnostics:start()
+    local profiling = self._diagnostics.enabled
+    local runtimeHeapStarted = profiling and self._diagnostics:heapStart() or nil
+    local runtimeHeapCursor = runtimeHeapStarted
     local ok, err = pcall(function()
         local interactionStarted = self._diagnostics:start()
         self._rawClock:advance(dt)
         Interaction.update(self, dt)
         self._diagnostics:finish("interaction", interactionStarted)
+        if profiling then
+            runtimeHeapCursor = self._diagnostics:heapMark(
+                "interaction", runtimeHeapCursor)
+        end
         local motionStarted = self._diagnostics:start()
+        local motionUpdateStarted = profiling
+            and self._diagnostics:start() or nil
         _, motionCompletions = Motion.updateAll(self._motions, self)
+        if profiling then
+            self._diagnostics:finish("motionUpdate", motionUpdateStarted)
+        end
+        self:_transformTree(nil, "committedTransform")
         self._diagnostics:finish("motion", motionStarted)
-        self:_transformTree()
+        if profiling then
+            runtimeHeapCursor = self._diagnostics:heapMark(
+                "motion", runtimeHeapCursor)
+        end
         local refsStarted = self._diagnostics:start()
         self:_refreshCommittedRefs()
         self._diagnostics:finish("refs", refsStarted)
+        if profiling then
+            runtimeHeapCursor = self._diagnostics:heapMark(
+                "refs", runtimeHeapCursor)
+        end
         local effectsStarted = self._diagnostics:start()
+        local refreshStarted = profiling and self._diagnostics:start() or nil
         Effect.refreshAll(self._effects, self)
+        if profiling then
+            self._diagnostics:finish("effectRefresh", refreshStarted)
+        end
+        local effectUpdateStarted = profiling
+            and self._diagnostics:start() or nil
         effectCompletions = Effect.updateAll(self._effects)
+        if profiling then
+            self._diagnostics:finish("effectUpdate", effectUpdateStarted)
+        end
+        local boundsStarted = profiling and self._diagnostics:start() or nil
         Effect.updateBounds(self._effects, self)
+        if profiling then
+            self._diagnostics:finish("effectBounds", boundsStarted)
+        end
         self._diagnostics:finish("effects", effectsStarted)
+        if profiling then
+            runtimeHeapCursor = self._diagnostics:heapMark(
+                "effects", runtimeHeapCursor)
+        end
     end)
+    if profiling then
+        self._diagnostics:heapRecord(
+            "runtime", runtimeHeapStarted, runtimeHeapCursor)
+    end
     self._diagnostics:finish("runtime", runtimeStarted)
     if not ok then
         self._diagnosticUpdateActive = nil
