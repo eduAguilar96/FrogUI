@@ -2293,7 +2293,11 @@ function host:_build(root)
         Effect.updateBounds(context.effects, self)
         context.modals, context.chrome = Interaction.planesFromTree(candidate)
         context.modal = context.modals[#context.modals]
-        publishDiagnosticStructure(self, candidate, context)
+        if self._diagnostics.enabled then
+            local observerStarted = self._diagnostics:start()
+            publishDiagnosticStructure(self, candidate, context)
+            self._diagnostics:finish("diagnosticObserver", observerStarted)
+        end
         return candidate
     end
     local ok, candidate = pcall(buildCandidate)
@@ -2741,6 +2745,8 @@ function host:_emitTransitionFact(template, props, origin, originSource)
 end
 
 function host:_applyTransition(instance, spec, record, origin)
+    local profiling = self._diagnostics.enabled
+    local transitionStarted = profiling and self._diagnostics:start() or nil
     local previous = instance.state
     local nextState
     local emitted
@@ -2753,12 +2759,24 @@ function host:_applyTransition(instance, spec, record, origin)
         local ok, result = pcall(spec, reducerState, record, instance.props)
         self._dispatching = false
         if not ok then error(result, 0) end
-        if result == nil then return false, false end
+        if result == nil then
+            if profiling then
+                self._diagnostics:increment("actorTransitions")
+                self._diagnostics:finish("actorTransitions", transitionStarted)
+            end
+            return false, false
+        end
         assert(not Message.isTransition(result),
             instance.token.name .. " reducer must return nextState or nil, not Frog.go")
         nextState = result
     elseif Message.isTransition(spec) then
-        if not stateAllowed(instance.state, spec.from) then return false, false end
+        if not stateAllowed(instance.state, spec.from) then
+            if profiling then
+                self._diagnostics:increment("actorTransitions")
+                self._diagnostics:finish("actorTransitions", transitionStarted)
+            end
+            return false, false
+        end
         nextState = spec.value
         emitted = spec.emit
     else
@@ -2773,6 +2791,14 @@ function host:_applyTransition(instance, spec, record, origin)
             origin .. " -> " .. instance.token.name, instance.source)
     end
     local changed = type(instance.state) == "table" or instance.state ~= previous
+    if profiling then
+        self._diagnostics:increment("actorTransitions")
+        self._diagnostics:increment("acceptedActorTransitions")
+        if changed then
+            self._diagnostics:increment("changedActorTransitions")
+        end
+        self._diagnostics:finish("actorTransitions", transitionStarted)
+    end
     return true, changed
 end
 
@@ -2871,6 +2897,7 @@ end
 
 function host:_drainMessages(budget)
     local dirty = false
+    local profiling = self._diagnostics.enabled
     budget = budget or { processed = 0 }
     local lastTraceIndex
     while #self._messageQueue > 0 do
@@ -2879,8 +2906,15 @@ function host:_drainMessages(budget)
             "FrogUI message loop exceeded " .. self._messageLoopLimit .. " deliveries")
         local entry = table.remove(self._messageQueue, 1)
         local changed, traceIndex
+        local processingStarted = profiling and self._diagnostics:start() or nil
         if entry.kind == "action" then changed, traceIndex = self:_processAction(entry)
         else changed, traceIndex = self:_processEvent(entry) end
+        if profiling then
+            local phase = entry.kind == "action"
+                    and "actionProcessing" or "eventProcessing"
+            self._diagnostics:increment(entry.kind .. "Messages")
+            self._diagnostics:finish(phase, processingStarted)
+        end
         if changed and traceIndex and self._diagnostics.enabled then
             local trace = self._messageTrace[traceIndex]
             self._diagnostics:cause((trace.kind or entry.kind)
@@ -3116,6 +3150,35 @@ end
 ---@return FrogUIDiagnosticsSnapshot
 function host:diagnostics()
     return self._diagnostics:snapshot()
+end
+
+local function assertDiagnosticToolBoundary(self, operation)
+    assert(self._mounted,
+        "cannot " .. operation .. " on an unmounted FrogUI Host")
+    assertOperational(self, operation)
+    assert(self._diagnostics.enabled,
+        operation .. " requires diagnostics = true")
+    assert(not self._diagnosticUpdateActive,
+        "cannot " .. operation .. " during Host update")
+    assert(not self._drawing,
+        "cannot " .. operation .. " during Host draw")
+    assert(self._callbackDepth == 0,
+        "cannot " .. operation .. " during a FrogUI callback")
+    assert((self._diagnosticExternalDepth or 0) == 0,
+        "cannot " .. operation .. " during external Host input")
+end
+
+-- Resets an opt-in diagnostic ring before one isolated developer measurement.
+function host:clearDiagnostics()
+    assertDiagnosticToolBoundary(self, "clear diagnostics")
+    self._diagnostics:clear()
+end
+
+-- Returns the opt-in diagnostic ring in chronological order. This allocates a
+-- detached row per sample and is intended for one-shot tools, not live paint.
+function host:diagnosticTrace()
+    assertDiagnosticToolBoundary(self, "export a diagnostic trace")
+    return self._diagnostics:trace()
 end
 
 function host:resize(width, height)

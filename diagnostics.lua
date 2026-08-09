@@ -7,9 +7,10 @@ diagnostics.__index = diagnostics
 
 local DEFAULT_HISTORY = 180
 local PHASES = {
-    "update", "frameCallbacks", "messageDelivery", "reconcile",
+    "update", "frameCallbacks", "messageDelivery", "actionProcessing",
+    "eventProcessing", "actorTransitions", "reconcile",
     "componentExpansion", "layout", "commit", "runtime", "interaction",
-    "motion", "refs", "effects", "external", "paint",
+    "motion", "refs", "effects", "diagnosticObserver", "external", "paint",
 }
 
 -- Uses LÖVE's monotonic wall clock when available and a portable fallback in
@@ -70,6 +71,7 @@ function diagnostics:ensureFrame()
         self.current = {
             timings = {},
             counts = shallowCopy(self.retainedCounts),
+            activity = {},
             causes = {},
             memoryStartKB = collectgarbage("count"),
         }
@@ -105,6 +107,7 @@ function diagnostics:increment(name, amount)
     if not self.enabled or not self.current then return end
     amount = finiteNonNegative(amount or 1, "FrogUI diagnostic increment")
     self.current.counts[name] = (self.current.counts[name] or 0) + amount
+    self.current.activity[name] = (self.current.activity[name] or 0) + amount
 end
 
 -- Publishes a retained structural count. Tree size remains useful on quiet
@@ -170,14 +173,18 @@ local function samples(self)
     return output
 end
 
--- Returns a compact detached summary for overlays and checks. Times are
--- milliseconds; no actor state, props, messages, or component descriptions
--- cross this diagnostic boundary.
-function diagnostics:snapshot()
-    local history = samples(self)
-    local latest = history[#history]
-    local phaseNames = { "total" }
-    for _, name in ipairs(PHASES) do phaseNames[#phaseNames + 1] = name end
+-- Clears completed and in-progress samples before an isolated measurement
+-- window. Retained tree counts survive because clearing history does not
+-- replace the committed tree.
+function diagnostics:clear()
+    if not self.enabled then return end
+    self.history = {}
+    self.historyCount = 0
+    self.historyCursor = 0
+    self.current = nil
+end
+
+local function phaseSummary(history, phaseNames)
     local phases = {}
     for _, name in ipairs(phaseNames) do
         local values, sum, maximum = {}, 0, 0
@@ -188,20 +195,36 @@ function diagnostics:snapshot()
             maximum = math.max(maximum, value)
         end
         phases[name] = {
-            current = latest and (latest.timings[name] or 0) * 1000 or 0,
+            current = history[#history]
+                    and (history[#history].timings[name] or 0) * 1000
+                or 0,
             average = #values > 0 and sum / #values or 0,
             p95 = percentile(values, 0.95),
             max = maximum,
         }
     end
-    local causeCounts = {}
+    return phases
+end
+
+local function activitySummary(history)
+    local totals = {}
+    for _, sample in ipairs(history) do
+        for name, count in pairs(sample.activity or {}) do
+            totals[name] = (totals[name] or 0) + count
+        end
+    end
+    return totals
+end
+
+local function causeSummary(history)
+    local totals = {}
     for _, sample in ipairs(history) do
         for name, count in pairs(sample.causes or {}) do
-            causeCounts[name] = (causeCounts[name] or 0) + count
+            totals[name] = (totals[name] or 0) + count
         end
     end
     local causes = {}
-    for name, count in pairs(causeCounts) do
+    for name, count in pairs(totals) do
         causes[#causes + 1] = { name = name, count = count }
     end
     table.sort(causes, function(left, right)
@@ -209,6 +232,59 @@ function diagnostics:snapshot()
         return left.name < right.name
     end)
     while #causes > 3 do table.remove(causes) end
+    return causes
+end
+
+-- Summarizes a correlated frame cohort. Activity comes only from increment()
+-- calls in those samples; retained tree counts never leak into these totals.
+local function cohortSummary(history, phaseNames)
+    return {
+        samples = #history,
+        phases = phaseSummary(history, phaseNames),
+        activityTotals = activitySummary(history),
+        causes = causeSummary(history),
+    }
+end
+
+-- Exports the bounded ring once in chronological order for developer tools
+-- that need frame correlation. Unlike snapshot(), this deliberately allocates
+-- one detached row per retained sample and should not be polled by an overlay.
+function diagnostics:trace()
+    local output = {}
+    local phaseNames = { "total" }
+    for _, name in ipairs(PHASES) do phaseNames[#phaseNames + 1] = name end
+    for index, sample in ipairs(samples(self)) do
+        local timings = {}
+        for _, name in ipairs(phaseNames) do
+            timings[name] = (sample.timings[name] or 0) * 1000
+        end
+        output[index] = {
+            timings = timings,
+            counts = shallowCopy(sample.counts),
+            activity = shallowCopy(sample.activity),
+            causes = causeSummary { sample },
+            memoryDeltaKB = sample.memoryDeltaKB or 0,
+        }
+    end
+    return output
+end
+
+-- Returns a compact detached summary for overlays and checks. Times are
+-- milliseconds; no actor state, props, messages, or component descriptions
+-- cross this diagnostic boundary.
+function diagnostics:snapshot()
+    local history = samples(self)
+    local latest = history[#history]
+    local phaseNames = { "total" }
+    for _, name in ipairs(PHASES) do phaseNames[#phaseNames + 1] = name end
+    local reconciled, quiet = {}, {}
+    for _, sample in ipairs(history) do
+        if (sample.activity.reconciles or 0) > 0 then
+            reconciled[#reconciled + 1] = sample
+        else
+            quiet[#quiet + 1] = sample
+        end
+    end
     local slowest
     for _, sample in ipairs(history) do
         local totalMs = (sample.timings.total or 0) * 1000
@@ -239,9 +315,14 @@ function diagnostics:snapshot()
     return {
         enabled = self.enabled,
         samples = #history,
-        phases = phases,
+        phases = phaseSummary(history, phaseNames),
         counts = shallowCopy(latest and latest.counts or self.retainedCounts),
-        causes = causes,
+        activityTotals = activitySummary(history),
+        causes = causeSummary(history),
+        cohorts = {
+            reconciled = cohortSummary(reconciled, phaseNames),
+            quiet = cohortSummary(quiet, phaseNames),
+        },
         slowest = slowest,
         memoryKB = latest and latest.memoryKB or collectgarbage("count"),
         memoryDeltaKB = latest and latest.memoryDeltaKB or 0,

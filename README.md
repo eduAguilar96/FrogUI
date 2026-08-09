@@ -1343,6 +1343,8 @@ shows current/p95 update and paint cost plus p95 attribution by phase:
 |---|---|
 | `frame` | Retained `useFrame` callbacks, including BattlePlayback advancement |
 | `msg` | Typed action/event validation and reducer delivery |
+| `action` / `event` | The corresponding typed-message validation, routing, and processing inside `msg` |
+| `transition` | Actor reducer/transition work inside action or event processing |
 | `reconcile` | The complete dirty semantic rebuild and publication |
 | `expand` | Component/actor/view execution and primitive-tree construction |
 | `layout` | Two-pass measure and arrange of that candidate tree |
@@ -1350,6 +1352,7 @@ shows current/p95 update and paint cost plus p95 attribution by phase:
 | `motion` | Motion runner sampling plus committed-tree visual transforms |
 | `refs` | Republish arranged ref rectangles after retained updates |
 | `effects` | Projectile/Flipbook anchor refresh, advancement, and bounds |
+| `observer` | The profiler-only committed-tree counting walk performed on a rebuild |
 | `external` | Complete public input routing, direct render, resize, or Host theme-refresh work before update |
 | `paint` | Painter traversal and LÖVE draw submission |
 
@@ -1360,7 +1363,9 @@ those numbers together. `runtime` contains the retained per-frame interaction,
 Motion, ref, and effect work; `motion` also attributes whole-tree transforms
 performed inside a semantic event or candidate reconciliation, so it may be
 nested under `msg` or `reconcile` instead. `msg` deliberately excludes
-reconciliation. The
+reconciliation. `action`, `event`, and `transition` are nested within `msg`.
+`observer` is profiler overhead, not application work; it remains visible so
+it cannot be mistaken for unlabelled reconciliation cost. The
 activity line shows semantic messages and rebuilds for the most recently
 sampled frame plus the retained tree's nodes, render owners, effects, and
 motions. `dirty` ranks the rolling window's typed message/reflow causes without
@@ -1389,6 +1394,28 @@ local host = Frog.host {
 local profile = host:diagnostics()
 ```
 
+The detached snapshot also groups its rolling samples into `reconciled` and
+`quiet` cohorts and exposes per-cohort activity totals. `increment()` activity
+is aggregated separately from retained tree counts, so a node count is never
+misreported as per-frame work.
+
+One-shot measurement tools may clear setup history and export the bounded ring
+in chronological order:
+
+```lua
+host:clearDiagnostics()
+-- Run the fixed measurement window, including draw for every sample.
+local frames = host:diagnosticTrace()
+```
+
+`diagnosticTrace()` allocates one detached row per retained frame. Call it once
+after a bounded measurement; never poll it from an overlay or normal update.
+It contains timings, activity, structural counts, and compact dirty causes,
+not component descriptions, messages, actor state, or simulation payloads.
+Both one-shot methods require a mounted, operational, diagnostics-enabled Host
+at a quiet public boundary: never call them during update, draw, a component
+callback, or external input routing.
+
 ### Battle performance gate
 
 Run `love . --frogui battle-performance` for the explicit B4p comparison. It
@@ -1396,7 +1423,14 @@ mounts the reviewed deterministic 6v6 load fixture twice: once through the
 shipped retained Battle presenter and once through FrogUI's real
 `BattlePlayback` and `BattleScreen`. Both use a 540×960 battle-screen-only
 scope with app HUD, Inspection, hot reload, profiler instrumentation, and audio
-excluded. The command owns its warmup, frame counts, late-round boundary, and
+excluded from both acceptance measurements. Afterward, fresh opt-in FrogUI-only
+early/late sessions clear setup history and export one bounded diagnostic trace;
+those observer-inflated timings provide attribution and never affect pass/fail.
+Per-frame `last_event` and `last_address` fields identify only the latest
+presented Playback record for context; they are not asserted as the cause of a
+rebuild. Revision-stable rows are labelled `(no playback change)`, while an
+unchanged address with a new revision is labelled `(clock-only)`.
+The command owns its warmup, frame counts, late-round boundary, and
 provisional pass targets in `tools/frogui/battle_performance.lua`; do not copy
 those values into documentation or another check.
 

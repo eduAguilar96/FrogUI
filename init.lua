@@ -814,7 +814,11 @@ Frog.clock = Clock.new
 
 --- Creates the one mounted tree owner. Set `diagnostics = true` only on a
 --- development surface, then read its detached rolling summary with
---- `host:diagnostics()`.
+--- `host:diagnostics()`. One-shot tools may call `host:clearDiagnostics()`
+--- before a fixed window and `host:diagnosticTrace()` once afterward; the
+--- trace allocates a detached row per retained frame and must not be polled.
+--- Both calls require a mounted diagnostics-enabled Host at a quiet boundary,
+--- outside update, draw, callbacks, and external input routing.
 ---@param options? FrogUIHostOptions
 function Frog.host(options)
     return Host.new(options)
