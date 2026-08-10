@@ -3,15 +3,66 @@
 
 local element = {}
 
+-- One private Host-owned allocation probe may observe descriptor construction
+-- or identity construction at a time. This is deliberately not FrogUI's
+-- public API; the Battle performance harness owns the temporary observer.
+local allocationProbeOwner
+local sourceAllocationProbe
+
+function element._attachAllocationProbe(owner, probe)
+    assert(owner ~= nil, "FrogUI allocation probe requires an owner")
+    assert(allocationProbeOwner == nil,
+        "another FrogUI allocation probe is already attached")
+    assert(type(probe) == "table"
+            and (probe.mode == "source" or probe.mode == "identity"),
+        "FrogUI allocation probe mode must be source or identity")
+    allocationProbeOwner = owner
+    sourceAllocationProbe = probe.mode == "source" and probe or nil
+end
+
+function element._detachAllocationProbe(owner)
+    assert(allocationProbeOwner == owner,
+        "FrogUI allocation probe detach owner mismatch")
+    allocationProbeOwner = nil
+    sourceAllocationProbe = nil
+end
+
 local function sourceOutsideFrogUI()
-    if not debug or not debug.getinfo then return nil end
+    local probe = sourceAllocationProbe
+    local before = probe and collectgarbage("count") or nil
+    local lookups = 0
+    if not debug or not debug.getinfo then
+        if probe then
+            local after = collectgarbage("count")
+            probe.sourceCalls = probe.sourceCalls + 1
+            probe.sourceAllocatedKB = probe.sourceAllocatedKB + after - before
+        end
+        return nil
+    end
     for level = 3, 14 do
         local info = debug.getinfo(level, "Sl")
+        if probe then lookups = lookups + 1 end
         if not info then break end
         local path = info.short_src or info.source
         if path and not path:find("src/frogui/", 1, true) then
-            return { path = path, line = info.currentline }
+            local result = { path = path, line = info.currentline }
+            if probe then
+                local after = collectgarbage("count")
+                probe.sourceCalls = probe.sourceCalls + 1
+                probe.sourceAllocatedKB = probe.sourceAllocatedKB
+                    + after - before
+                probe.sourceResults = probe.sourceResults + 1
+                probe.sourceResultBytes = probe.sourceResultBytes + #path
+                probe.sourceDebugLookups = probe.sourceDebugLookups + lookups
+            end
+            return result
         end
+    end
+    if probe then
+        local after = collectgarbage("count")
+        probe.sourceCalls = probe.sourceCalls + 1
+        probe.sourceAllocatedKB = probe.sourceAllocatedKB + after - before
+        probe.sourceDebugLookups = probe.sourceDebugLookups + lookups
     end
     return nil
 end

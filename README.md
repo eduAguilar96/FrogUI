@@ -1597,48 +1597,46 @@ copy them into documentation or another check.
 
 #### Current measured checkpoint
 
-B4p.9a closed as an attribution checkpoint with the valid manifest at
-`build/frogui/battle-performance-20260810T050837Z-67162`. The manifest records
-an exact dirty source identity unchanged across both processes, acceptance
-status 1 (completed target miss), diagnostics status 0, and a complete final
-TSV.
+B4p.9b closed as construction attribution, not as an optimization. The valid
+manifest at `build/frogui/battle-performance-20260810T062251Z-79652` records an
+unchanged dirty source identity, acceptance status 1 (completed target miss),
+diagnostics status 0, and a published diagnostic artifact. Ordinary, source,
+and identity windows share the exact cadence: `60/0` quiet/rebuilt paused,
+`57/3` early, and `38/22` late.
 
-| window | shipped mean / p95 / allocation | FrogUI mean / p95 / allocation | result |
-|---|---:|---:|---|
-| paused | 1.010 / 1.459 ms / 248.459 KB/frame | 1.294 / 1.341 ms / 38.565 KB/frame | pass |
-| early | 1.084 / 1.739 ms / 263.433 KB/frame | 1.942 / 2.970 ms / 351.712 KB/frame | fail |
-| late | 1.992 / 1.781 ms / 283.383 KB/frame | 4.183 / 17.279 ms / 2554.413 KB/frame | fail |
+The private Host probe has two independent modes. Source mode measures the
+existing descriptor call-site scan and result table. Identity mode measures
+physical and logical strings at root, semantic output, child, and preview
+boundaries. It is globally exclusive and diagnostics-off, uses only scalars
+while collection is stopped, and the harness detaches it on every terminal
+path. Focused checks cover scalar reads, resets, exact source path/line, mode
+isolation, and physical/logical identity equivalence. The ordinary dormant
+path shows no material allocation regression against B4p.9a:
 
-The allocation probe preserves the original acceptance boundary and adds a
-second FrogUI-only cursor around direct update and draw. It classifies frames
-from the Host's scalar committed generation and reports the small
-acceptance-minus-attributed remainder explicitly. It does not enable Host
-diagnostics, timers, or per-frame records.
-
-| window / cohort | frames | KB per cohort frame | acceptance-byte share |
+| window | mean B4p.9a → 9b | p95 B4p.9a → 9b | allocation B4p.9a → 9b |
 |---|---:|---:|---:|
-| paused quiet update / draw | 60 / 60 | 16.814 / 21.739 | 43.6002% / 56.3693% |
-| early quiet update / rebuilt update | 57 / 3 | 17.568 / 5254.643 | 4.7451% / 74.7010% |
-| early quiet draw / post-rebuild draw | 57 / 3 | 38.036 / 722.884 | 10.2739% / 10.2767% |
-| late quiet update / rebuilt update | 38 / 22 | 97.613 / 5830.079 | 2.4202% / 83.6864% |
-| late quiet draw / post-rebuild draw | 38 / 22 | 48.088 / 884.807 | 1.1923% / 12.7007% |
+| early | 1.942 → 1.870 ms | 2.970 → 2.583 ms | 351.712 → 351.710 KB/frame |
+| late | 4.183 → 4.178 ms | 17.279 → 17.439 ms | 2554.413 → 2554.446 KB/frame |
 
-Attributed allocation is `38.553`, `351.700`, and `2554.402 KB/frame`
-paused/early/late. The preserved acceptance totals differ by only
-`0.012 KB/frame`, reported as boundary/unattributed work. Rebuilt update is
-therefore the primary measured allocation cohort: 74.7010% early and 83.6864%
-late. It still combines Playback publication, messages, snapshots, runtime,
-semantic expansion, validation, layout, transform, and commit; B4p.9a does not
-yet assign those bytes to one subsystem. Canvas and other dynamic draw
-allocation remain real but are not the primary repair selected by this
-evidence.
+| window / mode | quiet update / draw | rebuilt update | attributed | share | remainder | rebuilt draw |
+|---|---:|---:|---:|---:|---:|---:|
+| early source | 17.524 / 38.008 KB | 5256.831 KB | 539.268 KB | 10.2584% | 4717.563 KB | 722.884 KB |
+| early identity | 17.524 / 38.012 KB | 5254.565 KB | 233.500 KB | 4.4438% | 5021.065 KB | 722.884 KB |
+| late source | 97.613 / 48.329 KB | 5830.017 KB | 644.463 KB | 11.0542% | 5185.554 KB | 884.926 KB |
+| late identity | 97.613 / 48.245 KB | 5830.161 KB | 41.155 KB | 0.7059% | 5789.006 KB | 884.807 KB |
 
-The next generic core checkpoint starts by measuring two descriptor/resolution
-construction suspects: unconditional description source capture and eager
-`path`/`logicalPath` identity construction. Neither changes yet, and attribution
-continues elsewhere in rebuilt update if they do not explain it. Battle caches,
-component-output memoization, validation skips, a virtual DOM, and a dirty
-dependency/layout graph remain rejected. B4p remains open, B5 remains blocked,
-and the arranged-ref publication gate stays separate later work. The complete
-history, invariants, and evidence live in
+Construction allocation, remainder, and rebuilt draw are per rebuilt frame;
+quiet controls are per quiet frame. Source and identity are separate runs with
+separate denominators, so their shares must never be added. LuaJIT string
+interning explains why identity's large result-length pressure becomes only
+`0.7059%` of late rebuilt update allocation.
+
+Unconditional descriptor source capture is the next single generic repair
+boundary, but its replacement representation has not been chosen. Exact path
+and line and callback, error, and inspection provenance must survive. The
+directly attributed boundary is about 11%, but recoverable savings remain
+unmeasured until a provenance-preserving representation is tested.
+B4p remains open, B5 remains blocked, and the other rejected shortcuts remain
+rejected. The full contract, dormant comparison, and evidence interpretation
+live in
 `design/reference/frog-ui-battle-migration.md`.

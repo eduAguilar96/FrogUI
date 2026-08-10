@@ -954,30 +954,65 @@ local function validatePrimitiveProps(self, name, props)
     end
 end
 
-local function childPath(parentPath, descriptor, index)
+-- Measures the exact physical identity expression, including an optional
+-- caller-owned /output or /preview prefix. A production Host takes one nil
+-- branch and otherwise keeps identity construction on its original path.
+local function childPath(parentPath, descriptor, index, probe, suffix)
+    local before = probe and collectgarbage("count") or nil
+    if suffix then parentPath = parentPath .. suffix end
     local token = descriptor.token
     local prefix = parentPath .. "/" .. token.kind .. ":" .. token.name .. ":"
     local key = descriptor.key
-    if key ~= nil then return prefix .. "key:" .. type(key) .. ":" .. tostring(key) end
-    return prefix .. "index:" .. tostring(index)
+    local result = key ~= nil
+            and prefix .. "key:" .. type(key) .. ":" .. tostring(key)
+        or prefix .. "index:" .. tostring(index)
+    if probe then
+        local after = collectgarbage("count")
+        probe.physicalCalls = probe.physicalCalls + 1
+        probe.physicalAllocatedKB = probe.physicalAllocatedKB + after - before
+        probe.physicalResultBytes = probe.physicalResultBytes + #result
+    end
+    return result
 end
 
 -- Stateful identity follows semantic component/actor ancestry and stable
 -- child slots. Layout primitives are deliberately absent: the documented
 -- `wide and Frog.Row or Frog.Column` composition must not remount actors.
-local function logicalChildPath(parentPath, descriptor, index)
+local function logicalChildPath(parentPath, descriptor, index, probe, suffix)
+    local before = probe and collectgarbage("count") or nil
+    if suffix then parentPath = parentPath .. suffix end
     local token = descriptor.token
     local segment = token.kind == "primitive" and "slot"
         or token.kind .. ":" .. token.name
     local prefix = parentPath .. "/" .. segment .. ":"
     local key = descriptor.key
-    if key ~= nil then return prefix .. "key:" .. type(key) .. ":" .. tostring(key) end
-    return prefix .. "index:" .. tostring(index)
+    local result = key ~= nil
+            and prefix .. "key:" .. type(key) .. ":" .. tostring(key)
+        or prefix .. "index:" .. tostring(index)
+    if probe then
+        local after = collectgarbage("count")
+        probe.logicalCalls = probe.logicalCalls + 1
+        probe.logicalAllocatedKB = probe.logicalAllocatedKB + after - before
+        probe.logicalResultBytes = probe.logicalResultBytes + #result
+    end
+    return result
 end
 
-local function logicalOutputPath(parentPath, descriptor)
-    if descriptor.token.kind == "primitive" then return parentPath end
-    return logicalChildPath(parentPath .. "/output", descriptor, 1)
+local function logicalOutputPath(parentPath, descriptor, probe)
+    if probe == nil then
+        if descriptor.token.kind == "primitive" then return parentPath end
+        return logicalChildPath(parentPath, descriptor, 1, nil, "/output")
+    end
+    local before = collectgarbage("count")
+    local alias = descriptor.token.kind == "primitive"
+    local result = alias and parentPath
+        or logicalChildPath(parentPath, descriptor, 1, nil, "/output")
+    local after = collectgarbage("count")
+    probe.logicalCalls = probe.logicalCalls + 1
+    probe.logicalAllocatedKB = probe.logicalAllocatedKB + after - before
+    probe.logicalResultBytes = probe.logicalResultBytes + #result
+    if alias then probe.logicalAliasCalls = probe.logicalAliasCalls + 1 end
+    return result
 end
 
 local function inside(node, x, y)
@@ -1375,6 +1410,64 @@ end
 local function assertInputBoundary(self)
     assert(self._callbackDepth == 0,
         "platform input may not re-enter an active FrogUI callback")
+end
+
+local ALLOCATION_PROBE_MODES = { source = true, identity = true }
+
+local function resetAllocationProbe(probe)
+    probe.sourceCalls = 0
+    probe.sourceAllocatedKB = 0
+    probe.sourceResults = 0
+    probe.sourceResultBytes = 0
+    probe.sourceDebugLookups = 0
+    probe.physicalCalls = 0
+    probe.physicalAllocatedKB = 0
+    probe.physicalResultBytes = 0
+    probe.logicalCalls = 0
+    probe.logicalAllocatedKB = 0
+    probe.logicalResultBytes = 0
+    probe.logicalAliasCalls = 0
+end
+
+-- Private, globally exclusive allocation attribution for the Battle harness.
+-- It is intentionally absent from Host options and the public Frog table.
+function host:_attachAllocationProbe(mode)
+    assert(ALLOCATION_PROBE_MODES[mode],
+        "FrogUI allocation probe mode must be source or identity")
+    assert(rawget(self, "_allocationProbe") == nil,
+        "this FrogUI Host already owns an allocation probe")
+    local probe = { mode = mode }
+    resetAllocationProbe(probe)
+    Element._attachAllocationProbe(self, probe)
+    self._allocationProbe = probe
+end
+
+function host:_resetAllocationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe, "FrogUI Host has no allocation probe to reset")
+    resetAllocationProbe(probe)
+end
+
+-- Returns scalars only so the GC-stopped harness never needs a snapshot row.
+function host:_readAllocationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe, "FrogUI Host has no allocation probe to read")
+    return probe.mode,
+        probe.sourceCalls, probe.sourceAllocatedKB,
+        probe.sourceResults, probe.sourceResultBytes,
+        probe.sourceDebugLookups,
+        probe.physicalCalls, probe.physicalAllocatedKB,
+        probe.physicalResultBytes,
+        probe.logicalCalls, probe.logicalAllocatedKB,
+        probe.logicalResultBytes, probe.logicalAliasCalls
+end
+
+function host:_detachAllocationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe, "FrogUI Host has no allocation probe to detach")
+    Element._detachAllocationProbe(self)
+    self._allocationProbe = nil
+    return true
 end
 
 function host.new(options)
@@ -1786,6 +1879,9 @@ function host:mount(root)
         self._nextRefId = refSequence
         self._nextResourceId = resourceSequence
         self._nextFrameId = frameSequence
+        if rawget(self, "_allocationProbe") then
+            self:_detachAllocationProbe()
+        end
         error(candidate, 0)
     end
     activeHost = self
@@ -2001,12 +2097,13 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
         return nil
     end
     assert(Element.isDescriptor(rendered), token.name .. " must return one FrogUI element or nil")
-    local outputPath = childPath(path .. "/output", rendered, 1)
+    local identityProbe = context.identityAllocationProbe
+    local outputPath = childPath(path, rendered, 1, identityProbe, "/output")
     if profiler then
         profiler:finish("semanticBookkeeping", bookkeepingStarted)
     end
     local resolved = self:_resolve(rendered, token.name, outputPath, path, context,
-        logicalOutputPath(logicalPath, rendered))
+        logicalOutputPath(logicalPath, rendered, identityProbe))
     if resolved then
         bookkeepingStarted = profiler and profiler:start() or nil
         annotateProcesses(resolved, context.hookOwners[logicalPath],
@@ -2089,12 +2186,14 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
         return nil
     end
     assert(Element.isDescriptor(rendered), token.name .. " must return one FrogUI element or nil")
-    local outputPath = childPath(path .. "/output", rendered, 1)
+    local identityProbe = context.identityAllocationProbe
+    local outputPath = childPath(path, rendered, 1, identityProbe, "/output")
     if profiler then
         profiler:finish("semanticBookkeeping", bookkeepingStarted)
     end
     local resolved = self:_resolve(rendered, token.name, outputPath,
-        descendantPath or path, context, logicalOutputPath(logicalPath, rendered))
+        descendantPath or path, context,
+        logicalOutputPath(logicalPath, rendered, identityProbe))
     if resolved then
         bookkeepingStarted = profiler and profiler:start() or nil
         annotateProcesses(resolved, context.hookOwners[logicalPath],
@@ -2166,12 +2265,14 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         end
         assert(Element.isDescriptor(rendered),
             token.name .. " must return one FrogUI element or nil")
-        local outputPath = childPath(path .. "/output", rendered, 1)
+        local identityProbe = context.identityAllocationProbe
+        local outputPath = childPath(path, rendered, 1,
+            identityProbe, "/output")
         if profiler then
             profiler:finish("semanticBookkeeping", bookkeepingStarted)
         end
         local resolved = self:_resolve(rendered, token.name, outputPath, path,
-            context, logicalOutputPath(logicalPath, rendered))
+            context, logicalOutputPath(logicalPath, rendered, identityProbe))
         bookkeepingStarted = profiler and profiler:start() or nil
         if resolved then
             annotateProcesses(resolved, context.hookOwners[logicalPath],
@@ -2294,10 +2395,12 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         end
     end
     local childrenPath = descendantPath or path
+    local identityProbe = context.identityAllocationProbe
     for index, child in ipairs(descriptor.children) do
         local resolved = self:_resolve(child, owner,
-            childPath(childrenPath, child, index), nil, context,
-            logicalChildPath(logicalPath, child, index))
+            childPath(childrenPath, child, index, identityProbe),
+            nil, context,
+            logicalChildPath(logicalPath, child, index, identityProbe))
         if resolved then node.children[#node.children + 1] = resolved end
     end
     local validationStarted = profiler and profiler:start() or nil
@@ -2354,8 +2457,10 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         context.previewDepth = (context.previewDepth or 0) + 1
         local preview = descriptor.props.preview
         node._dragPreview = self:_resolve(preview, owner,
-            childPath(path .. "/preview", preview, 1), nil, context,
-            logicalChildPath(logicalPath .. "/preview", preview, 1))
+            childPath(path, preview, 1, identityProbe, "/preview"),
+            nil, context,
+            logicalChildPath(logicalPath, preview, 1,
+                identityProbe, "/preview"))
         context.previewDepth = context.previewDepth - 1
         assert(node._dragPreview, "DragSource preview returned nil")
     end
@@ -2741,6 +2846,10 @@ function host:_build(root)
         nextReceiverOrder = 1,
         nextEffectOrder = 1,
     }
+    local allocationProbe = rawget(self, "_allocationProbe")
+    if allocationProbe and allocationProbe.mode == "identity" then
+        context.identityAllocationProbe = allocationProbe
+    end
     if self._diagnostics.enabled then
         context.diagnostics = self._diagnostics
         context.descriptorTotal = 0
@@ -2752,8 +2861,10 @@ function host:_build(root)
     end
     local function buildCandidate()
         local expansionStarted = self._diagnostics:start()
-        local rootPath = childPath("root", root, 1)
-        local rootLogicalPath = logicalChildPath("logical-root", root, 1)
+        local identityProbe = context.identityAllocationProbe
+        local rootPath = childPath("root", root, 1, identityProbe)
+        local rootLogicalPath = logicalChildPath(
+            "logical-root", root, 1, identityProbe)
         local candidate = self:_resolve(root, nil, rootPath, nil, context,
             rootLogicalPath)
         candidate = self:_resolveDeferred(candidate, context)
@@ -4090,6 +4201,9 @@ function host:unmount()
     assert(self._mounted, "Host is not mounted")
     assertPresentationAllowed(self, "unmount")
     assertFramePublication(self, "unmount")
+    if rawget(self, "_allocationProbe") then
+        self:_detachAllocationProbe()
+    end
     if self._fault then
         -- A faulted Host is no longer allowed to run authored callbacks.
         self._interactionSession = nil
