@@ -130,6 +130,13 @@ Keep a PascalCase private render helper when the fragment is small, used only
 by its owner, and has no independent behavior or identity. A private helper is
 not a way to hide a second component-sized implementation inside the file.
 
+A real component is also the readable provenance owner shown by F6. FrogUI
+captures its definition source once, and primitives returned by that component
+or its private helpers share the same source across rebuilds. Do not wrap every
+leaf only to manufacture finer source lines; create a component when the
+concept itself deserves a name and identity. Render and callback failures
+already report their exact Lua line.
+
 If a render helper grows, promote it to a plainly named component in the same
 component-family folder. Do not create `init.lua` barrels, adapters,
 projections, companion style files, or geometry files.

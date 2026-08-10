@@ -8,6 +8,8 @@ local element = {}
 -- public API; the Battle performance harness owns the temporary observer.
 local allocationProbeOwner
 local sourceAllocationProbe
+local renderSourceOwner
+local renderSource
 
 function element._attachAllocationProbe(owner, probe)
     assert(owner ~= nil, "FrogUI allocation probe requires an owner")
@@ -27,7 +29,25 @@ function element._detachAllocationProbe(owner)
     sourceAllocationProbe = nil
 end
 
-local function sourceOutsideFrogUI()
+-- Descriptions created by one semantic render share that component, actor, or
+-- view's permanent definition source. The Host brackets each render exactly;
+-- descriptions created outside a render retain the one-shot caller fallback.
+function element._beginRenderSource(owner, source)
+    assert(owner ~= nil, "FrogUI render source requires an owner")
+    assert(renderSourceOwner == nil,
+        "another FrogUI semantic render already owns description provenance")
+    renderSourceOwner = owner
+    renderSource = source
+end
+
+function element._endRenderSource(owner)
+    assert(renderSourceOwner == owner,
+        "FrogUI render source end owner mismatch")
+    renderSourceOwner = nil
+    renderSource = nil
+end
+
+local function captureSource(excludedPath)
     local probe = sourceAllocationProbe
     local before = probe and collectgarbage("count") or nil
     local lookups = 0
@@ -39,12 +59,12 @@ local function sourceOutsideFrogUI()
         end
         return nil
     end
-    for level = 3, 14 do
+    for level = 3, 16 do
         local info = debug.getinfo(level, "Sl")
         if probe then lookups = lookups + 1 end
         if not info then break end
         local path = info.short_src or info.source
-        if path and not path:find("src/frogui/", 1, true) then
+        if path and not path:find(excludedPath, 1, true) then
             local result = { path = path, line = info.currentline }
             if probe then
                 local after = collectgarbage("count")
@@ -65,6 +85,25 @@ local function sourceOutsideFrogUI()
         probe.sourceDebugLookups = probe.sourceDebugLookups + lookups
     end
     return nil
+end
+
+local function sourceOutsideFrogUI()
+    local result = captureSource("src/frogui/")
+    return result
+end
+
+-- Captures a reusable component definition once. Unlike the descriptor
+-- fallback, framework-owned components deliberately keep their own file:line
+-- instead of borrowing whichever application module first required FrogUI.
+local function componentSource()
+    local result = captureSource("src/frogui/element.lua")
+    return result
+end
+
+local function descriptionSource(token)
+    if token.source ~= nil then return token.source end
+    if renderSourceOwner ~= nil then return renderSource end
+    return sourceOutsideFrogUI()
 end
 
 local function isPositiveInteger(value)
@@ -169,7 +208,7 @@ local function construct(token, input)
         props = props,
         children = children,
         key = props.key,
-        source = sourceOutsideFrogUI(),
+        source = descriptionSource(token),
     }
 end
 
@@ -191,7 +230,12 @@ end
 function element.component(name, render)
     assert(type(name) == "string" and name ~= "", "component name is required")
     assert(type(render) == "function", name .. " render must be a function")
-    return setmetatable({ kind = "component", name = name, render = render }, tokenMeta)
+    return setmetatable({
+        kind = "component",
+        name = name,
+        render = render,
+        source = componentSource(),
+    }, tokenMeta)
 end
 
 function element.each(array, render)

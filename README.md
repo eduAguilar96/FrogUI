@@ -80,6 +80,16 @@ appear by name in the inspector, or is easier to understand as a visible
 concept. Use a private helper only for a small, one-owner calculation or
 one-use fragment that does not deserve its own public identity.
 
+Each component, actor, and addressed view captures its definition `file:line`
+once. Primitive descriptions created while that owner renders share the same
+source object across every rebuild, including primitives returned by private
+helpers. F6 therefore points to the readable semantic owner instead of paying
+for a debugger stack scan on every temporary leaf. A primitive tree constructed
+directly outside any semantic owner retains a one-shot caller source fallback.
+Render and callback failures still report Lua's exact failing line. Positional
+hooks remain the deliberate exception: their exact callsites are checked on
+each render so a same-kind reorder cannot silently bind the wrong state or ref.
+
 ## Implemented primitives
 
 These are created in [`init.lua`](init.lua). Their exact props are validated by
@@ -1392,10 +1402,11 @@ it cannot be mistaken for unlabelled reconciliation cost. The
 activity line shows semantic messages and rebuilds for the most recently
 sampled frame plus the retained tree's nodes, render owners, effects, and
 motions. The detached profile also retains descriptor/primitive totals, a
-primitive histogram, identity/logical-path byte pressure, a descriptor-source
-capture count, and the five semantic token kinds/names with the most callback
-time. The source count is only a pressure proxy: descriptor source capture
-happens before Host resolution and is intentionally not globally intercepted.
+primitive histogram, identity/logical-path byte pressure, a source-attributed
+description count, and the five semantic token kinds/names with the most
+callback time. Source attribution is provenance coverage, not a capture-work
+or duration proxy: descriptions normally share their semantic owner's one
+definition source.
 `dirty` ranks the rolling window's typed message/reflow causes without
 retaining their payloads. The overlay refreshes this aggregate four times per second so reading
 the profiler does not become its own hot path. Frame and runtime-phase heap
@@ -1597,46 +1608,44 @@ copy them into documentation or another check.
 
 #### Current measured checkpoint
 
-B4p.9b closed as construction attribution, not as an optimization. The valid
-manifest at `build/frogui/battle-performance-20260810T062251Z-79652` records an
-unchanged dirty source identity, acceptance status 1 (completed target miss),
-diagnostics status 0, and a published diagnostic artifact. Ordinary, source,
-and identity windows share the exact cadence: `60/0` quiet/rebuilt paused,
-`57/3` early, and `38/22` late.
+B4p.10 replaces per-description debugger scans with component-owned
+provenance. The valid manifest at
+`build/frogui/battle-performance-20260810T193738Z-90279` records an unchanged
+dirty source identity, acceptance status 1 (completed target miss), diagnostics
+status 0, and a published 2,733-row artifact. Standard, source, and identity
+windows retain the exact `60/0`, `57/3`, and `38/22` quiet/rebuilt cadence.
 
-The private Host probe has two independent modes. Source mode measures the
-existing descriptor call-site scan and result table. Identity mode measures
-physical and logical strings at root, semantic output, child, and preview
-boundaries. It is globally exclusive and diagnostics-off, uses only scalars
-while collection is stopped, and the harness detaches it on every terminal
-path. Focused checks cover scalar reads, resets, exact source path/line, mode
-isolation, and physical/logical identity equivalence. The ordinary dormant
-path shows no material allocation regression against B4p.9a:
+The implementation captures one reusable source when `Frog.component` is
+defined. Host-bracketed component, actor, and view renders give each primitive
+description that semantic owner's source reference. Standalone primitive roots
+retain their one-shot fallback, and exact positional-hook source checks remain
+unchanged. Focused checks mount and rebuild a multi-leaf component, prove every
+leaf retains the same readable source object, cover probe lifecycle, and keep
+all physical/logical identities unchanged.
 
-| window | mean B4p.9a → 9b | p95 B4p.9a → 9b | allocation B4p.9a → 9b |
+| window | FrogUI mean B4p.9b → 10 | p95 B4p.9b → 10 | allocation B4p.9b → 10 |
 |---|---:|---:|---:|
-| early | 1.942 → 1.870 ms | 2.970 → 2.583 ms | 351.712 → 351.710 KB/frame |
-| late | 4.183 → 4.178 ms | 17.279 → 17.439 ms | 2554.413 → 2554.446 KB/frame |
+| early | 1.870 → 1.795 ms | 2.583 → 2.149 ms | 351.710 → 324.759 KB/frame |
+| late | 4.178 → 4.000 ms | 17.439 → 16.988 ms | 2554.446 → 2318.376 KB/frame |
 
-| window / mode | quiet update / draw | rebuilt update | attributed | share | remainder | rebuilt draw |
-|---|---:|---:|---:|---:|---:|---:|
-| early source | 17.524 / 38.008 KB | 5256.831 KB | 539.268 KB | 10.2584% | 4717.563 KB | 722.884 KB |
-| early identity | 17.524 / 38.012 KB | 5254.565 KB | 233.500 KB | 4.4438% | 5021.065 KB | 722.884 KB |
-| late source | 97.613 / 48.329 KB | 5830.017 KB | 644.463 KB | 11.0542% | 5185.554 KB | 884.926 KB |
-| late identity | 97.613 / 48.245 KB | 5830.161 KB | 41.155 KB | 0.7059% | 5789.006 KB | 884.807 KB |
+The causal allocation result matches B4p.9b's prediction:
 
-Construction allocation, remainder, and rebuilt draw are per rebuilt frame;
-quiet controls are per quiet frame. Source and identity are separate runs with
-separate denominators, so their shares must never be added. LuaJIT string
-interning explains why identity's large result-length pressure becomes only
-`0.7059%` of late rebuilt update allocation.
+| window | rebuilt update B4p.9b → 10 | recovered | prior direct attribution | difference |
+|---|---:|---:|---:|---:|
+| early | 5254.643 → 4715.328 KB | 539.315 KB | 539.268 KB | +0.047 KB |
+| late | 5830.167 → 5185.802 KB | 644.365 KB | 644.463 KB | -0.098 KB |
 
-Unconditional descriptor source capture is the next single generic repair
-boundary, but its replacement representation has not been chosen. Exact path
-and line and callback, error, and inspection provenance must survive. The
-directly attributed boundary is about 11%, but recoverable savings remain
-unmeasured until a provenance-preserving representation is tested.
-B4p remains open, B5 remains blocked, and the other rejected shortcuts remain
-rejected. The full contract, dormant comparison, and evidence interpretation
-live in
+The independent source probe now reports zero calls and zero bytes in every
+quiet and rebuilt cohort. Identity attribution remains `233.500 KB` early and
+`41.155 KB` late, so work was removed rather than reassigned to path building.
+Early now passes p95, frame-budget, over-budget, and allocation checks; only its
+mean-time ratio still fails. Late remains over both timing and allocation
+targets, with about `5.19 MB` left in each rebuilt update.
+
+B4p.10 closes as one generic core repair. The next checkpoint must attribute
+the remaining rebuilt-update allocation between description/prop/children
+construction and resolved primitive-node materialization before changing
+either representation. Identity rewriting, component-output memoization,
+validation skips, a virtual DOM, and a dirty graph remain unsupported. B4p
+remains open and B5 remains blocked. Full evidence and invariants live in
 `design/reference/frog-ui-battle-migration.md`.

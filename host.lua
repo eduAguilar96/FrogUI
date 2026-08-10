@@ -1939,6 +1939,7 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
         index = 0,
     }
     self._renderHook = session
+    Element._beginRenderSource(self, token.source)
     local results, renderElapsed
     if profiler then
         local function observedCallback(...)
@@ -1956,6 +1957,7 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
         -- Preserve the ordinary render path exactly when diagnostics are off.
         results = { pcall(self._withRender, self, label, callback, ...) }
     end
+    Element._endRenderSource(self)
     self._renderHook = nil
     if not results[1] then error(results[2], 0) end
     if previous then
@@ -2220,8 +2222,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         context.identityBytes = context.identityBytes + #path
         context.logicalIdentityBytes = context.logicalIdentityBytes + #logicalPath
         if descriptor.source then
-            context.sourceCapturedDescriptors =
-                context.sourceCapturedDescriptors + 1
+            context.sourceAttributedDescriptors =
+                context.sourceAttributedDescriptors + 1
         end
     end
     local semanticStarted = token.kind ~= "primitive" and profiler
@@ -2800,11 +2802,10 @@ local function publishDiagnosticStructure(self, root, context)
     self._diagnostics:setCount("identityBytes", context.identityBytes)
     self._diagnostics:setCount("logicalIdentityBytes",
         context.logicalIdentityBytes)
-    -- Descriptor source capture happens in Element construction, before Host
-    -- can time it without adding global instrumentation. This retained count
-    -- is a pressure proxy, not a duration measurement.
-    self._diagnostics:setCount("sourceCapturedDescriptors",
-        context.sourceCapturedDescriptors)
+    -- Descriptors retain their semantic owner's shared definition source. This
+    -- count reports provenance coverage, not source-capture work or duration.
+    self._diagnostics:setCount("sourceAttributedDescriptors",
+        context.sourceAttributedDescriptors)
     self._diagnostics:setCount("popupTexts",
         context.primitiveHistogram.PopupText or 0)
     self._diagnostics:setCount("canvases",
@@ -2857,7 +2858,7 @@ function host:_build(root)
         context.primitiveHistogram = {}
         context.identityBytes = 0
         context.logicalIdentityBytes = 0
-        context.sourceCapturedDescriptors = 0
+        context.sourceAttributedDescriptors = 0
     end
     local function buildCandidate()
         local expansionStarted = self._diagnostics:start()
