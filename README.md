@@ -1597,55 +1597,48 @@ copy them into documentation or another check.
 
 #### Current measured checkpoint
 
-B4p.7 closed on 2026-08-09 with the valid manifest at
-`build/frogui/battle-performance-20260809T081409Z-18649`. The manifest records
-commit `aef46899a5d3907d0e03d02a2560074ca47e2878`, an exact dirty source identity
-unchanged across both processes, acceptance status 1 (completed target miss),
-diagnostics status 0, and a 2,733-row TSV.
+B4p.9a closed as an attribution checkpoint with the valid manifest at
+`build/frogui/battle-performance-20260810T050837Z-67162`. The manifest records
+an exact dirty source identity unchanged across both processes, acceptance
+status 1 (completed target miss), diagnostics status 0, and a complete final
+TSV.
 
 | window | shipped mean / p95 / allocation | FrogUI mean / p95 / allocation | result |
 |---|---:|---:|---|
-| paused | 1.157 / 2.001 ms / 248.458 KB/frame | 1.414 / 1.608 ms / 38.568 KB/frame | pass |
-| early | 1.014 / 1.503 ms / 263.432 KB/frame | 2.109 / 7.529 ms / 351.669 KB/frame | fail |
-| late | 1.846 / 1.714 ms / 283.381 KB/frame | 4.662 / 17.647 ms / 2554.159 KB/frame | fail |
+| paused | 1.010 / 1.459 ms / 248.459 KB/frame | 1.294 / 1.341 ms / 38.565 KB/frame | pass |
+| early | 1.084 / 1.739 ms / 263.433 KB/frame | 1.942 / 2.970 ms / 351.712 KB/frame | fail |
+| late | 1.992 / 1.781 ms / 283.383 KB/frame | 4.183 / 17.279 ms / 2554.413 KB/frame | fail |
 
-Allocation is effectively unchanged from B4p.6. Late FrogUI mean/p95 moved
-only +0.034/+0.424 ms; the larger early p95 move is an unexplained single-run
-difference, not regression proof. These rows provide no evidence of a new broad
-allocation cost. Locality is decisive: late committed full
-transforms visited 159,657 nodes, while exact disjoint dirty branches cover
-9,227 (5.78%) and their LCAs cover 57,924 (36.28%). Early exact coverage is
-513/22,422 (2.29%); late interaction is 1,500/56,701 (2.65%). The verified late
-committed total is 776 dirty roots. All measured committed/interaction ref
-publications changed zero rectangles, but that Battle-specific observation is
-not a general ref-skip rule.
+The allocation probe preserves the original acceptance boundary and adds a
+second FrogUI-only cursor around direct update and draw. It classifies frames
+from the Host's scalar committed generation and reports the small
+acceptance-minus-attributed remainder explicitly. It does not enable Host
+diagnostics, timers, or per-frame records.
 
-B4p.8a closed on 2026-08-09 with the valid manifest at
-`build/frogui/battle-performance-20260810T041032Z-52849`. Committed Motion-only
-transforms now execute exact non-overlapping dirty branches with the existing
-geometry writer. Candidate/message/structural, Scroll/RadialDial, mixed, stale,
-ambiguous, and over-limit cases stay full. Runtime routing metadata lives only
-on Motion instances plus three root scalars; ordinary primitives carry none.
-The Host reuses one bounded pending instance set and clears it with its source
-fact. There are no parent pointers, full-tree routing discovery, component
-caches, or generic invalidation graph.
+| window / cohort | frames | KB per cohort frame | acceptance-byte share |
+|---|---:|---:|---:|
+| paused quiet update / draw | 60 / 60 | 16.814 / 21.739 | 43.6002% / 56.3693% |
+| early quiet update / rebuilt update | 57 / 3 | 17.568 / 5254.643 | 4.7451% / 74.7010% |
+| early quiet draw / post-rebuild draw | 57 / 3 | 38.036 / 722.884 | 10.2739% / 10.2767% |
+| late quiet update / rebuilt update | 38 / 22 | 97.613 / 5830.079 | 2.4202% / 83.6864% |
+| late quiet draw / post-rebuild draw | 38 / 22 | 48.088 / 884.807 | 1.1923% / 12.7007% |
 
-The accepted run restored B4p.7 allocation within about 0.01% and reproduced
-the exact locality totals: 513 early and 9,227 late committed branch nodes,
-zero fallbacks/routing prewalks, and unchanged ref visits/publications. Late
-quiet committed transform fell from `0.630 / 0.733` to `0.038 / 0.142 ms`
-average/p95. The earlier complete run at
-`build/frogui/battle-performance-20260810T030955Z-43190` is intentionally
-retained as rejected evidence: stamping metadata on every primitive increased
-early/late allocation by 8.46%/10.20%, which is why the final design owns it on
-Motion instances instead. Full candidate-transform observer averages still
-carry about 0.5 ms more work than B4p.7, while total reconciled expansion did
-not regress in this pair; this is a known cost, not hidden evidence.
+Attributed allocation is `38.553`, `351.700`, and `2554.402 KB/frame`
+paused/early/late. The preserved acceptance totals differ by only
+`0.012 KB/frame`, reported as boundary/unattributed work. Rebuilt update is
+therefore the primary measured allocation cohort: 74.7010% early and 83.6864%
+late. It still combines Playback publication, messages, snapshots, runtime,
+semantic expansion, validation, layout, transform, and commit; B4p.9a does not
+yet assign those bytes to one subsystem. Canvas and other dynamic draw
+allocation remain real but are not the primary repair selected by this
+evidence.
 
-B4p remains open and B5 remains blocked. Reconciled expansion is still roughly
-9.1 ms and profiler-free late allocation remains roughly 2.55 MB/frame. Ref
-collection also still walks the complete tree on every update; its separate
-arranged-ref gate remains valid, but the measured late quiet ref cost is much
-smaller than rebuild expansion. The full decision, invariants, rejected design,
-and evidence tables live in
+The next generic core checkpoint starts by measuring two descriptor/resolution
+construction suspects: unconditional description source capture and eager
+`path`/`logicalPath` identity construction. Neither changes yet, and attribution
+continues elsewhere in rebuilt update if they do not explain it. Battle caches,
+component-output memoization, validation skips, a virtual DOM, and a dirty
+dependency/layout graph remain rejected. B4p remains open, B5 remains blocked,
+and the arranged-ref publication gate stays separate later work. The complete
+history, invariants, and evidence live in
 `design/reference/frog-ui-battle-migration.md`.
