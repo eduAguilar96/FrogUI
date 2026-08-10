@@ -114,25 +114,6 @@ local function isPositiveInteger(value)
     return type(value) == "number" and value > 0 and value % 1 == 0
 end
 
-local function numericValues(input)
-    local indexes = {}
-    for key in pairs(input) do
-        if type(key) == "number" then
-            assert(isPositiveInteger(key),
-                "FrogUI numeric props must be positive integer child indexes")
-            indexes[#indexes + 1] = key
-        end
-    end
-    table.sort(indexes)
-
-    local values = {}
-    for _, index in ipairs(indexes) do
-        local value = input[index]
-        if value ~= nil and value ~= false then values[#values + 1] = value end
-    end
-    return values
-end
-
 local function descriptor(value)
     return type(value) == "table" and value.__frogDescriptor == true
 end
@@ -149,45 +130,94 @@ local function addChild(out, child)
     out[#out + 1] = child
 end
 
+local EMPTY_INPUT = {}
+
+-- Splits named props from ordered children. Dense arrays take no indexing
+-- scratch table; sparse or very high indexes retain the exact sorted behavior
+-- without scanning every hole. Text shorthand is normalized in the same pass.
 local function splitInput(token, input)
-    if input == nil then input = {} end
+    if input == nil then input = EMPTY_INPUT end
     if type(input) ~= "table" then
         assert(token.kind == "primitive" and token.name == "Text",
             token.name .. " expects a props table")
-        input = { text = tostring(input) }
+        return { text = tostring(input) }, {}
     end
 
     local props = {}
+    local numericCount = 0
+    local maximumIndex = 0
     for key, value in pairs(input) do
-        if not isPositiveInteger(key) then props[key] = value end
+        if type(key) == "number" then
+            assert(isPositiveInteger(key),
+                "FrogUI numeric props must be positive integer child indexes")
+            numericCount = numericCount + 1
+            maximumIndex = math.max(maximumIndex, key)
+        else
+            props[key] = value
+        end
+    end
+
+    local indexes
+    if maximumIndex ~= numericCount then
+        indexes = {}
+        for key in pairs(input) do
+            if type(key) == "number" then
+                indexes[#indexes + 1] = key
+            end
+        end
+        table.sort(indexes)
     end
 
     local children = {}
-    local values = numericValues(input)
     if token.kind == "primitive" and token.name == "Text" then
-        if props.text == nil and #values == 1
-                and (type(values[1]) == "string" or type(values[1]) == "number") then
-            props.text = tostring(values[1])
-            values = {}
+        local valueCount = 0
+        local onlyValue
+        for position = 1, numericCount do
+            local index = indexes and indexes[position] or position
+            local value = input[index]
+            if value ~= nil and value ~= false then
+                valueCount = valueCount + 1
+                if valueCount == 1 then onlyValue = value end
+            end
         end
-        assert(#values == 0, "Frog.Text accepts text, not element children")
+        if props.text == nil and valueCount == 1
+                and (type(onlyValue) == "string"
+                    or type(onlyValue) == "number") then
+            props.text = tostring(onlyValue)
+            valueCount = 0
+        end
+        assert(valueCount == 0,
+            "Frog.Text accepts text, not element children")
     else
-        for _, child in ipairs(values) do addChild(children, child) end
+        for position = 1, numericCount do
+            local index = indexes and indexes[position] or position
+            addChild(children, input[index])
+        end
     end
 
     return props, children
 end
 
 local function validateSiblingKeys(children, owner)
-    local seen = {}
+    local firstTyped
+    local seen
     for _, child in ipairs(children) do
         local key = child.key
         if key ~= nil then
             assert(type(key) == "string" or type(key) == "number",
                 owner .. " child keys must be strings or numbers")
             local typed = type(key) .. ":" .. tostring(key)
-            assert(not seen[typed], owner .. " has duplicate child key " .. tostring(key))
-            seen[typed] = true
+            if firstTyped == nil then
+                firstTyped = typed
+            elseif seen == nil then
+                assert(firstTyped ~= typed,
+                    owner .. " has duplicate child key " .. tostring(key))
+                seen = { [firstTyped] = true, [typed] = true }
+            else
+                assert(not seen[typed],
+                    owner .. " has duplicate child key " .. tostring(key))
+                seen[typed] = true
+            end
         end
     end
 end

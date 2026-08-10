@@ -1620,50 +1620,51 @@ the semantic total.
 
 #### Current measured checkpoint
 
-B4p.11 closes the structural construction attribution selected by B4p.10. The
+B4p.12 closes the descriptor-normalization repair selected by B4p.11. The
 valid manifest at
-`build/frogui/battle-performance-20260810T200531Z-93317` records source commit
-`1fbbed51e546e615cbf3365c37855aad90494893`, stable dirty source/diff/untracked
+`build/frogui/battle-performance-20260810T202158Z-95501` records source commit
+`3c11fe626ca2704db0ad339608458601f8eb5d02`, stable dirty source/diff/untracked
 identity, acceptance status 1 (completed target miss), diagnostics status 0,
 and a published 2,733-row artifact. Standard, source, identity, and structure
 windows retain the exact `60/0`, `57/3`, and `38/22` quiet/rebuilt cadence; all
 windows are uncapped.
 
-Quiet frames report zero construction calls in all phases. Rebuilt update is:
+`Element.construct` now separates named props and ordered children directly.
+Ordinary dense child arrays need no index scratch table; sparse or extremely
+high indexes use the existing bounded sorted behavior. Text shorthand is
+normalized without a temporary input/value table, and sibling-key tracking
+allocates only when multiple keyed children require it. Focused coverage locks
+scalar/table Text forms, nil/false elision, a child at index 1,000,000, typed
+numeric/string key distinction, invalid key/input errors, `Frog.each`, source,
+and every existing tree/layout behavior.
 
-| window | update | semantic render | descriptor subset | other semantic work | primitive materialization | attributed total | remainder |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| early | 4715.313 KB | 1194.247 KB | 719.781 KB | 474.466 KB | 489.604 KB | 1683.852 KB | 3031.461 KB |
-| late | 5185.917 KB | 1513.038 KB | 856.996 KB | 656.041 KB | 584.569 KB | 2097.607 KB | 3088.311 KB |
+The causal comparison is:
 
-Semantic render owns `25.327%` early and `29.176%` late. Primitive
-materialization owns `10.383%` early and `11.272%` late. Together they explain
-`35.710%` and `40.448%` of rebuilt update. Descriptor normalization is already
-inside the semantic total; at `719.781/856.996 KB` it is the largest exact
-generic leaf selected by this measurement.
+| rebuilt window | descriptor B4p.11 → 12 | predicted recovery | update B4p.11 → 12 | actual recovery | difference |
+|---|---:|---:|---:|---:|---:|
+| early | 719.781 → 511.392 KB | 208.389 KB | 4715.313 → 4506.939 KB | 208.374 KB | -0.015 KB |
+| late | 856.996 → 609.706 KB | 247.290 KB | 5185.917 → 4938.837 KB | 247.080 KB | -0.210 KB |
 
-The primitive split rejects a tempting but low-value first repair:
+The repair removes `28.95%/28.86%` of descriptor allocation. Its recovered
+update bytes match the measured descriptor reduction within `0.21 KB/rebuild`.
+Other semantic work remains `474.466/655.921 KB`, primitive materialization
+remains exactly `489.604/584.569 KB`, and the unattributed remainder stays
+`3.03/3.09 MB`. Source stays zero and identity remains
+`233.500/41.155 KB/rebuild`, so no work moved into another measured boundary.
 
-| window | base node + props | immediate children | deferred arrays | deferred children |
-|---|---:|---:|---:|---:|
-| early | 414.193 KB | 12.904 KB | 49.604 KB | 12.904 KB |
-| late | 494.332 KB | 15.509 KB | 59.219 KB | 15.509 KB |
+Profiler-free allocation falls from `324.745` to `314.331 KB/frame` early and
+from `2318.369` to `2227.826 KB/frame` late. Current early timing passes every
+target except mean ratio; late absolute p95 now passes, while its ratios,
+over-budget fraction, and allocation targets remain open. Timing is still a
+machine-specific sample; the byte-for-byte causal boundary is the repair's
+acceptance evidence.
 
-The later deferred-view array rewrite is real, but its array plus insertion
-cost is only about `1.3–1.4%` of rebuilt update. It remains visible rather than
-being mistaken for the main problem. Source capture stays exactly zero, and
-identity attribution remains `233.500 KB` early and `41.155 KB` late.
-Profiler-free allocation remains effectively unchanged from B4p.10 at
-`324.745 KB/frame` early and `2318.369 KB/frame` late. Timing moved within the
-cross-run sample (`1.897/4.107 ms` mean and `2.338/17.375 ms` p95 early/late);
-this attribution-only checkpoint makes no performance-improvement claim.
-
-The next isolated repair boundary is `Element.construct`: preserve the public
-call syntax, child order and elision, Text shorthand, key validation, source,
-and every loud error while removing its redundant temporary indexing/value/key
-tables. Measure the recovered bytes against the directly attributed descriptor
-boundary before choosing any further representation change. Primitive nodes,
-deferred arrays, identity, memoization, validation skips, a virtual DOM, and a
-dirty graph remain unchanged and unsupported. B4p remains open and B5 remains
+B4p.12 closes as one generic FrogUI core repair. The next checkpoint should
+partition the still-dominant `3.09 MB` Host remainder across semantic
+preparation/bookkeeping, validation/reconciliation, and the layout/commit
+pipeline before choosing another representation change. Primitive props/node
+copying is retained as a named sub-candidate, not assumed to be the largest
+remaining problem. Memoization, validation skips, a virtual DOM, a dirty graph,
+and Battle-specific caches remain unsupported. B4p remains open and B5 remains
 blocked. Full evidence and invariants live in
 `design/reference/frog-ui-battle-migration.md`.
