@@ -627,15 +627,12 @@ function motion.play(instance, instruction, host)
     if instance.node then
         instance.node.presentation = copyValues(instance.values)
         if not previous or not sameGeometry(previous, instance.values) then
-            if host._diagnostics.enabled then
-                local binding = instance.recipes[instruction.name]
-                host:_invalidateTransform(instance.node, "Motion",
-                    "event-play", binding and {
-                        diagnosticRecipe(instruction.name, binding.recipe),
-                    } or nil)
-            else
-                motion.invalidate(host._tree)
-            end
+            local binding = host._diagnostics.enabled
+                and instance.recipes[instruction.name] or nil
+            host:_invalidateTransform(instance.node, "Motion",
+                "event-play", binding and {
+                    diagnosticRecipe(instruction.name, binding.recipe),
+                } or nil)
         end
     end
 end
@@ -737,12 +734,8 @@ local function updateActive(instance, host, completions, attribution)
     if instance.node and visualChanged then
         instance.node.presentation = copyValues(instance.values)
         if geometryChanged then
-            if attribution then
-                host:_invalidateTransform(instance.node, "Motion",
-                    "frame-sample", geometryRecipes)
-            else
-                motion.invalidate(host._tree)
-            end
+            host:_invalidateTransform(instance.node, "Motion",
+                "frame-sample", geometryRecipes)
         end
     end
 end
@@ -886,6 +879,9 @@ local function point(matrix, x, y)
 end
 
 local IDENTITY = { a = 1, b = 0, c = 0, d = 1, tx = 0, ty = 0 }
+local BRANCH_ROOT_LIMIT = 128
+local BRANCH_COVERAGE_FRACTION = 0.5
+local nextTransformTreeToken = 0
 
 local function writeBounds(out, x1, y1, x2, y2, x3, y3, x4, y4)
     out = out or {}
@@ -954,40 +950,106 @@ local function transformNodeGeometry(node, parent)
         cx1, cy1, cx2, cy2, cx3, cy3, cx4, cy4)
 end
 
--- Production recursion carries no observer tables or per-node branches.
-local function transformNode(node, parent)
-    transformNodeGeometry(node, parent)
-    for _, child in ipairs(node.children) do
-        transformNode(child, node._worldTransform)
-    end
+local function storeBoundary(instance, boundary)
+    if not instance then return end
+    instance._branchParentA, instance._branchParentB = boundary.a, boundary.b
+    instance._branchParentC, instance._branchParentD = boundary.c, boundary.d
+    instance._branchParentTx, instance._branchParentTy = boundary.tx, boundary.ty
 end
 
--- The diagnostics recursion performs the same transform in one pass while
--- counting locality. A portal begins an independent transform plane, so LCA
--- coverage is summed per plane instead of using the broad authored root.
-local function transformNodeObserved(node, parent, observer, dirtyAncestor,
-        plane)
-    local previousPath
-    if node._portal then
-        dirtyAncestor = nil
-        plane = node
-        previousPath = observer.path
-        observer.path = {}
+local function boundaryIsValid(instance)
+    return type(instance._branchParentA) == "number"
+        and type(instance._branchParentB) == "number"
+        and type(instance._branchParentC) == "number"
+        and type(instance._branchParentD) == "number"
+        and type(instance._branchParentTx) == "number"
+        and type(instance._branchParentTy) == "number"
+end
+
+local function loadBoundary(instance, out)
+    out.a, out.b = instance._branchParentA, instance._branchParentB
+    out.c, out.d = instance._branchParentC, instance._branchParentD
+    out.tx, out.ty = instance._branchParentTx, instance._branchParentTy
+    return out
+end
+
+local function stampFullNode(node, boundary, traversal, plane, preorder)
+    local instance = node._motion
+    if not instance then return end
+    instance._branchTreeToken = traversal.token
+    instance._branchGeneration = traversal.generation
+    instance._branchPlane = plane
+    instance._branchPreorderStart = preorder
+    storeBoundary(instance, boundary)
+end
+
+local function finishFullNode(node, preorderEnd)
+    if node._motion then node._motion._branchPreorderEnd = preorderEnd end
+end
+
+local function beginPlane(traversal)
+    traversal.nextPlane = traversal.nextPlane + 1
+    return traversal.nextPlane
+end
+
+-- Full production traversal writes geometry and its acyclic branch metadata in
+-- the same pass. Portal descendants get an independent interval namespace.
+local function transformNode(node, parent, traversal, plane, preorder, isRoot)
+    local boundary = node._portal and IDENTITY or parent or IDENTITY
+    if isRoot or node._portal then
+        plane = beginPlane(traversal)
+        preorder = 0
     end
+    preorder = preorder + 1
+    stampFullNode(node, boundary, traversal, plane, preorder)
+    transformNodeGeometry(node, boundary)
+    traversal.nodesVisited = traversal.nodesVisited + 1
+    local samePlaneEnd = preorder
+    for _, child in ipairs(node.children or {}) do
+        local childEnd = transformNode(child, node._worldTransform, traversal,
+            plane, samePlaneEnd, false)
+        if not child._portal then samePlaneEnd = childEnd end
+    end
+    finishFullNode(node, samePlaneEnd)
+    return samePlaneEnd
+end
+
+-- Diagnostic full traversal observes the same single geometry write while
+-- retaining the B4p.7 exact-branch and per-plane LCA measurements.
+local function transformNodeObserved(node, parent, observer, dirtyAncestor,
+        traversal, plane, preorder, isRoot)
+    local boundary = node._portal and IDENTITY or parent or IDENTITY
+    local previousPath
+    if isRoot or node._portal then
+        plane = beginPlane(traversal)
+        preorder = 0
+        if node._portal then
+            dirtyAncestor = nil
+            previousPath = observer.path
+            observer.path = {}
+        end
+    end
+    preorder = preorder + 1
+    stampFullNode(node, boundary, traversal, plane, preorder)
     observer.nodesVisited = observer.nodesVisited + 1
     observer.path[#observer.path + 1] = node
     local isTarget = noteDiagnosticTarget(observer, plane, node)
     local isDirtyRoot = isTarget and dirtyAncestor == nil
     if isTarget then dirtyAncestor = node end
-    transformNodeGeometry(node, parent)
+    transformNodeGeometry(node, boundary)
+    traversal.nodesVisited = traversal.nodesVisited + 1
+    local samePlaneEnd = preorder
     local samePlaneCount = 1
-    for _, child in ipairs(node.children) do
-        local childCount = transformNodeObserved(child, node._worldTransform,
-            observer, dirtyAncestor, plane)
+    for _, child in ipairs(node.children or {}) do
+        local childEnd, childCount = transformNodeObserved(child,
+            node._worldTransform, observer, dirtyAncestor, traversal, plane,
+            samePlaneEnd, false)
         if not child._portal then
+            samePlaneEnd = childEnd
             samePlaneCount = samePlaneCount + childCount
         end
     end
+    finishFullNode(node, samePlaneEnd)
     if isDirtyRoot then
         observer.dirtyRoots = observer.dirtyRoots + 1
         observer.branchCoverage = observer.branchCoverage + samePlaneCount
@@ -999,15 +1061,152 @@ local function transformNodeObserved(node, parent, observer, dirtyAncestor,
     end
     observer.path[#observer.path] = nil
     if previousPath then observer.path = previousPath end
-    return samePlaneCount
+    return samePlaneEnd, samePlaneCount
+end
+
+local function intervalIsValid(instance)
+    local plane = instance._branchPlane
+    local first = instance._branchPreorderStart
+    local last = instance._branchPreorderEnd
+    return type(plane) == "number" and plane > 0 and plane % 1 == 0
+        and type(first) == "number" and first > 0 and first % 1 == 0
+        and type(last) == "number" and last >= first and last % 1 == 0
+end
+
+local function branchOrder(left, right)
+    if left._branchPlane ~= right._branchPlane then
+        return left._branchPlane < right._branchPlane
+    end
+    if left._branchPreorderStart ~= right._branchPreorderStart then
+        return left._branchPreorderStart < right._branchPreorderStart
+    end
+    return left._branchPreorderEnd > right._branchPreorderEnd
+end
+
+local function clearRoots(roots)
+    for index = #roots, 1, -1 do roots[index] = nil end
+end
+
+local function fallback(roots, reason, pendingTargets)
+    clearRoots(roots)
+    return nil, reason, pendingTargets or 0, 0, 0
+end
+
+-- Builds the complete disjoint-root plan before the first geometry write.
+-- It inspects only the pending set and stamped scalar metadata; committed
+-- topology is immutable between successful Host candidates.
+local function prepareBranches(root, request)
+    local roots = request.roots
+    clearRoots(roots)
+    if request.requiresFull then
+        return fallback(roots,
+            request.fullReason or "non-motion-or-mixed", request.nodeCount)
+    end
+    if request.generation ~= root._motionTransformGeneration then
+        return fallback(roots, "stale-generation", request.nodeCount)
+    end
+    if request.treeToken ~= root._motionTreeToken then
+        return fallback(roots, "structural-token", request.nodeCount)
+    end
+    if type(root._motionTransformNodeCount) ~= "number"
+            or root._motionTransformNodeCount < 1 then
+        return fallback(roots, "missing-metadata", request.nodeCount)
+    end
+    local pendingTargets = 0
+    for _ in pairs(request.nodes) do
+        pendingTargets = pendingTargets + 1
+    end
+    if pendingTargets == 0 or pendingTargets ~= request.nodeCount then
+        return fallback(roots, "node-set-mismatch", pendingTargets)
+    end
+    for instance in pairs(request.nodes) do
+        local node = instance.node
+        if not node or node._motion ~= instance then
+            return fallback(roots, "detached", pendingTargets)
+        end
+        if instance._branchTreeToken ~= root._motionTreeToken then
+            return fallback(roots, "detached", pendingTargets)
+        end
+        if instance._branchGeneration ~= root._motionTransformGeneration then
+            return fallback(roots, "stale-node", pendingTargets)
+        end
+        if not intervalIsValid(instance) or not boundaryIsValid(instance) then
+            return fallback(roots, "missing-metadata", pendingTargets)
+        end
+        roots[#roots + 1] = instance
+    end
+    table.sort(roots, branchOrder)
+    local sourceCount, write, previous = #roots, 0, nil
+    local descendantsSuppressed = 0
+    for read = 1, sourceCount do
+        local instance = roots[read]
+        if previous and previous._branchPlane == instance._branchPlane
+                and instance._branchPreorderStart
+                    <= previous._branchPreorderEnd then
+            if instance._branchPreorderEnd > previous._branchPreorderEnd then
+                return fallback(roots, "ambiguous-overlap", pendingTargets)
+            end
+            descendantsSuppressed = descendantsSuppressed + 1
+        else
+            write = write + 1
+            roots[write] = instance
+            previous = instance
+        end
+    end
+    for index = sourceCount, write + 1, -1 do roots[index] = nil end
+    if write > BRANCH_ROOT_LIMIT then
+        return fallback(roots, "root-limit", pendingTargets)
+    end
+    local coverage = 0
+    for index = 1, write do
+        local instance = roots[index]
+        coverage = coverage + instance._branchPreorderEnd
+            - instance._branchPreorderStart + 1
+    end
+    local coverageLimit = math.max(1,
+        math.floor(root._motionTransformNodeCount * BRANCH_COVERAGE_FRACTION))
+    if coverage > coverageLimit then
+        return fallback(roots, "coverage-limit", pendingTargets)
+    end
+    return roots, nil, pendingTargets, write, descendantsSuppressed, coverage
+end
+
+local function transformBranch(node, parent, token, generation, plane, cursor)
+    local instance = node._motion
+    if instance then
+        assert(instance.node == node
+                and instance._branchTreeToken == token
+                and instance._branchGeneration == generation
+                and instance._branchPlane == plane
+                and instance._branchPreorderStart == cursor,
+            "FrogUI committed Motion topology changed before branch write")
+    end
+    local boundary = node._portal and IDENTITY or parent
+    storeBoundary(instance, boundary)
+    transformNodeGeometry(node, boundary)
+    local visited = 1
+    local nextCursor = cursor + 1
+    for _, child in ipairs(node.children or {}) do
+        if not child._portal then
+            local childCursor, childVisited = transformBranch(child,
+                node._worldTransform, token, generation, plane, nextCursor)
+            nextCursor = childCursor
+            visited = visited + childVisited
+        end
+    end
+    if instance then
+        assert(instance._branchPreorderEnd == nextCursor - 1,
+            "FrogUI committed Motion subtree changed during branch write")
+    end
+    return nextCursor, visited
 end
 
 -- Marks the committed root's geometry stale. Motion and the two retained
 -- layout mutators (Scroll and RadialDial) call this at their exact mutation
 -- point. Callers pass the Host root explicitly so the tree remains acyclic.
--- Dirtiness is intentionally one root bit: dirty frames recompute the whole
--- tree in place; clean frames do no recursive work. This is smaller and easier
--- to audit than a generic dirty-subtree system.
+-- The root bit remains the clean-skip authority. A Host may additionally route
+-- its bounded committed Motion-only batch through exact branches; bare calls,
+-- retained interaction layout, mixed causes, and unsafe metadata stay full.
 function motion.invalidate(root)
     if not root then return end
     root._motionTransformDirty = true
@@ -1016,13 +1215,81 @@ end
 -- Recomputes paint/input/F6 transforms only after layout or a clock tick
 -- invalidates committed geometry. Matrix and bounds tables retain identity so
 -- an active frame updates numbers without recreating five tables per node.
-function motion.transformTree(root, diagnosticTargets)
+function motion.transformTree(root, diagnosticTargets, options)
     if not root then
         return false, diagnosticTargets and { nodesVisited = 0 } or nil
     end
     if root._motionTransformReady and not root._motionTransformDirty then
-        return false, diagnosticTargets and { nodesVisited = 0 } or nil
+        return false, diagnosticTargets and {
+            nodesVisited = 0,
+            mode = "skip",
+            lcaMeasured = 0,
+            branchRuns = 0,
+            fullRuns = 0,
+            fallbackRuns = 0,
+            branchNodes = 0,
+            fullNodes = 0,
+            pendingTargets = 0,
+            survivingRoots = 0,
+            descendantsSuppressed = 0,
+            routingTreeVisits = 0,
+        } or nil
     end
+    options = options or {}
+    local branchRequest = options.branch
+    local roots, fallbackReason, pendingTargets, survivingRoots
+    local descendantsSuppressed, coverage
+    if branchRequest then
+        roots, fallbackReason, pendingTargets, survivingRoots,
+            descendantsSuppressed, coverage = prepareBranches(root,
+                branchRequest)
+    end
+    if roots then
+        local visited = 0
+        local boundary = branchRequest.boundary
+        for index = 1, survivingRoots do
+            local instance = roots[index]
+            local node = instance.node
+            local nextCursor, branchVisited = transformBranch(node,
+                node._portal and IDENTITY or loadBoundary(instance, boundary),
+                root._motionTreeToken, root._motionTransformGeneration,
+                instance._branchPlane, instance._branchPreorderStart)
+            assert(nextCursor == instance._branchPreorderEnd + 1,
+                "FrogUI committed transform interval ended unexpectedly")
+            visited = visited + branchVisited
+        end
+        assert(visited == coverage,
+            "FrogUI committed transform topology changed during branch write")
+        root._motionTransformRevision =
+            (root._motionTransformRevision or 0) + 1
+        root._motionTransformReady = true
+        root._motionTransformDirty = false
+        if not diagnosticTargets then return true, nil end
+        return true, {
+            nodesVisited = visited,
+            dirtyRoots = survivingRoots,
+            branchCoverage = coverage,
+            lcaCoverage = 0,
+            lcaMeasured = 0,
+            mode = "branch",
+            branchRuns = 1,
+            fullRuns = 0,
+            fallbackRuns = 0,
+            branchNodes = visited,
+            fullNodes = 0,
+            pendingTargets = pendingTargets,
+            survivingRoots = survivingRoots,
+            descendantsSuppressed = descendantsSuppressed,
+            routingTreeVisits = 0,
+        }
+    end
+    nextTransformTreeToken = nextTransformTreeToken + 1
+    local traversal = options.scratch or {}
+    traversal.token = nextTransformTreeToken
+    traversal.generation = options.generation
+        or root._motionTransformGeneration or 0
+    traversal.nextPlane = 0
+    traversal.nodesVisited = 0
     local observer
     if diagnosticTargets then
         observer = {
@@ -1033,18 +1300,35 @@ function motion.transformTree(root, diagnosticTargets)
             dirtyRoots = 0,
             branchCoverage = 0,
             lcaCoverage = 0,
+            lcaMeasured = 1,
+            mode = "full",
+            fallbackReason = fallbackReason,
+            branchRuns = 0,
+            fullRuns = 1,
+            fallbackRuns = fallbackReason and 1 or 0,
+            branchNodes = 0,
+            fullNodes = 0,
+            pendingTargets = pendingTargets or 0,
+            survivingRoots = 0,
+            descendantsSuppressed = 0,
+            routingTreeVisits = 0,
         }
-        transformNodeObserved(root, IDENTITY, observer, nil, root)
+        transformNodeObserved(root, IDENTITY, observer, nil, traversal,
+            0, 0, true)
         for _, planeState in pairs(observer.planes) do
             observer.lcaCoverage = observer.lcaCoverage
                 + (planeState.lcaCoverage or 0)
         end
+        observer.fullNodes = observer.nodesVisited
         observer.targets = nil
         observer.path = nil
         observer.planes = nil
     else
-        transformNode(root, IDENTITY)
+        transformNode(root, IDENTITY, traversal, 0, 0, true)
     end
+    root._motionTreeToken = traversal.token
+    root._motionTransformGeneration = traversal.generation
+    root._motionTransformNodeCount = traversal.nodesVisited
     root._motionTransformRevision = (root._motionTransformRevision or 0) + 1
     root._motionTransformReady = true
     root._motionTransformDirty = false

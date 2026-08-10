@@ -1447,16 +1447,18 @@ It contains timings, signed heap context, bounded semantic-owner rankings,
 activity, structural counts, and compact dirty causes—not component
 descriptions, messages, actor state, or simulation payloads.
 
-Each trace row also has two B4p.7 observer tables:
+Each trace row also has two transform/ref observer tables:
 
 - `transformAttribution.candidate|message|committed|interaction` reports calls,
   runs/skips, nodes visited, exact invalidation/coalescing counts, source-family
   counts, changing Motion owners, dirty roots, LCA/branch coverage, and active
-  geometry Motion owners. Motion labels are an exact count/name-ranked top five
-  plus `other`; they contain only the semantic owner and each active geometry
-  recipe on a changing owner as declared recipe name, root recipe kind, and
-  geometry mask;
-  they never contain paths, keys, props, state, or payloads.
+  geometry Motion owners. B4p.8 adds the chosen route, branch/full/fallback
+  runs and visits, complete pending-target count, surviving/suppressed roots,
+  routing-tree visits, and a bounded fallback-reason category. Motion labels
+  are an exact count/name-ranked top five plus `other`; they contain only the
+  semantic owner and each active geometry recipe on a changing owner as its
+  declared name, root recipe kind, and geometry mask. They never contain paths,
+  keys, props, state, or payloads.
   The Battle TSV writes every nonempty bounded category beside its exact phase,
   context, and frame. It preserves the row's named top five plus `other`
   without phase aggregation, reranking, or a second truncation, so owner/recipe
@@ -1472,13 +1474,17 @@ Each trace row also has two B4p.7 observer tables:
 A committed run without an exact invalidation family is a framework invariant
 failure. A skipped call always reports zero visits. Candidate layout is the one
 explicit exception because a new tree needs its first transform before it can
-be committed. These fields observe the existing full-tree/publication policy;
-they do not implement subtree skipping or ref gating.
+be committed. Committed Motion-only invalidations may use the exact branch route
+described below. Candidate, message, interaction, mixed, stale, unsafe, and
+over-limit cases retain the full transform. Ref collection/publication remains
+unchanged; these fields do not implement a ref gate.
 
 Transform geometry still has one implementation: a non-recursive node writer
-shared by production's direct recursion and the diagnostics-only observed
-recursion. The wrapper is selected once at the root, so an observed run remains
-one transform walk and an ordinary run carries no observer tables or branches.
+shared by full production recursion, exact branch recursion, and the
+diagnostics-only observed recursion. Exact routing reads only the bounded
+pending Motion-instance set and then the selected subtrees; it performs no
+ancestor-discovery or full-tree routing pass. An ordinary run carries no
+observer tables or category maps.
 Both one-shot methods require a mounted, operational, diagnostics-enabled Host
 at a quiet public boundary: never call them during update, draw, a component
 callback, or external input routing.
@@ -1614,17 +1620,32 @@ committed total is 776 dirty roots. All measured committed/interaction ref
 publications changed zero rectangles, but that Battle-specific observation is
 not a general ref-skip rule.
 
-The next checkpoint is B4p.8a: optimize only committed, Motion-only transforms
-over exact non-overlapping dirty branches, retain the existing geometry writer,
-and rerun with ref publication unchanged. Candidate/message/structural,
-Scroll/RadialDial, mixed, stale, ambiguous, or over-limit cases stay on the
-full traversal. Runtime metadata is scalar acyclic generation/plane/preorder/
-subtree/boundary data plus a single-use node set and compact source mask. Any
-non-Motion or mixed bit forces the full path; both facts clear together. This
-adds no parent pointers, full-tree discovery, component cache, or generic
-invalidation graph. B4p.8b may later
-gate refs from an explicit arranged-geometry revision, but candidate commit and
-every Scroll/Radial arrange remain conservative. The full invariants, fallbacks,
-and acceptance requirements live in
-`design/reference/frog-ui-battle-migration.md`. No repair is implemented by
-this documentation checkpoint; B4p remains open and B5 remains blocked.
+B4p.8a closed on 2026-08-09 with the valid manifest at
+`build/frogui/battle-performance-20260810T041032Z-52849`. Committed Motion-only
+transforms now execute exact non-overlapping dirty branches with the existing
+geometry writer. Candidate/message/structural, Scroll/RadialDial, mixed, stale,
+ambiguous, and over-limit cases stay full. Runtime routing metadata lives only
+on Motion instances plus three root scalars; ordinary primitives carry none.
+The Host reuses one bounded pending instance set and clears it with its source
+fact. There are no parent pointers, full-tree routing discovery, component
+caches, or generic invalidation graph.
+
+The accepted run restored B4p.7 allocation within about 0.01% and reproduced
+the exact locality totals: 513 early and 9,227 late committed branch nodes,
+zero fallbacks/routing prewalks, and unchanged ref visits/publications. Late
+quiet committed transform fell from `0.630 / 0.733` to `0.038 / 0.142 ms`
+average/p95. The earlier complete run at
+`build/frogui/battle-performance-20260810T030955Z-43190` is intentionally
+retained as rejected evidence: stamping metadata on every primitive increased
+early/late allocation by 8.46%/10.20%, which is why the final design owns it on
+Motion instances instead. Full candidate-transform observer averages still
+carry about 0.5 ms more work than B4p.7, while total reconciled expansion did
+not regress in this pair; this is a known cost, not hidden evidence.
+
+B4p remains open and B5 remains blocked. Reconciled expansion is still roughly
+9.1 ms and profiler-free late allocation remains roughly 2.55 MB/frame. Ref
+collection also still walks the complete tree on every update; its separate
+arranged-ref gate remains valid, but the measured late quiet ref cost is much
+smaller than rebuild expansion. The full decision, invariants, rejected design,
+and evidence tables live in
+`design/reference/frog-ui-battle-migration.md`.

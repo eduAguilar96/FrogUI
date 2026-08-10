@@ -1321,6 +1321,28 @@ local function assertPresentationAllowed(self, operation)
         "Host drawing phase may not " .. operation .. " presentation")
 end
 
+-- Releases every strong Motion-target reference held by the reusable committed
+-- transform batch. Candidate construction never calls this: a failed
+-- candidate must leave the previous committed batch intact.
+local function clearTransformTargets(work)
+    for target in pairs(work.nodes) do work.nodes[target] = nil end
+    work.nodeCount = 0
+end
+
+local function clearTransformWork(self)
+    local work = self._transformWork
+    if not work then return end
+    clearTransformTargets(work)
+    for index = #work.roots, 1, -1 do work.roots[index] = nil end
+    work.active = false
+    work.generation = 0
+    work.treeToken = nil
+    work.requiresFull = false
+    work.fullReason = nil
+    local options = self._transformOptions
+    if options then options.branch = nil end
+end
+
 -- Runtime failures are terminal for this Host. FrogUI deliberately does not
 -- clone and rewind arbitrary actor/process/input state; callers must unmount
 -- and create a fresh Host after the original error has been surfaced.
@@ -1331,6 +1353,7 @@ local function faultHost(self, origin, reason)
             message = tostring(reason),
         }
     end
+    clearTransformWork(self)
     self._pendingTransformAttribution = nil
     return self._fault.message
 end
@@ -1427,6 +1450,22 @@ function host.new(options)
     self._modalFocusStack = {}
     self._pointerX, self._pointerY = 0, 0
     self._motionStartSequence = 0
+    self._transformWork = {
+        active = false,
+        generation = 0,
+        treeToken = nil,
+        requiresFull = false,
+        fullReason = nil,
+        nodeCount = 0,
+        nodes = {},
+        roots = {},
+        boundary = {},
+    }
+    self._transformOptions = {
+        branch = nil,
+        generation = 0,
+        scratch = {},
+    }
     self._pendingTransformAttribution = nil
     self._feedbackQueue = {}
     self._pendingActorUnmounts = {}
@@ -1753,6 +1792,7 @@ function host:mount(root)
     self._mounted = true
     self._rootDescriptor = root
     self._tree = candidate
+    clearTransformWork(self)
     self._pendingTransformAttribution = nil
     self._actors = context.actors
     self._addresses = context.addresses
@@ -2400,6 +2440,8 @@ local TRANSFORM_FAMILIES = {
     interaction = true,
 }
 
+local TRANSFORM_TARGET_LIMIT = 256
+
 local TRANSFORM_DETAILS = {
     Motion = { ["event-play"] = true, ["frame-sample"] = true },
     Scroll = {
@@ -2431,16 +2473,58 @@ local function incrementMap(map, name, amount)
     map[name] = (map[name] or 0) + (amount or 1)
 end
 
--- Marks committed geometry stale and, only for an opted-in diagnostic Host,
--- retains the exact bounded cause batch until one transform consumes it.
+-- Marks committed geometry stale and records one bounded single-use routing
+-- batch on every Host. Only Motion retains exact instances in ordinary runtime;
+-- diagnostic category maps remain opt-in observations.
 function host:_invalidateTransform(node, family, detail, recipes)
-    Motion.invalidate(self._tree)
-    if not self._diagnostics.enabled then return end
-    assert(TRANSFORM_FAMILIES[family],
-        "unknown FrogUI transform invalidation family " .. tostring(family))
-    assert(TRANSFORM_DETAILS[family][detail],
-        "unknown FrogUI " .. family .. " transform detail " .. tostring(detail))
+    if not TRANSFORM_FAMILIES[family] then
+        error("unknown FrogUI transform invalidation family "
+            .. tostring(family), 0)
+    end
+    if not TRANSFORM_DETAILS[family][detail] then
+        error("unknown FrogUI " .. family .. " transform detail "
+            .. tostring(detail), 0)
+    end
     assert(node, "FrogUI transform invalidation requires its changed node")
+    local motionInstance
+    if family == "Motion" then
+        motionInstance = node._motion
+        assert(motionInstance and motionInstance.node == node,
+            "FrogUI Motion invalidation requires its mounted Motion owner")
+    end
+    Motion.invalidate(self._tree)
+    local work = self._transformWork
+    if not work.active then
+        work.active = true
+        work.generation = self._generation
+        work.treeToken = self._tree and self._tree._motionTreeToken or nil
+        work.requiresFull = false
+        work.fullReason = nil
+        clearTransformTargets(work)
+    elseif work.generation ~= self._generation
+            or work.treeToken
+                ~= (self._tree and self._tree._motionTreeToken or nil) then
+        work.requiresFull = true
+        work.fullReason = "structural-token"
+        clearTransformTargets(work)
+    end
+    if family == "Motion" then
+        if not work.requiresFull and not work.nodes[motionInstance] then
+            if work.nodeCount >= TRANSFORM_TARGET_LIMIT then
+                work.requiresFull = true
+                work.fullReason = "target-limit"
+                clearTransformTargets(work)
+            else
+                work.nodes[motionInstance] = true
+                work.nodeCount = work.nodeCount + 1
+            end
+        end
+    else
+        work.requiresFull = true
+        work.fullReason = "non-motion-or-mixed"
+        clearTransformTargets(work)
+    end
+    if not self._diagnostics.enabled then return end
     local batch = self._pendingTransformAttribution
     if not batch then
         batch = {
@@ -2480,22 +2564,41 @@ local function mapCount(values)
     return count
 end
 
--- Applies transformed geometry and consumes one exact diagnostic cause batch.
--- Candidate layout is the only run allowed without an invalidation. Skips
--- always report zero recursive visits.
+-- Applies transformed geometry and consumes one exact committed cause batch.
+-- Only the committed Motion-only context offers the branch plan; every other
+-- context remains a full authoritative transform.
 function host:_transformTree(root, phase, activeMotion)
     root = root or self._tree
-    if not self._diagnostics.enabled or not phase then
-        return Motion.transformTree(root)
+    local context = phase and TRANSFORM_CONTEXTS[phase] or nil
+    if phase and not context then
+        error("unknown FrogUI transform phase " .. tostring(phase), 0)
     end
-    local context = assert(TRANSFORM_CONTEXTS[phase],
-        "unknown FrogUI transform phase " .. tostring(phase))
-    local batch = root == self._tree and self._pendingTransformAttribution or nil
-    local targets = context == "candidate" and { [root] = true }
-        or batch and batch.nodes or {}
-    local started = self._diagnostics:start()
-    local ran, stats = Motion.transformTree(root, targets)
-    self._diagnostics:finish(phase, started)
+    local committed = root == self._tree
+    local work = committed and self._transformWork or nil
+    local activeWork = work and work.active and work or nil
+    local options = self._transformOptions
+    options.generation = committed and self._generation
+        or self._generation + 1
+    options.branch = context == "committed" and activeWork or nil
+    local profiling = self._diagnostics.enabled and phase ~= nil
+    local batch = profiling and committed
+        and self._pendingTransformAttribution or nil
+    local targets
+    if profiling then
+        targets = context == "candidate" and { [root] = true }
+            or batch and batch.nodes or {}
+    end
+    local started = profiling and self._diagnostics:start() or nil
+    local ran, stats = Motion.transformTree(root, targets, options)
+    options.branch = nil
+    if profiling then self._diagnostics:finish(phase, started) end
+    if committed and activeWork and not ran then
+        error("FrogUI dirty transform batch was not consumed", 0)
+    end
+    if not profiling then
+        if committed and ran then clearTransformWork(self) end
+        return ran, nil
+    end
     local invalidations = batch and batch.invalidations or 0
     local row = {
         calls = 1,
@@ -2508,11 +2611,23 @@ function host:_transformTree(root, phase, activeMotion)
         dirtyRoots = stats.dirtyRoots or 0,
         lcaCoverage = stats.lcaCoverage or 0,
         branchCoverage = stats.branchCoverage or 0,
+        branchRuns = stats.branchRuns or 0,
+        fullRuns = stats.fullRuns or 0,
+        fallbackRuns = stats.fallbackRuns or 0,
+        branchNodes = stats.branchNodes or 0,
+        fullNodes = stats.fullNodes or 0,
+        pendingTargets = stats.pendingTargets or 0,
+        survivingRoots = stats.survivingRoots or 0,
+        descendantsSuppressed = stats.descendantsSuppressed or 0,
+        routingTreeVisits = stats.routingTreeVisits or 0,
+        lcaMeasured = stats.lcaMeasured or 0,
         activeGeometryMotions = activeMotion
             and activeMotion.activeGeometryMotions or 0,
         families = batch and batch.families or {},
         owners = batch and batch.owners or {},
         recipes = batch and batch.recipes or {},
+        fallbackReasons = stats.fallbackReason
+            and { [stats.fallbackReason] = 1 } or {},
         details = context == "candidate" and { ["candidate-layout"] = 1 }
             or batch and batch.details or {},
     }
@@ -2525,10 +2640,21 @@ function host:_transformTree(root, phase, activeMotion)
             assert(row.dirtyRoots > 0,
                 "FrogUI transform cause did not belong to the committed tree")
         end
-        assert(row.branchCoverage <= row.lcaCoverage
-                and row.lcaCoverage <= row.nodesVisited,
-            "FrogUI transform locality coverage is inconsistent")
-        if root == self._tree then self._pendingTransformAttribution = nil end
+        assert(row.branchRuns + row.fullRuns == 1,
+            "FrogUI transform run did not choose exactly one route")
+        if row.lcaMeasured == 1 then
+            assert(row.branchCoverage <= row.lcaCoverage
+                    and row.lcaCoverage <= row.nodesVisited,
+                "FrogUI transform locality coverage is inconsistent")
+        else
+            assert(row.branchRuns == 1 and row.lcaCoverage == 0
+                    and row.branchCoverage == row.nodesVisited,
+                "FrogUI branch transform reported synthetic LCA coverage")
+        end
+        if committed then
+            clearTransformWork(self)
+            self._pendingTransformAttribution = nil
+        end
     else
         assert(row.nodesVisited == 0,
             "FrogUI skipped transform performed recursive work")
@@ -2731,6 +2857,7 @@ function host:render(root)
     local function commit()
         self._rootDescriptor = requested
         self._tree = candidate
+        clearTransformWork(self)
         self._pendingTransformAttribution = nil
         self._actors = context.actors
         self._addresses = context.addresses
@@ -3643,6 +3770,7 @@ function host:resize(width, height)
     local published = false
     local function commit()
         self._tree = candidate
+        clearTransformWork(self)
         self._pendingTransformAttribution = nil
         self._actors = context.actors
         self._addresses = context.addresses
@@ -3977,6 +4105,7 @@ function host:unmount()
     self._hoveredIdentity = nil
     self._focusedIdentity = nil
     self._selectedIdentity = nil
+    clearTransformWork(self)
     self._pendingTransformAttribution = nil
     self._tree = nil
     self._rootDescriptor = nil

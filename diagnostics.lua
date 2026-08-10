@@ -145,6 +145,7 @@ local function boundTransformCategories(rows)
         row.owners = boundedCategories(row.owners)
         row.recipes = boundedCategories(row.recipes)
         row.details = boundedCategories(row.details)
+        row.fallbackReasons = boundedCategories(row.fallbackReasons)
     end
 end
 
@@ -164,18 +165,25 @@ function diagnostics:recordTransform(context, row)
         "unknown FrogUI transform diagnostic context " .. tostring(context))
     local aggregate = self.current.transformAttribution[context]
     if not aggregate then
-        aggregate = { families = {}, owners = {}, recipes = {}, details = {} }
+        aggregate = {
+            families = {}, owners = {}, recipes = {}, details = {},
+            fallbackReasons = {},
+        }
         self.current.transformAttribution[context] = aggregate
     end
     addFields(aggregate, row, {
         "calls", "runs", "skips", "nodesVisited", "invalidations",
         "coalescedInvalidations", "changingOwners", "dirtyRoots",
         "lcaCoverage", "branchCoverage", "activeGeometryMotions",
+        "branchRuns", "fullRuns", "fallbackRuns", "branchNodes",
+        "fullNodes", "pendingTargets", "survivingRoots",
+        "descendantsSuppressed", "routingTreeVisits", "lcaMeasured",
     })
     addCategories(aggregate.families, row.families)
     addCategories(aggregate.owners, row.owners)
     addCategories(aggregate.recipes, row.recipes)
     addCategories(aggregate.details, row.details)
+    addCategories(aggregate.fallbackReasons, row.fallbackReasons)
 end
 
 -- Records one committed-ref publication. Ref comparison stays observational:
