@@ -944,14 +944,19 @@ end
 
 -- Writes one node's authoritative transform geometry. Production and observed
 -- recursion share this exact writer; only their traversal bookkeeping differs.
-local function transformNodeGeometry(node, parent, allocationProbe, isRoot)
-    if node._portal then parent = IDENTITY end
+local function transformNodeGeometry(node, parent, parentInverse,
+        allocationProbe, isRoot)
+    if node._portal then
+        parent = IDENTITY
+        parentInverse = IDENTITY
+    end
     if allocationProbe then
         allocationProbe.pipelineGeometryCalls =
             allocationProbe.pipelineGeometryCalls + 1
     end
-    local defaultPresentation = allocationProbe
-        and (node.presentation == nil or node.presentation == DEFAULT_VALUES)
+    local staticPresentation = node.presentation == nil
+        or node.presentation == DEFAULT_VALUES
+    local defaultPresentation = allocationProbe and staticPresentation
     if allocationProbe then
         local presentationField = defaultPresentation
             and "pipelineDefaultPresentationNodes"
@@ -979,7 +984,11 @@ local function transformNodeGeometry(node, parent, allocationProbe, isRoot)
     end
     existed = node._localTransform ~= nil
     before = allocationProbe and collectgarbage("count") or nil
-    node._localTransform = localMatrix(node, node._localTransform)
+    if staticPresentation then
+        node._localTransform = IDENTITY
+    else
+        node._localTransform = localMatrix(node, node._localTransform)
+    end
     local localIdentity = allocationProbe
         and matrixIsIdentity(node._localTransform)
     if allocationProbe and localIdentity then
@@ -994,12 +1003,16 @@ local function transformNodeGeometry(node, parent, allocationProbe, isRoot)
         recordGeometryAllocation(allocationProbe,
             "pipelineLocalMatrixCreated",
             "pipelineLocalMatrixAllocatedKB", before,
-            not existed and node._localTransform ~= nil)
+            not existed and node._localTransform ~= IDENTITY)
     end
     existed = node._worldTransform ~= nil
     before = allocationProbe and collectgarbage("count") or nil
-    node._worldTransform = multiply(parent or IDENTITY, node._localTransform,
-        node._worldTransform)
+    if staticPresentation then
+        node._worldTransform = parent or IDENTITY
+    else
+        node._worldTransform = multiply(parent or IDENTITY,
+            node._localTransform, node._worldTransform)
+    end
     local worldMatchesBoundary = allocationProbe
         and matricesMatch(node._worldTransform, parent or IDENTITY)
     if allocationProbe and worldMatchesBoundary then
@@ -1018,12 +1031,17 @@ local function transformNodeGeometry(node, parent, allocationProbe, isRoot)
         recordGeometryAllocation(allocationProbe,
             "pipelineWorldMatrixCreated",
             "pipelineWorldMatrixAllocatedKB", before,
-            not existed and node._worldTransform ~= nil)
+            not existed and not staticPresentation
+                and node._worldTransform ~= nil)
     end
     existed = node._inverseWorldTransform ~= nil
     before = allocationProbe and collectgarbage("count") or nil
-    node._inverseWorldTransform = inverse(node._worldTransform,
-        node._inverseWorldTransform)
+    if staticPresentation then
+        node._inverseWorldTransform = parentInverse
+    else
+        node._inverseWorldTransform = inverse(node._worldTransform,
+            node._inverseWorldTransform)
+    end
     if allocationProbe and node._inverseWorldTransform == nil then
         allocationProbe.pipelineInverseMissingNodes =
             allocationProbe.pipelineInverseMissingNodes + 1
@@ -1036,7 +1054,8 @@ local function transformNodeGeometry(node, parent, allocationProbe, isRoot)
         recordGeometryAllocation(allocationProbe,
             "pipelineInverseMatrixCreated",
             "pipelineInverseMatrixAllocatedKB", before,
-            not existed and node._inverseWorldTransform ~= nil)
+            not existed and not staticPresentation
+                and node._inverseWorldTransform ~= nil)
     end
     local x1, y1 = point(node._worldTransform, node.x, node.y)
     local x2, y2 = point(node._worldTransform, node.x + node.width, node.y)
@@ -1116,20 +1135,24 @@ end
 
 -- Full production traversal writes geometry and its acyclic branch metadata in
 -- the same pass. Portal descendants get an independent interval namespace.
-local function transformNode(node, parent, traversal, plane, preorder, isRoot)
+local function transformNode(node, parent, parentInverse, traversal, plane,
+        preorder, isRoot)
     local boundary = node._portal and IDENTITY or parent or IDENTITY
+    local inverseBoundary = node._portal and IDENTITY or parentInverse
     if isRoot or node._portal then
         plane = beginPlane(traversal)
         preorder = 0
     end
     preorder = preorder + 1
     stampFullNode(node, boundary, traversal, plane, preorder)
-    transformNodeGeometry(node, boundary, traversal.allocationProbe, isRoot)
+    transformNodeGeometry(node, boundary, inverseBoundary,
+        traversal.allocationProbe, isRoot)
     traversal.nodesVisited = traversal.nodesVisited + 1
     local samePlaneEnd = preorder
     for _, child in ipairs(node.children or {}) do
-        local childEnd = transformNode(child, node._worldTransform, traversal,
-            plane, samePlaneEnd, false)
+        local childEnd = transformNode(child, node._worldTransform,
+            node._inverseWorldTransform, traversal, plane, samePlaneEnd,
+            false)
         if not child._portal then samePlaneEnd = childEnd end
     end
     finishFullNode(node, samePlaneEnd)
@@ -1138,9 +1161,10 @@ end
 
 -- Diagnostic full traversal observes the same single geometry write while
 -- retaining the B4p.7 exact-branch and per-plane LCA measurements.
-local function transformNodeObserved(node, parent, observer, dirtyAncestor,
-        traversal, plane, preorder, isRoot)
+local function transformNodeObserved(node, parent, parentInverse, observer,
+        dirtyAncestor, traversal, plane, preorder, isRoot)
     local boundary = node._portal and IDENTITY or parent or IDENTITY
+    local inverseBoundary = node._portal and IDENTITY or parentInverse
     local previousPath
     if isRoot or node._portal then
         plane = beginPlane(traversal)
@@ -1158,14 +1182,15 @@ local function transformNodeObserved(node, parent, observer, dirtyAncestor,
     local isTarget = noteDiagnosticTarget(observer, plane, node)
     local isDirtyRoot = isTarget and dirtyAncestor == nil
     if isTarget then dirtyAncestor = node end
-    transformNodeGeometry(node, boundary, traversal.allocationProbe, isRoot)
+    transformNodeGeometry(node, boundary, inverseBoundary,
+        traversal.allocationProbe, isRoot)
     traversal.nodesVisited = traversal.nodesVisited + 1
     local samePlaneEnd = preorder
     local samePlaneCount = 1
     for _, child in ipairs(node.children or {}) do
         local childEnd, childCount = transformNodeObserved(child,
-            node._worldTransform, observer, dirtyAncestor, traversal, plane,
-            samePlaneEnd, false)
+            node._worldTransform, node._inverseWorldTransform, observer,
+            dirtyAncestor, traversal, plane, samePlaneEnd, false)
         if not child._portal then
             samePlaneEnd = childEnd
             samePlaneCount = samePlaneCount + childCount
@@ -1293,7 +1318,8 @@ local function prepareBranches(root, request)
     return roots, nil, pendingTargets, write, descendantsSuppressed, coverage
 end
 
-local function transformBranch(node, parent, token, generation, plane, cursor)
+local function transformBranch(node, parent, parentInverse, token, generation,
+        plane, cursor)
     local instance = node._motion
     if instance then
         assert(instance.node == node
@@ -1304,14 +1330,16 @@ local function transformBranch(node, parent, token, generation, plane, cursor)
             "FrogUI committed Motion topology changed before branch write")
     end
     local boundary = node._portal and IDENTITY or parent
+    local inverseBoundary = node._portal and IDENTITY or parentInverse
     storeBoundary(instance, boundary)
-    transformNodeGeometry(node, boundary)
+    transformNodeGeometry(node, boundary, inverseBoundary)
     local visited = 1
     local nextCursor = cursor + 1
     for _, child in ipairs(node.children or {}) do
         if not child._portal then
             local childCursor, childVisited = transformBranch(child,
-                node._worldTransform, token, generation, plane, nextCursor)
+                node._worldTransform, node._inverseWorldTransform, token,
+                generation, plane, nextCursor)
             nextCursor = childCursor
             visited = visited + childVisited
         end
@@ -1335,8 +1363,8 @@ function motion.invalidate(root)
 end
 
 -- Recomputes paint/input/F6 transforms only after layout or a clock tick
--- invalidates committed geometry. Matrix and bounds tables retain identity so
--- an active frame updates numbers without recreating five tables per node.
+-- invalidates committed geometry. Motion matrices and all bounds retain
+-- identity; static nodes alias their immutable transform boundary.
 function motion.transformTree(root, diagnosticTargets, options,
         allocationProbe)
     if not root then
@@ -1373,10 +1401,12 @@ function motion.transformTree(root, diagnosticTargets, options,
         for index = 1, survivingRoots do
             local instance = roots[index]
             local node = instance.node
+            local portal = node._portal
             local nextCursor, branchVisited = transformBranch(node,
-                node._portal and IDENTITY or loadBoundary(instance, boundary),
-                root._motionTreeToken, root._motionTransformGeneration,
-                instance._branchPlane, instance._branchPreorderStart)
+                portal and IDENTITY or loadBoundary(instance, boundary),
+                portal and IDENTITY or nil, root._motionTreeToken,
+                root._motionTransformGeneration, instance._branchPlane,
+                instance._branchPreorderStart)
             assert(nextCursor == instance._branchPreorderEnd + 1,
                 "FrogUI committed transform interval ended unexpectedly")
             visited = visited + branchVisited
@@ -1437,8 +1467,8 @@ function motion.transformTree(root, diagnosticTargets, options,
             descendantsSuppressed = 0,
             routingTreeVisits = 0,
         }
-        transformNodeObserved(root, IDENTITY, observer, nil, traversal,
-            0, 0, true)
+        transformNodeObserved(root, IDENTITY, IDENTITY, observer, nil,
+            traversal, 0, 0, true)
         for _, planeState in pairs(observer.planes) do
             observer.lcaCoverage = observer.lcaCoverage
                 + (planeState.lcaCoverage or 0)
@@ -1448,7 +1478,7 @@ function motion.transformTree(root, diagnosticTargets, options,
         observer.path = nil
         observer.planes = nil
     else
-        transformNode(root, IDENTITY, traversal, 0, 0, true)
+        transformNode(root, IDENTITY, IDENTITY, traversal, 0, 0, true)
     end
     root._motionTreeToken = traversal.token
     root._motionTransformGeneration = traversal.generation
