@@ -3,9 +3,9 @@
 
 local element = {}
 
--- One private Host-owned allocation probe may observe source, identity, or
--- tree construction at a time. This is deliberately not FrogUI's public API;
--- the Battle performance harness owns the temporary observer.
+-- One private Host-owned allocation probe may observe source, identity, tree
+-- construction, or the Host pipeline at a time. This is deliberately not
+-- FrogUI's public API; the Battle performance harness owns the observer.
 local allocationProbeOwner
 local sourceAllocationProbe
 local structureAllocationProbe
@@ -18,8 +18,9 @@ function element._attachAllocationProbe(owner, probe)
         "another FrogUI allocation probe is already attached")
     assert(type(probe) == "table"
             and (probe.mode == "source" or probe.mode == "identity"
-                or probe.mode == "structure"),
-        "FrogUI allocation probe mode must be source, identity, or structure")
+                or probe.mode == "structure" or probe.mode == "pipeline"),
+        "FrogUI allocation probe mode must be source, identity, structure, "
+            .. "or pipeline")
     allocationProbeOwner = owner
     sourceAllocationProbe = probe.mode == "source" and probe or nil
     structureAllocationProbe = probe.mode == "structure" and probe or nil

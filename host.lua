@@ -1416,6 +1416,7 @@ local ALLOCATION_PROBE_MODES = {
     source = true,
     identity = true,
     structure = true,
+    pipeline = true,
 }
 
 local function resetAllocationProbe(probe)
@@ -1443,13 +1444,42 @@ local function resetAllocationProbe(probe)
     probe.deferredArrayAllocatedKB = 0
     probe.deferredChildCalls = 0
     probe.deferredChildAllocatedKB = 0
+    probe.pipelineContextCalls = 0
+    probe.pipelineContextAllocatedKB = 0
+    probe.pipelineExpansionCalls = 0
+    probe.pipelineExpansionAllocatedKB = 0
+    probe.pipelineOwnerRenderCalls = 0
+    probe.pipelineOwnerRenderAllocatedKB = 0
+    probe.pipelinePreparationCalls = 0
+    probe.pipelinePreparationAllocatedKB = 0
+    probe.pipelineBookkeepingCalls = 0
+    probe.pipelineBookkeepingAllocatedKB = 0
+    probe.pipelineValidationCalls = 0
+    probe.pipelineValidationAllocatedKB = 0
+    probe.pipelineReconciliationCalls = 0
+    probe.pipelineReconciliationAllocatedKB = 0
+    probe.pipelinePostValidationCalls = 0
+    probe.pipelinePostValidationAllocatedKB = 0
+    probe.pipelinePostResolutionCalls = 0
+    probe.pipelinePostResolutionAllocatedKB = 0
+    probe.pipelineLayoutCalls = 0
+    probe.pipelineLayoutAllocatedKB = 0
+    probe.pipelineArrangementCalls = 0
+    probe.pipelineArrangementAllocatedKB = 0
+    probe.pipelineTransformCalls = 0
+    probe.pipelineTransformAllocatedKB = 0
+    probe.pipelineFinalizationCalls = 0
+    probe.pipelineFinalizationAllocatedKB = 0
+    probe.pipelinePublicationCalls = 0
+    probe.pipelinePublicationAllocatedKB = 0
 end
 
 -- Private, globally exclusive allocation attribution for the Battle harness.
 -- It is intentionally absent from Host options and the public Frog table.
 function host:_attachAllocationProbe(mode)
     assert(ALLOCATION_PROBE_MODES[mode],
-        "FrogUI allocation probe mode must be source, identity, or structure")
+        "FrogUI allocation probe mode must be source, identity, structure, "
+            .. "or pipeline")
     assert(rawget(self, "_allocationProbe") == nil,
         "this FrogUI Host already owns an allocation probe")
     local probe = { mode = mode }
@@ -1481,7 +1511,65 @@ function host:_readAllocationProbe()
         probe.primitiveNodeCalls, probe.primitiveNodeAllocatedKB,
         probe.primitiveChildCalls, probe.primitiveChildAllocatedKB,
         probe.deferredArrayCalls, probe.deferredArrayAllocatedKB,
-        probe.deferredChildCalls, probe.deferredChildAllocatedKB
+        probe.deferredChildCalls, probe.deferredChildAllocatedKB,
+        probe.pipelineContextCalls, probe.pipelineContextAllocatedKB,
+        probe.pipelineExpansionCalls, probe.pipelineExpansionAllocatedKB,
+        probe.pipelineOwnerRenderCalls,
+        probe.pipelineOwnerRenderAllocatedKB,
+        probe.pipelinePreparationCalls,
+        probe.pipelinePreparationAllocatedKB,
+        probe.pipelineBookkeepingCalls,
+        probe.pipelineBookkeepingAllocatedKB,
+        probe.pipelineValidationCalls,
+        probe.pipelineValidationAllocatedKB,
+        probe.pipelineReconciliationCalls,
+        probe.pipelineReconciliationAllocatedKB,
+        probe.pipelinePostValidationCalls,
+        probe.pipelinePostValidationAllocatedKB,
+        probe.pipelinePostResolutionCalls,
+        probe.pipelinePostResolutionAllocatedKB,
+        probe.pipelineLayoutCalls, probe.pipelineLayoutAllocatedKB,
+        probe.pipelineArrangementCalls,
+        probe.pipelineArrangementAllocatedKB,
+        probe.pipelineTransformCalls, probe.pipelineTransformAllocatedKB,
+        probe.pipelineFinalizationCalls,
+        probe.pipelineFinalizationAllocatedKB,
+        probe.pipelinePublicationCalls,
+        probe.pipelinePublicationAllocatedKB
+end
+
+-- Pipeline reads stay separate from the historical source/identity/structure
+-- tuple so the stopped-GC harness can name this parent/child boundary clearly.
+function host:_readPipelineAllocationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no pipeline allocation probe to read")
+    return probe.mode,
+        probe.semanticRenderCalls, probe.semanticRenderAllocatedKB,
+        probe.pipelineContextCalls, probe.pipelineContextAllocatedKB,
+        probe.pipelineExpansionCalls, probe.pipelineExpansionAllocatedKB,
+        probe.pipelineOwnerRenderCalls,
+        probe.pipelineOwnerRenderAllocatedKB,
+        probe.pipelinePreparationCalls,
+        probe.pipelinePreparationAllocatedKB,
+        probe.pipelineBookkeepingCalls,
+        probe.pipelineBookkeepingAllocatedKB,
+        probe.pipelineValidationCalls,
+        probe.pipelineValidationAllocatedKB,
+        probe.pipelineReconciliationCalls,
+        probe.pipelineReconciliationAllocatedKB,
+        probe.pipelinePostValidationCalls,
+        probe.pipelinePostValidationAllocatedKB,
+        probe.pipelinePostResolutionCalls,
+        probe.pipelinePostResolutionAllocatedKB,
+        probe.pipelineLayoutCalls, probe.pipelineLayoutAllocatedKB,
+        probe.pipelineArrangementCalls,
+        probe.pipelineArrangementAllocatedKB,
+        probe.pipelineTransformCalls, probe.pipelineTransformAllocatedKB,
+        probe.pipelineFinalizationCalls,
+        probe.pipelineFinalizationAllocatedKB,
+        probe.pipelinePublicationCalls,
+        probe.pipelinePublicationAllocatedKB
 end
 
 function host:_detachAllocationProbe()
@@ -1952,6 +2040,14 @@ local function measureSemanticRender(probe, callback, ...)
     return result
 end
 
+-- Adds one stopped-GC interval to a preallocated private pipeline counter.
+-- Callers guard this helper so ordinary Hosts never enter the probe path.
+local function recordPipelineAllocation(probe, callsField, kbField, before)
+    local after = collectgarbage("count")
+    probe[callsField] = probe[callsField] + 1
+    probe[kbField] = probe[kbField] + after - before
+end
+
 -- Reconciles one semantic render owner's positional hooks. Owners are keyed by
 -- logical component/actor/view identity, independent of primitive layout.
 function host:_withOwnerRender(label, token, logicalPath, context, callback, ...)
@@ -1960,6 +2056,9 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
     assert(not context.hookOwners[logicalPath],
         "duplicate FrogUI render-owner identity " .. logicalPath)
     local profiler = context.diagnostics
+    local pipelineProbe = context.pipelineAllocationProbe
+    local pipelineBefore = pipelineProbe
+        and collectgarbage("count") or nil
     local previous = self._hookOwners[logicalPath]
     assert(not previous or previous.token == token,
         label .. " replaced a retained hook owner with a different token")
@@ -1988,10 +2087,12 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
         results = {
             pcall(self._withRender, self, label, observedCallback, ...),
         }
-    elseif context.structureAllocationProbe then
+    elseif context.structureAllocationProbe or pipelineProbe then
+        local semanticProbe = context.structureAllocationProbe
+            or pipelineProbe
         results = {
             pcall(self._withRender, self, label, measureSemanticRender,
-                context.structureAllocationProbe, callback, ...),
+                semanticProbe, callback, ...),
         }
     else
         -- Preserve the ordinary render path exactly when diagnostics are off.
@@ -2016,6 +2117,11 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
         profiler:ownerRender(token.kind .. ":" .. label, renderElapsed)
     end
     table.remove(results, 1)
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelineOwnerRenderCalls", "pipelineOwnerRenderAllocatedKB",
+            pipelineBefore)
+    end
     return unpack(results)
 end
 
@@ -2058,6 +2164,9 @@ end
 function host:_registerActor(descriptor, owner, path, descendantPath, context,
         logicalPath)
     local profiler = context.diagnostics
+    local pipelineProbe = context.pipelineAllocationProbe
+    local pipelineBefore = pipelineProbe
+        and collectgarbage("count") or nil
     local bookkeepingStarted = profiler and profiler:start() or nil
     assert((context.previewDepth or 0) == 0,
         "DragSource preview must be stateless presentation")
@@ -2067,6 +2176,12 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
     if profiler then
         profiler:finish("semanticBookkeeping", bookkeepingStarted)
     end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
+            pipelineBefore)
+    end
+    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     local preparationStarted = profiler and profiler:start() or nil
     local props = shallowCopy(descriptor.props)
     props.children = descriptor.children
@@ -2080,6 +2195,12 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
     if profiler then
         profiler:finish("semanticPreparation", preparationStarted)
     end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelinePreparationCalls", "pipelinePreparationAllocatedKB",
+            pipelineBefore)
+    end
+    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     bookkeepingStarted = profiler and profiler:start() or nil
     local instance = {
         token = token,
@@ -2119,22 +2240,39 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
     if profiler then
         profiler:finish("semanticBookkeeping", bookkeepingStarted)
     end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
+            pipelineBefore)
+    end
 
     -- Render receives one detached state snapshot. Mutating it is ignored;
     -- semantic state changes belong to an action/reaction return value.
+    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     preparationStarted = profiler and profiler:start() or nil
     local stateForRender = deepCopy(instance.state)
     local actorSend = self:_actorSend(instance)
     if profiler then
         profiler:finish("semanticPreparation", preparationStarted)
     end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelinePreparationCalls", "pipelinePreparationAllocatedKB",
+            pipelineBefore)
+    end
     local rendered = self:_withOwnerRender(token.name, token, logicalPath,
         context, token.definition.render, props, stateForRender,
         actorSend)
+    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     bookkeepingStarted = profiler and profiler:start() or nil
     if rendered == nil or rendered == false then
         if profiler then
             profiler:finish("semanticBookkeeping", bookkeepingStarted)
+        end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineBookkeepingCalls",
+                "pipelineBookkeepingAllocatedKB", pipelineBefore)
         end
         return nil
     end
@@ -2144,9 +2282,15 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
     if profiler then
         profiler:finish("semanticBookkeeping", bookkeepingStarted)
     end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
+            pipelineBefore)
+    end
     local resolved = self:_resolve(rendered, token.name, outputPath, path, context,
         logicalOutputPath(logicalPath, rendered, identityProbe))
     if resolved then
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         bookkeepingStarted = profiler and profiler:start() or nil
         annotateProcesses(resolved, context.hookOwners[logicalPath],
             token.name, logicalPath)
@@ -2156,11 +2300,23 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
         if profiler then
             profiler:finish("semanticBookkeeping", bookkeepingStarted)
         end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineBookkeepingCalls",
+                "pipelineBookkeepingAllocatedKB", pipelineBefore)
+        end
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         preparationStarted = profiler and profiler:start() or nil
         local inspectedState = deepCopy(instance.state)
         if profiler then
             profiler:finish("semanticPreparation", preparationStarted)
         end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelinePreparationCalls",
+                "pipelinePreparationAllocatedKB", pipelineBefore)
+        end
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         bookkeepingStarted = profiler and profiler:start() or nil
         resolved.actor = {
             name = token.name,
@@ -2171,6 +2327,11 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
         if profiler then
             profiler:finish("semanticBookkeeping", bookkeepingStarted)
         end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineBookkeepingCalls",
+                "pipelineBookkeepingAllocatedKB", pipelineBefore)
+        end
     end
     return resolved
 end
@@ -2178,6 +2339,9 @@ end
 function host:_resolveView(descriptor, owner, path, descendantPath, context,
         logicalPath)
     local profiler = context.diagnostics
+    local pipelineProbe = context.pipelineAllocationProbe
+    local pipelineBefore = pipelineProbe
+        and collectgarbage("count") or nil
     local bookkeepingStarted = profiler and profiler:start() or nil
     assert((context.previewDepth or 0) == 0,
         "DragSource preview cannot mount an actor view")
@@ -2185,12 +2349,24 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
     if profiler then
         profiler:finish("semanticBookkeeping", bookkeepingStarted)
     end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
+            pipelineBefore)
+    end
+    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     local preparationStarted = profiler and profiler:start() or nil
     local props = shallowCopy(descriptor.props)
     props.children = descriptor.children
     if profiler then
         profiler:finish("semanticPreparation", preparationStarted)
     end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelinePreparationCalls", "pipelinePreparationAllocatedKB",
+            pipelineBefore)
+    end
+    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     bookkeepingStarted = profiler and profiler:start() or nil
     local address = props.target
     assert(Message.isAddress(address), token.name .. " target prop must come from Actor:address")
@@ -2210,20 +2386,37 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
     if profiler then
         profiler:finish("semanticBookkeeping", bookkeepingStarted)
     end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
+            pipelineBefore)
+    end
     -- Views observe the same detached render snapshot as their actor owner.
+    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     preparationStarted = profiler and profiler:start() or nil
     local stateForRender = instance and deepCopy(instance.state) or nil
     local addressSend = self:_addressSend(address)
     if profiler then
         profiler:finish("semanticPreparation", preparationStarted)
     end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelinePreparationCalls", "pipelinePreparationAllocatedKB",
+            pipelineBefore)
+    end
     local rendered = self:_withOwnerRender(token.name, token, logicalPath,
         context, token.render, props, stateForRender,
         addressSend, status)
+    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     bookkeepingStarted = profiler and profiler:start() or nil
     if rendered == nil or rendered == false then
         if profiler then
             profiler:finish("semanticBookkeeping", bookkeepingStarted)
+        end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineBookkeepingCalls",
+                "pipelineBookkeepingAllocatedKB", pipelineBefore)
         end
         return nil
     end
@@ -2233,10 +2426,16 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
     if profiler then
         profiler:finish("semanticBookkeeping", bookkeepingStarted)
     end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
+            pipelineBefore)
+    end
     local resolved = self:_resolve(rendered, token.name, outputPath,
         descendantPath or path, context,
         logicalOutputPath(logicalPath, rendered, identityProbe))
     if resolved then
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         bookkeepingStarted = profiler and profiler:start() or nil
         annotateProcesses(resolved, context.hookOwners[logicalPath],
             token.name, logicalPath)
@@ -2249,6 +2448,11 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
         if profiler then
             profiler:finish("semanticBookkeeping", bookkeepingStarted)
         end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineBookkeepingCalls",
+                "pipelineBookkeepingAllocatedKB", pipelineBefore)
+        end
     end
     return resolved
 end
@@ -2257,6 +2461,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         logicalPath)
     local token = descriptor.token
     local profiler = context.diagnostics
+    local pipelineProbe = context.pipelineAllocationProbe
     if profiler then
         context.descriptorTotal = context.descriptorTotal + 1
         context.identityBytes = context.identityBytes + #path
@@ -2268,6 +2473,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     end
     local semanticStarted = token.kind ~= "primitive" and profiler
         and profiler:start() or nil
+    local pipelineBefore = token.kind ~= "primitive" and pipelineProbe
+        and collectgarbage("count") or nil
     if token.kind ~= "primitive" then
         assert(descriptor.props.ref == nil,
             token.name .. " is a semantic " .. token.kind
@@ -2289,19 +2496,36 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     if semanticStarted then
         profiler:finish("semanticBookkeeping", semanticStarted)
     end
+    if pipelineBefore then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
+            pipelineBefore)
+    end
     if token.kind == "component" then
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         local preparationStarted = profiler and profiler:start() or nil
         local props = shallowCopy(descriptor.props)
         props.children = descriptor.children
         if profiler then
             profiler:finish("semanticPreparation", preparationStarted)
         end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelinePreparationCalls",
+                "pipelinePreparationAllocatedKB", pipelineBefore)
+        end
         local rendered = self:_withOwnerRender(token.name, token, logicalPath,
             context, token.render, props)
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         local bookkeepingStarted = profiler and profiler:start() or nil
         if rendered == nil or rendered == false then
             if profiler then
                 profiler:finish("semanticBookkeeping", bookkeepingStarted)
+            end
+            if pipelineProbe then
+                recordPipelineAllocation(pipelineProbe,
+                    "pipelineBookkeepingCalls",
+                    "pipelineBookkeepingAllocatedKB", pipelineBefore)
             end
             return nil
         end
@@ -2313,8 +2537,14 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         if profiler then
             profiler:finish("semanticBookkeeping", bookkeepingStarted)
         end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineBookkeepingCalls",
+                "pipelineBookkeepingAllocatedKB", pipelineBefore)
+        end
         local resolved = self:_resolve(rendered, token.name, outputPath, path,
             context, logicalOutputPath(logicalPath, rendered, identityProbe))
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         bookkeepingStarted = profiler and profiler:start() or nil
         if resolved then
             annotateProcesses(resolved, context.hookOwners[logicalPath],
@@ -2324,13 +2554,20 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         if profiler then
             profiler:finish("semanticBookkeeping", bookkeepingStarted)
         end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineBookkeepingCalls",
+                "pipelineBookkeepingAllocatedKB", pipelineBefore)
+        end
         return resolved
     elseif token.kind == "actor" then
         return self:_registerActor(descriptor, owner, path, descendantPath,
             context, logicalPath)
     elseif token.kind == "view" then
         if not context.addresses[descriptor.props.target] then
-            return {
+            pipelineBefore = pipelineProbe
+                and collectgarbage("count") or nil
+            local deferred = {
                 __frogDeferredView = true,
                 descriptor = descriptor,
                 owner = owner,
@@ -2338,11 +2575,18 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 descendantPath = descendantPath,
                 logicalPath = logicalPath,
             }
+            if pipelineProbe then
+                recordPipelineAllocation(pipelineProbe,
+                    "pipelineBookkeepingCalls",
+                    "pipelineBookkeepingAllocatedKB", pipelineBefore)
+            end
+            return deferred
         end
         return self:_resolveView(descriptor, owner, path, descendantPath,
             context, logicalPath)
     end
 
+    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     local primitiveStarted = profiler and profiler:start() or nil
     validatePrimitive(token.name, descriptor.children)
     validatePrimitiveProps(self, token.name, descriptor.props)
@@ -2362,6 +2606,11 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     end
     if profiler then
         profiler:finish("primitiveValidation", primitiveStarted)
+    end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelineValidationCalls", "pipelineValidationAllocatedKB",
+            pipelineBefore)
     end
     local materializationStarted = profiler and profiler:start() or nil
     local structureProbe = context.structureAllocationProbe
@@ -2402,6 +2651,12 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     if profiler then
         profiler:finish("primitiveMaterialization", materializationStarted)
     end
+    local reconciles = token.name == "Scroll" or token.name == "RadialDial"
+        or token.name == "Motion" or descriptor.props.juice
+        or descriptor.props.reactions or token.name == "Projectile"
+        or token.name == "Flipbook"
+    pipelineBefore = reconciles and pipelineProbe
+        and collectgarbage("count") or nil
     if token.name == "Scroll" then
         local started = profiler and profiler:start() or nil
         local instance = Interaction.reconcileScroll(
@@ -2446,6 +2701,11 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             profiler:finish("effectReconciliation", started)
         end
     end
+    if pipelineBefore then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelineReconciliationCalls",
+            "pipelineReconciliationAllocatedKB", pipelineBefore)
+    end
     local childrenPath = descendantPath or path
     local identityProbe = context.identityAllocationProbe
     for index, child in ipairs(descriptor.children) do
@@ -2467,6 +2727,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             end
         end
     end
+    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     local validationStarted = profiler and profiler:start() or nil
     if token.name == "EffectLayer" then
         for _, child in ipairs(node.children) do
@@ -2516,6 +2777,11 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     end
     if profiler then
         profiler:finish("primitivePostValidation", validationStarted)
+    end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelinePostValidationCalls",
+            "pipelinePostValidationAllocatedKB", pipelineBefore)
     end
     if token.name == "DragSource" then
         context.previewDepth = (context.previewDepth or 0) + 1
@@ -2909,6 +3175,10 @@ end
 
 function host:_build(root)
     local feedbackMark = #self._feedbackQueue
+    local allocationProbe = rawget(self, "_allocationProbe")
+    local pipelineProbe = allocationProbe
+        and allocationProbe.mode == "pipeline" and allocationProbe or nil
+    local contextBefore = pipelineProbe and collectgarbage("count") or nil
     local context = {
         actors = {},
         addresses = {},
@@ -2930,11 +3200,19 @@ function host:_build(root)
         nextReceiverOrder = 1,
         nextEffectOrder = 1,
     }
-    local allocationProbe = rawget(self, "_allocationProbe")
+    if pipelineProbe then
+        local after = collectgarbage("count")
+        pipelineProbe.pipelineContextCalls =
+            pipelineProbe.pipelineContextCalls + 1
+        pipelineProbe.pipelineContextAllocatedKB =
+            pipelineProbe.pipelineContextAllocatedKB + after - contextBefore
+    end
     if allocationProbe and allocationProbe.mode == "identity" then
         context.identityAllocationProbe = allocationProbe
     elseif allocationProbe and allocationProbe.mode == "structure" then
         context.structureAllocationProbe = allocationProbe
+    elseif pipelineProbe then
+        context.pipelineAllocationProbe = pipelineProbe
     end
     if self._diagnostics.enabled then
         context.diagnostics = self._diagnostics
@@ -2947,6 +3225,8 @@ function host:_build(root)
     end
     local function buildCandidate()
         local expansionStarted = self._diagnostics:start()
+        local pipelineBefore = pipelineProbe
+            and collectgarbage("count") or nil
         local identityProbe = context.identityAllocationProbe
         local rootPath = childPath("root", root, 1, identityProbe)
         local rootLogicalPath = logicalChildPath(
@@ -2955,6 +3235,15 @@ function host:_build(root)
             rootLogicalPath)
         candidate = self:_resolveDeferred(candidate, context)
         assert(candidate, "Host root component returned nil")
+        if pipelineProbe then
+            local after = collectgarbage("count")
+            pipelineProbe.pipelineExpansionCalls =
+                pipelineProbe.pipelineExpansionCalls + 1
+            pipelineProbe.pipelineExpansionAllocatedKB =
+                pipelineProbe.pipelineExpansionAllocatedKB
+                    + after - pipelineBefore
+        end
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         local ownershipStarted = self._diagnostics:start()
         validateEffectOwnership(candidate, false)
         self._diagnostics:finish("effectOwnership", ownershipStarted)
@@ -2977,10 +3266,28 @@ function host:_build(root)
             context.diagnostics:finish("eventOrdering", orderingStarted)
         end
         self._diagnostics:finish("componentExpansion", expansionStarted)
+        if pipelineProbe then
+            local after = collectgarbage("count")
+            pipelineProbe.pipelinePostResolutionCalls =
+                pipelineProbe.pipelinePostResolutionCalls + 1
+            pipelineProbe.pipelinePostResolutionAllocatedKB =
+                pipelineProbe.pipelinePostResolutionAllocatedKB
+                    + after - pipelineBefore
+        end
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         local layoutStarted = self._diagnostics:start()
         candidate = Layout.run(candidate,
             self._viewport.width, self._viewport.height, self)
         self._diagnostics:finish("layout", layoutStarted)
+        if pipelineProbe then
+            local after = collectgarbage("count")
+            pipelineProbe.pipelineLayoutCalls =
+                pipelineProbe.pipelineLayoutCalls + 1
+            pipelineProbe.pipelineLayoutAllocatedKB =
+                pipelineProbe.pipelineLayoutAllocatedKB
+                    + after - pipelineBefore
+        end
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         annotateCanvasBranches(candidate)
         for handle, node in pairs(context.refAttachments) do
             context.refRectangles[handle] = {
@@ -2991,10 +3298,36 @@ function host:_build(root)
             }
         end
         Effect.arrangeAll(context.effects, context.refRectangles, self)
+        if pipelineProbe then
+            local after = collectgarbage("count")
+            pipelineProbe.pipelineArrangementCalls =
+                pipelineProbe.pipelineArrangementCalls + 1
+            pipelineProbe.pipelineArrangementAllocatedKB =
+                pipelineProbe.pipelineArrangementAllocatedKB
+                    + after - pipelineBefore
+        end
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         self:_transformTree(candidate, "candidateTransform")
+        if pipelineProbe then
+            local after = collectgarbage("count")
+            pipelineProbe.pipelineTransformCalls =
+                pipelineProbe.pipelineTransformCalls + 1
+            pipelineProbe.pipelineTransformAllocatedKB =
+                pipelineProbe.pipelineTransformAllocatedKB
+                    + after - pipelineBefore
+        end
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         Effect.updateBounds(context.effects, self)
         context.modals, context.chrome = Interaction.planesFromTree(candidate)
         context.modal = context.modals[#context.modals]
+        if pipelineProbe then
+            local after = collectgarbage("count")
+            pipelineProbe.pipelineFinalizationCalls =
+                pipelineProbe.pipelineFinalizationCalls + 1
+            pipelineProbe.pipelineFinalizationAllocatedKB =
+                pipelineProbe.pipelineFinalizationAllocatedKB
+                    + after - pipelineBefore
+        end
         if self._diagnostics.enabled then
             local observerStarted = self._diagnostics:start()
             publishDiagnosticStructure(self, candidate, context)
@@ -3040,6 +3373,11 @@ function host:render(root)
         self._diagnostics:finish("external", externalStarted)
         error(candidate, 0)
     end
+    local allocationProbe = rawget(self, "_allocationProbe")
+    local pipelineProbe = allocationProbe
+        and allocationProbe.mode == "pipeline" and allocationProbe or nil
+    local publicationBefore = pipelineProbe
+        and collectgarbage("count") or nil
     local previous = {
         actors = self._actors,
         modals = self._modals or {},
@@ -3092,6 +3430,14 @@ function host:render(root)
         committed, commitError = pcall(commit)
     end
     self._diagnostics:finish("commit", commitStarted)
+    if pipelineProbe then
+        local after = collectgarbage("count")
+        pipelineProbe.pipelinePublicationCalls =
+            pipelineProbe.pipelinePublicationCalls + 1
+        pipelineProbe.pipelinePublicationAllocatedKB =
+            pipelineProbe.pipelinePublicationAllocatedKB
+                + after - publicationBefore
+    end
     if not committed then
         local cleanupError
         if not published then
