@@ -3,6 +3,40 @@
 
 local layout = {}
 
+local function recordAllocation(probe, callsField, kbField, before, created)
+    local after = collectgarbage("count")
+    if created then probe[callsField] = probe[callsField] + created end
+    probe[kbField] = probe[kbField] + after - before
+end
+
+local function sessionProbe(session)
+    return session and session._allocationProbe or nil
+end
+
+local function recordPaddingAllocation(probe, before, kind)
+    local allocatedKB = collectgarbage("count") - before
+    probe.pipelineLayoutPaddingCreated =
+        probe.pipelineLayoutPaddingCreated + 1
+    probe.pipelineLayoutPaddingAllocatedKB =
+        probe.pipelineLayoutPaddingAllocatedKB + allocatedKB
+    if kind == "zero" then
+        probe.pipelineLayoutZeroPaddingCreated =
+            probe.pipelineLayoutZeroPaddingCreated + 1
+        probe.pipelineLayoutZeroPaddingAllocatedKB =
+            probe.pipelineLayoutZeroPaddingAllocatedKB + allocatedKB
+    elseif kind == "uniform" then
+        probe.pipelineLayoutUniformPaddingCreated =
+            probe.pipelineLayoutUniformPaddingCreated + 1
+        probe.pipelineLayoutUniformPaddingAllocatedKB =
+            probe.pipelineLayoutUniformPaddingAllocatedKB + allocatedKB
+    else
+        probe.pipelineLayoutSidedPaddingCreated =
+            probe.pipelineLayoutSidedPaddingCreated + 1
+        probe.pipelineLayoutSidedPaddingAllocatedKB =
+            probe.pipelineLayoutSidedPaddingAllocatedKB + allocatedKB
+    end
+end
+
 local function clamp(value, low, high)
     if value < low then return low end
     if value > high then return high end
@@ -20,18 +54,31 @@ local function resolveSize(value, available)
     return nil
 end
 
-local function padding(value)
+local function padding(value, probe)
+    local before = probe and collectgarbage("count") or nil
+    local kind = (value == nil or value == 0) and "zero"
+        or type(value) == "number" and "uniform" or "sided"
     if value == nil then value = 0 end
     if type(value) == "number" then
-        return { left = value, right = value, top = value, bottom = value }
+        local result = {
+            left = value, right = value, top = value, bottom = value,
+        }
+        if probe then
+            recordPaddingAllocation(probe, before, kind)
+        end
+        return result
     end
     assert(type(value) == "table", "padding must be a number or side table")
-    return {
+    local result = {
         left = value.left or 0,
         right = value.right or 0,
         top = value.top or 0,
         bottom = value.bottom or 0,
     }
+    if probe then
+        recordPaddingAllocation(probe, before, kind)
+    end
+    return result
 end
 
 local function explicit(node, maxWidth, maxHeight)
@@ -102,7 +149,8 @@ local function imageSize(node, host)
     return 48, 48
 end
 
-local function wrappedLines(node, availableWidth)
+local function wrappedLines(node, availableWidth, probe)
+    local before = probe and collectgarbage("count") or nil
     local gap = node.props.gap or 0
     local lines = {}
     local line = { children = {}, width = 0, height = 0 }
@@ -120,10 +168,19 @@ local function wrappedLines(node, availableWidth)
         line.height = math.max(line.height, child.measuredHeight)
     end
     if #line.children > 0 then lines[#lines + 1] = line end
+    if probe then
+        recordAllocation(probe, "pipelineLayoutWrappedLinesCalls",
+            "pipelineLayoutWrappedLinesAllocatedKB", before, 1)
+    end
     return lines
 end
 
 local function measure(node, maxWidth, maxHeight, host, session)
+    local allocationProbe = sessionProbe(session)
+    if allocationProbe then
+        allocationProbe.pipelineLayoutMeasureNodes =
+            allocationProbe.pipelineLayoutMeasureNodes + 1
+    end
     maxWidth = math.max(0, maxWidth or math.huge)
     maxHeight = math.max(0, maxHeight or math.huge)
     if session and node._measureSession == session
@@ -132,9 +189,13 @@ local function measure(node, maxWidth, maxHeight, host, session)
             and node._measurePortalLayout == (node._portalLayout == true) then
         -- The immediately preceding completed measurement left its padding,
         -- resolved font/axes, and dimensions on this fresh candidate node.
+        if allocationProbe then
+            allocationProbe.pipelineLayoutMeasureReuseHits =
+                allocationProbe.pipelineLayoutMeasureReuseHits + 1
+        end
         return node.measuredWidth, node.measuredHeight
     end
-    local pad = padding(node.props.padding)
+    local pad = padding(node.props.padding, allocationProbe)
     node._padding = pad
     local width, height = explicit(node, maxWidth, maxHeight)
     local innerMaxWidth = math.max(0, (width or maxWidth) - pad.left - pad.right)
@@ -145,11 +206,22 @@ local function measure(node, maxWidth, maxHeight, host, session)
             and not node._portalLayout then
         naturalWidth, naturalHeight = 0, 0
     elseif node.type == "Text" or node.type == "PopupText" then
-        naturalWidth, naturalHeight = textSize(node, innerMaxWidth, innerMaxHeight, host)
+        local before = allocationProbe and collectgarbage("count") or nil
+        naturalWidth, naturalHeight = textSize(node, innerMaxWidth,
+            innerMaxHeight, host)
+        if allocationProbe then
+            recordAllocation(allocationProbe, "pipelineLayoutTextCalls",
+                "pipelineLayoutTextAllocatedKB", before, 1)
+        end
     elseif node.type == "Image" or node.type == "SpriteSheet"
             or node.type == "TiledImage"
             or node.type == "Icon" then
+        local before = allocationProbe and collectgarbage("count") or nil
         naturalWidth, naturalHeight = imageSize(node, host)
+        if allocationProbe then
+            recordAllocation(allocationProbe, "pipelineLayoutImageCalls",
+                "pipelineLayoutImageAllocatedKB", before, 1)
+        end
     elseif node.type == "Canvas" then
         -- Canvas is explicit-size; drawing cannot participate in measurement.
         naturalWidth, naturalHeight = 0, 0
@@ -166,7 +238,7 @@ local function measure(node, maxWidth, maxHeight, host, session)
             cross = math.max(cross, childCross)
         end
         if node.type == "Row" and node.props.wrap then
-            local lines = wrappedLines(node, innerMaxWidth)
+            local lines = wrappedLines(node, innerMaxWidth, allocationProbe)
             naturalWidth, naturalHeight = 0, 0
             for index, line in ipairs(lines) do
                 naturalWidth = math.max(naturalWidth, line.width)
@@ -261,11 +333,18 @@ end
 -- Places every keyed dial option around the Host-owned visual angle. Children
 -- move along the track but keep their own upright paint orientation.
 local function arrangeRadialDial(node, host, session)
+    local allocationProbe = sessionProbe(session)
     local dial = assert(node._radialDial, "unprepared Frog.RadialDial")
     local centerX = node.contentX + node.contentWidth / 2
     local centerY = node.contentY + node.contentHeight / 2
     local maximum = math.min(node.width, node.height) / 2
+    local before = allocationProbe and collectgarbage("count") or nil
     local measured = {}
+    if allocationProbe then
+        recordAllocation(allocationProbe,
+            "pipelineLayoutRadialScratchCreated",
+            "pipelineLayoutRadialScratchAllocatedKB", before, 1)
+    end
     local largestHalfDiagonal = 0
     for index, child in ipairs(node.children) do
         measure(child, node.contentWidth, node.contentHeight, host, session)
@@ -273,7 +352,13 @@ local function arrangeRadialDial(node, host, session)
             or child.measuredWidth
         local height = resolveSize(child.props.height, node.contentHeight)
             or child.measuredHeight
+        before = allocationProbe and collectgarbage("count") or nil
         measured[index] = { width = width, height = height }
+        if allocationProbe then
+            recordAllocation(allocationProbe,
+                "pipelineLayoutRadialScratchCreated",
+                "pipelineLayoutRadialScratchAllocatedKB", before, 1)
+        end
         largestHalfDiagonal = math.max(largestHalfDiagonal,
             math.sqrt((width / 2) ^ 2 + (height / 2) ^ 2))
     end
@@ -288,6 +373,7 @@ local function arrangeRadialDial(node, host, session)
         "RadialDial trackRadius must keep every option child inside the"
             .. " arranged circular surface")
     dial.trackRadius = trackRadius
+    before = allocationProbe and collectgarbage("count") or nil
     local geometry = { string.format("%.17g", trackRadius) }
     for index, size in ipairs(measured) do
         geometry[#geometry + 1] = type(node.children[index].key)
@@ -296,6 +382,11 @@ local function arrangeRadialDial(node, host, session)
         geometry[#geometry + 1] = string.format("%.17g", size.height)
     end
     dial.geometrySignature = table.concat(geometry, ":")
+    if allocationProbe then
+        recordAllocation(allocationProbe,
+            "pipelineLayoutRadialScratchCreated",
+            "pipelineLayoutRadialScratchAllocatedKB", before, 1)
+    end
     local angle = dial.previewAngle or dial.angle
     local step = math.pi * 2 / #node.children
     for index, child in ipairs(node.children) do
@@ -321,11 +412,12 @@ local function alignedStart(align, start, available, size)
 end
 
 local function arrangeWrappedRow(node, host, session)
+    local allocationProbe = sessionProbe(session)
     local gap = node.props.gap or 0
     for _, child in ipairs(node.children) do
         measure(child, node.contentWidth, node.contentHeight, host, session)
     end
-    local lines = wrappedLines(node, node.contentWidth)
+    local lines = wrappedLines(node, node.contentWidth, allocationProbe)
     local y = node.contentY
     for _, line in ipairs(lines) do
         local fixed, totalGrow = 0, 0
@@ -348,7 +440,13 @@ local function arrangeWrappedRow(node, host, session)
             end
         end
         local x = node.contentX + offset
+        local before = allocationProbe and collectgarbage("count") or nil
         local allocations = {}
+        if allocationProbe then
+            recordAllocation(allocationProbe,
+                "pipelineLayoutWrappedAllocationCreated",
+                "pipelineLayoutWrappedAllocationAllocatedKB", before, 1)
+        end
         local arrangedHeight = 0
         for index, child in ipairs(line.children) do
             local grow = child.props.grow or 0
@@ -500,6 +598,11 @@ function layout.arrangeScroll(node, host)
 end
 
 function layout.arrange(node, x, y, width, height, host, session)
+    local allocationProbe = sessionProbe(session)
+    if allocationProbe then
+        allocationProbe.pipelineLayoutArrangeNodes =
+            allocationProbe.pipelineLayoutArrangeNodes + 1
+    end
     -- Measuring a descendant under its final allocation can change state that
     -- contributed to this ancestor's natural size. Retire the node's own
     -- last-entry stamp before arranging it; descendant stamps remain eligible
@@ -516,7 +619,7 @@ function layout.arrange(node, x, y, width, height, host, session)
     end
     node.x, node.y = x, y
     node.width, node.height = math.max(0, width), math.max(0, height)
-    local pad = node._padding or padding(node.props.padding)
+    local pad = node._padding or padding(node.props.padding, allocationProbe)
     node.contentX = x + pad.left
     node.contentY = y + pad.top
     node.contentWidth = math.max(0, width - pad.left - pad.right)
@@ -526,16 +629,36 @@ function layout.arrange(node, x, y, width, height, host, session)
             and not node._portalLayout then return end
 
     if node.type == "Row" and node.props.wrap then
+        if allocationProbe then
+            allocationProbe.pipelineLayoutWrappedRowNodes =
+                allocationProbe.pipelineLayoutWrappedRowNodes + 1
+        end
         arrangeWrappedRow(node, host, session)
     elseif node.type == "Row" then
+        if allocationProbe then
+            allocationProbe.pipelineLayoutFlowNodes =
+                allocationProbe.pipelineLayoutFlowNodes + 1
+        end
         arrangeFlow(node, true, host, session)
     elseif node.type == "Column" then
+        if allocationProbe then
+            allocationProbe.pipelineLayoutFlowNodes =
+                allocationProbe.pipelineLayoutFlowNodes + 1
+        end
         arrangeFlow(node, false, host, session)
     elseif node.type == "Overlay" then
+        if allocationProbe then
+            allocationProbe.pipelineLayoutOverlayNodes =
+                allocationProbe.pipelineLayoutOverlayNodes + 1
+        end
         for _, child in ipairs(node.children) do
             childBox(node, child, host, session)
         end
     elseif node.type == "EffectLayer" then
+        if allocationProbe then
+            allocationProbe.pipelineLayoutEffectLayerNodes =
+                allocationProbe.pipelineLayoutEffectLayerNodes + 1
+        end
         for _, child in ipairs(node.children) do
             if child.type == "PopupText" then
                 measure(child, node.contentWidth, node.contentHeight, host, session)
@@ -560,31 +683,60 @@ function layout.arrange(node, x, y, width, height, host, session)
             else
                 layout.arrange(child, node.contentX, node.contentY,
                     node.contentWidth, node.contentHeight, host, session)
+                local before = allocationProbe
+                    and collectgarbage("count") or nil
                 child._effectLayerRect = {
                     x = node.contentX,
                     y = node.contentY,
                     width = node.contentWidth,
                     height = node.contentHeight,
                 }
+                if allocationProbe then
+                    recordAllocation(allocationProbe,
+                        "pipelineLayoutEffectRectCreated",
+                        "pipelineLayoutEffectRectAllocatedKB", before, 1)
+                end
             end
         end
     elseif node.type == "RadialDial" then
+        if allocationProbe then
+            allocationProbe.pipelineLayoutRadialNodes =
+                allocationProbe.pipelineLayoutRadialNodes + 1
+        end
         arrangeRadialDial(node, host, session)
     elseif node.type == "Scroll" then
+        if allocationProbe then
+            allocationProbe.pipelineLayoutScrollNodes =
+                allocationProbe.pipelineLayoutScrollNodes + 1
+        end
         arrangeScroll(node, host, session)
     elseif node.children[1] then
+        if allocationProbe then
+            allocationProbe.pipelineLayoutWrapperNodes =
+                allocationProbe.pipelineLayoutWrapperNodes + 1
+        end
         childBox(node, node.children[1], host, session)
     end
 end
 
 local function arrangePortal(node, width, height, host, session)
+    local allocationProbe = sessionProbe(session)
+    if allocationProbe then
+        allocationProbe.pipelineLayoutPortalNodes =
+            allocationProbe.pipelineLayoutPortalNodes + 1
+    end
     node._portal, node._portalLayout = true, true
-    node._padding = padding(node.props.padding)
+    node._padding = padding(node.props.padding, allocationProbe)
     layout.arrange(node, 0, 0, width, height, host, session)
     node._portalLayout = nil
 end
 
 local function prepareDetached(node, maxWidth, maxHeight, host, session)
+    local allocationProbe = sessionProbe(session)
+    if allocationProbe then
+        allocationProbe.pipelineLayoutDetachedNodes =
+            allocationProbe.pipelineLayoutDetachedNodes + 1
+    end
     measure(node, maxWidth, maxHeight, host, session)
     local width = resolveSize(node.props.width, maxWidth) or node.measuredWidth
     local height = resolveSize(node.props.height, maxHeight) or node.measuredHeight
@@ -609,17 +761,37 @@ local function preparePlanes(node, width, height, host, session)
     end
 end
 
-function layout.run(root, width, height, host)
+function layout.run(root, width, height, host, allocationProbe)
     -- One opaque token scopes last-entry reuse to this fresh candidate, exact
     -- normalized constraints, and portal mode. Public retained arrangement
     -- supplies no token, so Scroll/RadialDial updates always perform ordinary
     -- measurement and clear any obsolete candidate stamp while arranging.
-    local session = {}
+    local before = allocationProbe and collectgarbage("count") or nil
+    local session = { _allocationProbe = allocationProbe }
+    if allocationProbe then
+        recordAllocation(allocationProbe, "pipelineLayoutSessionCreated",
+            "pipelineLayoutSessionAllocatedKB", before, 1)
+    end
+    before = allocationProbe and collectgarbage("count") or nil
     measure(root, width, height, host, session)
+    if allocationProbe then
+        recordAllocation(allocationProbe, "pipelineLayoutMeasurePhaseCalls",
+            "pipelineLayoutMeasurePhaseAllocatedKB", before, 1)
+    end
     local arrangedWidth = resolveSize(root.props.width, width) or width
     local arrangedHeight = resolveSize(root.props.height, height) or height
+    before = allocationProbe and collectgarbage("count") or nil
     layout.arrange(root, 0, 0, arrangedWidth, arrangedHeight, host, session)
+    if allocationProbe then
+        recordAllocation(allocationProbe, "pipelineLayoutArrangePhaseCalls",
+            "pipelineLayoutArrangePhaseAllocatedKB", before, 1)
+    end
+    before = allocationProbe and collectgarbage("count") or nil
     preparePlanes(root, width, height, host, session)
+    if allocationProbe then
+        recordAllocation(allocationProbe, "pipelineLayoutPlanesPhaseCalls",
+            "pipelineLayoutPlanesPhaseAllocatedKB", before, 1)
+    end
     return root
 end
 

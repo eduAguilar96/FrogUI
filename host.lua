@@ -1498,6 +1498,46 @@ local function resetAllocationProbe(probe)
     probe.pipelineDefaultIdentityShareNodes = 0
     probe.pipelineInverseMissingNodes = 0
     probe.pipelineDefaultInverseMissingNodes = 0
+    probe.pipelineLayoutSessionCreated = 0
+    probe.pipelineLayoutSessionAllocatedKB = 0
+    probe.pipelineLayoutMeasurePhaseCalls = 0
+    probe.pipelineLayoutMeasurePhaseAllocatedKB = 0
+    probe.pipelineLayoutArrangePhaseCalls = 0
+    probe.pipelineLayoutArrangePhaseAllocatedKB = 0
+    probe.pipelineLayoutPlanesPhaseCalls = 0
+    probe.pipelineLayoutPlanesPhaseAllocatedKB = 0
+    probe.pipelineLayoutMeasureNodes = 0
+    probe.pipelineLayoutMeasureReuseHits = 0
+    probe.pipelineLayoutArrangeNodes = 0
+    probe.pipelineLayoutFlowNodes = 0
+    probe.pipelineLayoutWrappedRowNodes = 0
+    probe.pipelineLayoutOverlayNodes = 0
+    probe.pipelineLayoutEffectLayerNodes = 0
+    probe.pipelineLayoutRadialNodes = 0
+    probe.pipelineLayoutScrollNodes = 0
+    probe.pipelineLayoutWrapperNodes = 0
+    probe.pipelineLayoutPortalNodes = 0
+    probe.pipelineLayoutDetachedNodes = 0
+    probe.pipelineLayoutPaddingCreated = 0
+    probe.pipelineLayoutPaddingAllocatedKB = 0
+    probe.pipelineLayoutZeroPaddingCreated = 0
+    probe.pipelineLayoutZeroPaddingAllocatedKB = 0
+    probe.pipelineLayoutUniformPaddingCreated = 0
+    probe.pipelineLayoutUniformPaddingAllocatedKB = 0
+    probe.pipelineLayoutSidedPaddingCreated = 0
+    probe.pipelineLayoutSidedPaddingAllocatedKB = 0
+    probe.pipelineLayoutTextCalls = 0
+    probe.pipelineLayoutTextAllocatedKB = 0
+    probe.pipelineLayoutImageCalls = 0
+    probe.pipelineLayoutImageAllocatedKB = 0
+    probe.pipelineLayoutWrappedLinesCalls = 0
+    probe.pipelineLayoutWrappedLinesAllocatedKB = 0
+    probe.pipelineLayoutWrappedAllocationCreated = 0
+    probe.pipelineLayoutWrappedAllocationAllocatedKB = 0
+    probe.pipelineLayoutRadialScratchCreated = 0
+    probe.pipelineLayoutRadialScratchAllocatedKB = 0
+    probe.pipelineLayoutEffectRectCreated = 0
+    probe.pipelineLayoutEffectRectAllocatedKB = 0
 end
 
 -- Private, globally exclusive allocation attribution for the Battle harness.
@@ -1664,6 +1704,54 @@ function host:_readMatrixClassificationProbe()
         probe.pipelineDefaultIdentityShareNodes,
         probe.pipelineInverseMissingNodes,
         probe.pipelineDefaultInverseMissingNodes
+end
+
+-- Returns disjoint candidate-layout phase totals plus exact retained/scratch
+-- allocation sites and scalar traversal counts.
+function host:_readLayoutAllocationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no layout allocation probe to read")
+    return probe.pipelineLayoutSessionCreated,
+        probe.pipelineLayoutSessionAllocatedKB,
+        probe.pipelineLayoutMeasurePhaseCalls,
+        probe.pipelineLayoutMeasurePhaseAllocatedKB,
+        probe.pipelineLayoutArrangePhaseCalls,
+        probe.pipelineLayoutArrangePhaseAllocatedKB,
+        probe.pipelineLayoutPlanesPhaseCalls,
+        probe.pipelineLayoutPlanesPhaseAllocatedKB,
+        probe.pipelineLayoutMeasureNodes,
+        probe.pipelineLayoutMeasureReuseHits,
+        probe.pipelineLayoutArrangeNodes,
+        probe.pipelineLayoutFlowNodes,
+        probe.pipelineLayoutWrappedRowNodes,
+        probe.pipelineLayoutOverlayNodes,
+        probe.pipelineLayoutEffectLayerNodes,
+        probe.pipelineLayoutRadialNodes,
+        probe.pipelineLayoutScrollNodes,
+        probe.pipelineLayoutWrapperNodes,
+        probe.pipelineLayoutPortalNodes,
+        probe.pipelineLayoutDetachedNodes,
+        probe.pipelineLayoutPaddingCreated,
+        probe.pipelineLayoutPaddingAllocatedKB,
+        probe.pipelineLayoutZeroPaddingCreated,
+        probe.pipelineLayoutZeroPaddingAllocatedKB,
+        probe.pipelineLayoutUniformPaddingCreated,
+        probe.pipelineLayoutUniformPaddingAllocatedKB,
+        probe.pipelineLayoutSidedPaddingCreated,
+        probe.pipelineLayoutSidedPaddingAllocatedKB,
+        probe.pipelineLayoutTextCalls,
+        probe.pipelineLayoutTextAllocatedKB,
+        probe.pipelineLayoutImageCalls,
+        probe.pipelineLayoutImageAllocatedKB,
+        probe.pipelineLayoutWrappedLinesCalls,
+        probe.pipelineLayoutWrappedLinesAllocatedKB,
+        probe.pipelineLayoutWrappedAllocationCreated,
+        probe.pipelineLayoutWrappedAllocationAllocatedKB,
+        probe.pipelineLayoutRadialScratchCreated,
+        probe.pipelineLayoutRadialScratchAllocatedKB,
+        probe.pipelineLayoutEffectRectCreated,
+        probe.pipelineLayoutEffectRectAllocatedKB
 end
 
 function host:_detachAllocationProbe()
@@ -3372,7 +3460,8 @@ function host:_build(root)
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         local layoutStarted = self._diagnostics:start()
         candidate = Layout.run(candidate,
-            self._viewport.width, self._viewport.height, self)
+            self._viewport.width, self._viewport.height, self,
+            pipelineProbe)
         self._diagnostics:finish("layout", layoutStarted)
         if pipelineProbe then
             local after = collectgarbage("count")
