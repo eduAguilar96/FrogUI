@@ -3,6 +3,10 @@
 
 local layout = {}
 
+-- Default padding is read-only layout data. Fresh candidate nodes may share
+-- this private record because no layout path mutates normalized padding.
+local ZERO_PADDING = { left = 0, right = 0, top = 0, bottom = 0 }
+
 local function recordAllocation(probe, callsField, kbField, before, created)
     local after = collectgarbage("count")
     if created then probe[callsField] = probe[callsField] + created end
@@ -55,15 +59,24 @@ local function resolveSize(value, available)
 end
 
 local function padding(value, probe)
+    if value == nil or value == 0 then
+        if probe then
+            probe.pipelineLayoutPaddingNormalizations =
+                probe.pipelineLayoutPaddingNormalizations + 1
+            probe.pipelineLayoutZeroPaddingAliases =
+                probe.pipelineLayoutZeroPaddingAliases + 1
+        end
+        return ZERO_PADDING
+    end
     local before = probe and collectgarbage("count") or nil
-    local kind = (value == nil or value == 0) and "zero"
-        or type(value) == "number" and "uniform" or "sided"
-    if value == nil then value = 0 end
+    local kind = type(value) == "number" and "uniform" or "sided"
     if type(value) == "number" then
         local result = {
             left = value, right = value, top = value, bottom = value,
         }
         if probe then
+            probe.pipelineLayoutPaddingNormalizations =
+                probe.pipelineLayoutPaddingNormalizations + 1
             recordPaddingAllocation(probe, before, kind)
         end
         return result
@@ -76,8 +89,26 @@ local function padding(value, probe)
         bottom = value.bottom or 0,
     }
     if probe then
+        probe.pipelineLayoutPaddingNormalizations =
+            probe.pipelineLayoutPaddingNormalizations + 1
         recordPaddingAllocation(probe, before, kind)
     end
+    return result
+end
+
+-- Resolves authored padding once for one fresh candidate node. Measurement
+-- constraints may change within a pass; padding cannot, so later measurement
+-- and arrangement entries reuse the exact normalized record.
+local function nodePadding(node, probe)
+    if node._padding then
+        if probe then
+            probe.pipelineLayoutPaddingReuseHits =
+                probe.pipelineLayoutPaddingReuseHits + 1
+        end
+        return node._padding
+    end
+    local result = padding(node.props.padding, probe)
+    node._padding = result
     return result
 end
 
@@ -195,8 +226,7 @@ local function measure(node, maxWidth, maxHeight, host, session)
         end
         return node.measuredWidth, node.measuredHeight
     end
-    local pad = padding(node.props.padding, allocationProbe)
-    node._padding = pad
+    local pad = nodePadding(node, allocationProbe)
     local width, height = explicit(node, maxWidth, maxHeight)
     local innerMaxWidth = math.max(0, (width or maxWidth) - pad.left - pad.right)
     local innerMaxHeight = math.max(0, (height or maxHeight) - pad.top - pad.bottom)
@@ -619,7 +649,7 @@ function layout.arrange(node, x, y, width, height, host, session)
     end
     node.x, node.y = x, y
     node.width, node.height = math.max(0, width), math.max(0, height)
-    local pad = node._padding or padding(node.props.padding, allocationProbe)
+    local pad = nodePadding(node, allocationProbe)
     node.contentX = x + pad.left
     node.contentY = y + pad.top
     node.contentWidth = math.max(0, width - pad.left - pad.right)
@@ -726,7 +756,7 @@ local function arrangePortal(node, width, height, host, session)
             allocationProbe.pipelineLayoutPortalNodes + 1
     end
     node._portal, node._portalLayout = true, true
-    node._padding = padding(node.props.padding, allocationProbe)
+    nodePadding(node, allocationProbe)
     layout.arrange(node, 0, 0, width, height, host, session)
     node._portalLayout = nil
 end

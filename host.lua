@@ -1518,6 +1518,9 @@ local function resetAllocationProbe(probe)
     probe.pipelineLayoutWrapperNodes = 0
     probe.pipelineLayoutPortalNodes = 0
     probe.pipelineLayoutDetachedNodes = 0
+    probe.pipelineLayoutPaddingNormalizations = 0
+    probe.pipelineLayoutZeroPaddingAliases = 0
+    probe.pipelineLayoutPaddingReuseHits = 0
     probe.pipelineLayoutPaddingCreated = 0
     probe.pipelineLayoutPaddingAllocatedKB = 0
     probe.pipelineLayoutZeroPaddingCreated = 0
@@ -1732,6 +1735,9 @@ function host:_readLayoutAllocationProbe()
         probe.pipelineLayoutWrapperNodes,
         probe.pipelineLayoutPortalNodes,
         probe.pipelineLayoutDetachedNodes,
+        probe.pipelineLayoutPaddingNormalizations,
+        probe.pipelineLayoutZeroPaddingAliases,
+        probe.pipelineLayoutPaddingReuseHits,
         probe.pipelineLayoutPaddingCreated,
         probe.pipelineLayoutPaddingAllocatedKB,
         probe.pipelineLayoutZeroPaddingCreated,
