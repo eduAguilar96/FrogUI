@@ -1606,46 +1606,64 @@ must be re-run as parity lands. Warmup, frame counts, late-round boundary, and
 provisional targets live only in `tools/frogui/battle_performance.lua`; do not
 copy them into documentation or another check.
 
+Three private, globally exclusive allocation modes provide causal construction
+evidence without becoming public FrogUI APIs. `source` and `identity` retain
+their established provenance/path controls. `structure` measures the semantic
+application callback, descriptor normalization as a nested subset, and the
+separate resolved primitive-node boundary. Primitive detail distinguishes the
+base node/props copy, immediate child-array growth, and the later deferred-view
+array pass. Every counter is preallocated and scalar while collection is
+stopped; report rows are created only after collection restarts. These nested
+facts must be interpreted correctly: descriptor bytes are already inside the
+semantic total, while primitive materialization is disjoint and may be added to
+the semantic total.
+
 #### Current measured checkpoint
 
-B4p.10 replaces per-description debugger scans with component-owned
-provenance. The valid manifest at
-`build/frogui/battle-performance-20260810T193738Z-90279` records an unchanged
-dirty source identity, acceptance status 1 (completed target miss), diagnostics
-status 0, and a published 2,733-row artifact. Standard, source, and identity
-windows retain the exact `60/0`, `57/3`, and `38/22` quiet/rebuilt cadence.
+B4p.11 closes the structural construction attribution selected by B4p.10. The
+valid manifest at
+`build/frogui/battle-performance-20260810T200531Z-93317` records source commit
+`1fbbed51e546e615cbf3365c37855aad90494893`, stable dirty source/diff/untracked
+identity, acceptance status 1 (completed target miss), diagnostics status 0,
+and a published 2,733-row artifact. Standard, source, identity, and structure
+windows retain the exact `60/0`, `57/3`, and `38/22` quiet/rebuilt cadence; all
+windows are uncapped.
 
-The implementation captures one reusable source when `Frog.component` is
-defined. Host-bracketed component, actor, and view renders give each primitive
-description that semantic owner's source reference. Standalone primitive roots
-retain their one-shot fallback, and exact positional-hook source checks remain
-unchanged. Focused checks mount and rebuild a multi-leaf component, prove every
-leaf retains the same readable source object, cover probe lifecycle, and keep
-all physical/logical identities unchanged.
+Quiet frames report zero construction calls in all phases. Rebuilt update is:
 
-| window | FrogUI mean B4p.9b → 10 | p95 B4p.9b → 10 | allocation B4p.9b → 10 |
-|---|---:|---:|---:|
-| early | 1.870 → 1.795 ms | 2.583 → 2.149 ms | 351.710 → 324.759 KB/frame |
-| late | 4.178 → 4.000 ms | 17.439 → 16.988 ms | 2554.446 → 2318.376 KB/frame |
+| window | update | semantic render | descriptor subset | other semantic work | primitive materialization | attributed total | remainder |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| early | 4715.313 KB | 1194.247 KB | 719.781 KB | 474.466 KB | 489.604 KB | 1683.852 KB | 3031.461 KB |
+| late | 5185.917 KB | 1513.038 KB | 856.996 KB | 656.041 KB | 584.569 KB | 2097.607 KB | 3088.311 KB |
 
-The causal allocation result matches B4p.9b's prediction:
+Semantic render owns `25.327%` early and `29.176%` late. Primitive
+materialization owns `10.383%` early and `11.272%` late. Together they explain
+`35.710%` and `40.448%` of rebuilt update. Descriptor normalization is already
+inside the semantic total; at `719.781/856.996 KB` it is the largest exact
+generic leaf selected by this measurement.
 
-| window | rebuilt update B4p.9b → 10 | recovered | prior direct attribution | difference |
+The primitive split rejects a tempting but low-value first repair:
+
+| window | base node + props | immediate children | deferred arrays | deferred children |
 |---|---:|---:|---:|---:|
-| early | 5254.643 → 4715.328 KB | 539.315 KB | 539.268 KB | +0.047 KB |
-| late | 5830.167 → 5185.802 KB | 644.365 KB | 644.463 KB | -0.098 KB |
+| early | 414.193 KB | 12.904 KB | 49.604 KB | 12.904 KB |
+| late | 494.332 KB | 15.509 KB | 59.219 KB | 15.509 KB |
 
-The independent source probe now reports zero calls and zero bytes in every
-quiet and rebuilt cohort. Identity attribution remains `233.500 KB` early and
-`41.155 KB` late, so work was removed rather than reassigned to path building.
-Early now passes p95, frame-budget, over-budget, and allocation checks; only its
-mean-time ratio still fails. Late remains over both timing and allocation
-targets, with about `5.19 MB` left in each rebuilt update.
+The later deferred-view array rewrite is real, but its array plus insertion
+cost is only about `1.3–1.4%` of rebuilt update. It remains visible rather than
+being mistaken for the main problem. Source capture stays exactly zero, and
+identity attribution remains `233.500 KB` early and `41.155 KB` late.
+Profiler-free allocation remains effectively unchanged from B4p.10 at
+`324.745 KB/frame` early and `2318.369 KB/frame` late. Timing moved within the
+cross-run sample (`1.897/4.107 ms` mean and `2.338/17.375 ms` p95 early/late);
+this attribution-only checkpoint makes no performance-improvement claim.
 
-B4p.10 closes as one generic core repair. The next checkpoint must attribute
-the remaining rebuilt-update allocation between description/prop/children
-construction and resolved primitive-node materialization before changing
-either representation. Identity rewriting, component-output memoization,
-validation skips, a virtual DOM, and a dirty graph remain unsupported. B4p
-remains open and B5 remains blocked. Full evidence and invariants live in
+The next isolated repair boundary is `Element.construct`: preserve the public
+call syntax, child order and elision, Text shorthand, key validation, source,
+and every loud error while removing its redundant temporary indexing/value/key
+tables. Measure the recovered bytes against the directly attributed descriptor
+boundary before choosing any further representation change. Primitive nodes,
+deferred arrays, identity, memoization, validation skips, a virtual DOM, and a
+dirty graph remain unchanged and unsupported. B4p remains open and B5 remains
+blocked. Full evidence and invariants live in
 `design/reference/frog-ui-battle-migration.md`.

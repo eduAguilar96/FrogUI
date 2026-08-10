@@ -1412,7 +1412,11 @@ local function assertInputBoundary(self)
         "platform input may not re-enter an active FrogUI callback")
 end
 
-local ALLOCATION_PROBE_MODES = { source = true, identity = true }
+local ALLOCATION_PROBE_MODES = {
+    source = true,
+    identity = true,
+    structure = true,
+}
 
 local function resetAllocationProbe(probe)
     probe.sourceCalls = 0
@@ -1427,13 +1431,25 @@ local function resetAllocationProbe(probe)
     probe.logicalAllocatedKB = 0
     probe.logicalResultBytes = 0
     probe.logicalAliasCalls = 0
+    probe.semanticRenderCalls = 0
+    probe.semanticRenderAllocatedKB = 0
+    probe.descriptorCalls = 0
+    probe.descriptorAllocatedKB = 0
+    probe.primitiveNodeCalls = 0
+    probe.primitiveNodeAllocatedKB = 0
+    probe.primitiveChildCalls = 0
+    probe.primitiveChildAllocatedKB = 0
+    probe.deferredArrayCalls = 0
+    probe.deferredArrayAllocatedKB = 0
+    probe.deferredChildCalls = 0
+    probe.deferredChildAllocatedKB = 0
 end
 
 -- Private, globally exclusive allocation attribution for the Battle harness.
 -- It is intentionally absent from Host options and the public Frog table.
 function host:_attachAllocationProbe(mode)
     assert(ALLOCATION_PROBE_MODES[mode],
-        "FrogUI allocation probe mode must be source or identity")
+        "FrogUI allocation probe mode must be source, identity, or structure")
     assert(rawget(self, "_allocationProbe") == nil,
         "this FrogUI Host already owns an allocation probe")
     local probe = { mode = mode }
@@ -1459,7 +1475,13 @@ function host:_readAllocationProbe()
         probe.physicalCalls, probe.physicalAllocatedKB,
         probe.physicalResultBytes,
         probe.logicalCalls, probe.logicalAllocatedKB,
-        probe.logicalResultBytes, probe.logicalAliasCalls
+        probe.logicalResultBytes, probe.logicalAliasCalls,
+        probe.semanticRenderCalls, probe.semanticRenderAllocatedKB,
+        probe.descriptorCalls, probe.descriptorAllocatedKB,
+        probe.primitiveNodeCalls, probe.primitiveNodeAllocatedKB,
+        probe.primitiveChildCalls, probe.primitiveChildAllocatedKB,
+        probe.deferredArrayCalls, probe.deferredArrayAllocatedKB,
+        probe.deferredChildCalls, probe.deferredChildAllocatedKB
 end
 
 function host:_detachAllocationProbe()
@@ -1917,6 +1939,19 @@ function host:_withRender(label, callback, ...)
     return unpack(results)
 end
 
+-- Measures the application callback itself without allocating an observer
+-- result table inside the boundary. FrogUI render owners return one element or
+-- nil; the ordinary outer pcall still owns error handling.
+local function measureSemanticRender(probe, callback, ...)
+    local before = collectgarbage("count")
+    local result = callback(...)
+    local after = collectgarbage("count")
+    probe.semanticRenderCalls = probe.semanticRenderCalls + 1
+    probe.semanticRenderAllocatedKB = probe.semanticRenderAllocatedKB
+        + after - before
+    return result
+end
+
 -- Reconciles one semantic render owner's positional hooks. Owners are keyed by
 -- logical component/actor/view identity, independent of primitive layout.
 function host:_withOwnerRender(label, token, logicalPath, context, callback, ...)
@@ -1952,6 +1987,11 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
         end
         results = {
             pcall(self._withRender, self, label, observedCallback, ...),
+        }
+    elseif context.structureAllocationProbe then
+        results = {
+            pcall(self._withRender, self, label, measureSemanticRender,
+                context.structureAllocationProbe, callback, ...),
         }
     else
         -- Preserve the ordinary render path exactly when diagnostics are off.
@@ -2324,6 +2364,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         profiler:finish("primitiveValidation", primitiveStarted)
     end
     local materializationStarted = profiler and profiler:start() or nil
+    local structureProbe = context.structureAllocationProbe
+    local structureBefore = structureProbe and collectgarbage("count") or nil
     local node = {
         type = token.name,
         key = descriptor.key,
@@ -2348,6 +2390,14 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 .. " is attached to more than one primitive")
         context.refAttachments[attachedRef] = node
         node._ref = attachedRef
+    end
+    if structureProbe then
+        local structureAfter = collectgarbage("count")
+        structureProbe.primitiveNodeCalls =
+            structureProbe.primitiveNodeCalls + 1
+        structureProbe.primitiveNodeAllocatedKB =
+            structureProbe.primitiveNodeAllocatedKB
+                + structureAfter - structureBefore
     end
     if profiler then
         profiler:finish("primitiveMaterialization", materializationStarted)
@@ -2403,7 +2453,19 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             childPath(childrenPath, child, index, identityProbe),
             nil, context,
             logicalChildPath(logicalPath, child, index, identityProbe))
-        if resolved then node.children[#node.children + 1] = resolved end
+        if resolved then
+            local appendBefore = structureProbe
+                and collectgarbage("count") or nil
+            node.children[#node.children + 1] = resolved
+            if structureProbe then
+                local appendAfter = collectgarbage("count")
+                structureProbe.primitiveChildCalls =
+                    structureProbe.primitiveChildCalls + 1
+                structureProbe.primitiveChildAllocatedKB =
+                    structureProbe.primitiveChildAllocatedKB
+                        + appendAfter - appendBefore
+            end
+        end
     end
     local validationStarted = profiler and profiler:start() or nil
     if token.name == "EffectLayer" then
@@ -2481,12 +2543,33 @@ function host:_resolveDeferred(node, context)
         return self:_resolveView(node.descriptor, node.owner, node.path,
             node.descendantPath, context, node.logicalPath)
     end
+    local structureProbe = context.structureAllocationProbe
+    local arrayBefore = structureProbe and collectgarbage("count") or nil
     local children = {}
+    if structureProbe then
+        local arrayAfter = collectgarbage("count")
+        structureProbe.deferredArrayCalls =
+            structureProbe.deferredArrayCalls + 1
+        structureProbe.deferredArrayAllocatedKB =
+            structureProbe.deferredArrayAllocatedKB + arrayAfter - arrayBefore
+    end
     if profiler then profiler:finish("deferredResolution", started) end
     for _, child in ipairs(node.children or {}) do
         local resolved = self:_resolveDeferred(child, context)
         started = profiler and profiler:start() or nil
-        if resolved then children[#children + 1] = resolved end
+        if resolved then
+            local appendBefore = structureProbe
+                and collectgarbage("count") or nil
+            children[#children + 1] = resolved
+            if structureProbe then
+                local appendAfter = collectgarbage("count")
+                structureProbe.deferredChildCalls =
+                    structureProbe.deferredChildCalls + 1
+                structureProbe.deferredChildAllocatedKB =
+                    structureProbe.deferredChildAllocatedKB
+                        + appendAfter - appendBefore
+            end
+        end
         if profiler then profiler:finish("deferredResolution", started) end
     end
     started = profiler and profiler:start() or nil
@@ -2850,6 +2933,8 @@ function host:_build(root)
     local allocationProbe = rawget(self, "_allocationProbe")
     if allocationProbe and allocationProbe.mode == "identity" then
         context.identityAllocationProbe = allocationProbe
+    elseif allocationProbe and allocationProbe.mode == "structure" then
+        context.structureAllocationProbe = allocationProbe
     end
     if self._diagnostics.enabled then
         context.diagnostics = self._diagnostics

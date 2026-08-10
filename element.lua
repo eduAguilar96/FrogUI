@@ -3,11 +3,12 @@
 
 local element = {}
 
--- One private Host-owned allocation probe may observe descriptor construction
--- or identity construction at a time. This is deliberately not FrogUI's
--- public API; the Battle performance harness owns the temporary observer.
+-- One private Host-owned allocation probe may observe source, identity, or
+-- tree construction at a time. This is deliberately not FrogUI's public API;
+-- the Battle performance harness owns the temporary observer.
 local allocationProbeOwner
 local sourceAllocationProbe
+local structureAllocationProbe
 local renderSourceOwner
 local renderSource
 
@@ -16,10 +17,12 @@ function element._attachAllocationProbe(owner, probe)
     assert(allocationProbeOwner == nil,
         "another FrogUI allocation probe is already attached")
     assert(type(probe) == "table"
-            and (probe.mode == "source" or probe.mode == "identity"),
-        "FrogUI allocation probe mode must be source or identity")
+            and (probe.mode == "source" or probe.mode == "identity"
+                or probe.mode == "structure"),
+        "FrogUI allocation probe mode must be source, identity, or structure")
     allocationProbeOwner = owner
     sourceAllocationProbe = probe.mode == "source" and probe or nil
+    structureAllocationProbe = probe.mode == "structure" and probe or nil
 end
 
 function element._detachAllocationProbe(owner)
@@ -27,6 +30,7 @@ function element._detachAllocationProbe(owner)
         "FrogUI allocation probe detach owner mismatch")
     allocationProbeOwner = nil
     sourceAllocationProbe = nil
+    structureAllocationProbe = nil
 end
 
 -- Descriptions created by one semantic render share that component, actor, or
@@ -189,6 +193,8 @@ local function validateSiblingKeys(children, owner)
 end
 
 local function construct(token, input)
+    local probe = structureAllocationProbe
+    local before = probe and collectgarbage("count") or nil
     local props, children = splitInput(token, input)
     if token.kind == "primitive" then
         if token.name == "Box" or token.name == "Button"
@@ -202,7 +208,7 @@ local function construct(token, input)
         end
     end
     validateSiblingKeys(children, token.name)
-    return {
+    local result = {
         __frogDescriptor = true,
         token = token,
         props = props,
@@ -210,6 +216,13 @@ local function construct(token, input)
         key = props.key,
         source = descriptionSource(token),
     }
+    if probe then
+        local after = collectgarbage("count")
+        probe.descriptorCalls = probe.descriptorCalls + 1
+        probe.descriptorAllocatedKB = probe.descriptorAllocatedKB
+            + after - before
+    end
+    return result
 end
 
 element.construct = construct
