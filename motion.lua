@@ -894,6 +894,15 @@ local function writeBounds(out, x1, y1, x2, y2, x3, y3, x4, y4)
     return out
 end
 
+-- Attributes retained candidate-geometry tables to a private Host-owned
+-- stopped-GC probe. Ordinary and committed transforms never enter this path.
+local function recordGeometryAllocation(probe, createdField, kbField, before,
+        created)
+    local after = collectgarbage("count")
+    if created then probe[createdField] = probe[createdField] + 1 end
+    probe[kbField] = probe[kbField] + after - before
+end
+
 local function noteDiagnosticTarget(observer, plane, node)
     if not observer.targets[node] then return false end
     local planeState = observer.planes[plane]
@@ -924,21 +933,65 @@ end
 
 -- Writes one node's authoritative transform geometry. Production and observed
 -- recursion share this exact writer; only their traversal bookkeeping differs.
-local function transformNodeGeometry(node, parent)
+local function transformNodeGeometry(node, parent, allocationProbe)
     if node._portal then parent = IDENTITY end
+    if allocationProbe then
+        allocationProbe.pipelineGeometryCalls =
+            allocationProbe.pipelineGeometryCalls + 1
+    end
+    local existed = node.presentation ~= nil
+    local before = allocationProbe and collectgarbage("count") or nil
     node.presentation = node.presentation or copyValues()
+    if allocationProbe then
+        recordGeometryAllocation(allocationProbe,
+            "pipelinePresentationCreated",
+            "pipelinePresentationAllocatedKB", before,
+            not existed and node.presentation ~= nil)
+    end
+    existed = node._localTransform ~= nil
+    before = allocationProbe and collectgarbage("count") or nil
     node._localTransform = localMatrix(node, node._localTransform)
+    if allocationProbe then
+        recordGeometryAllocation(allocationProbe,
+            "pipelineLocalMatrixCreated",
+            "pipelineLocalMatrixAllocatedKB", before,
+            not existed and node._localTransform ~= nil)
+    end
+    existed = node._worldTransform ~= nil
+    before = allocationProbe and collectgarbage("count") or nil
     node._worldTransform = multiply(parent or IDENTITY, node._localTransform,
         node._worldTransform)
+    if allocationProbe then
+        recordGeometryAllocation(allocationProbe,
+            "pipelineWorldMatrixCreated",
+            "pipelineWorldMatrixAllocatedKB", before,
+            not existed and node._worldTransform ~= nil)
+    end
+    existed = node._inverseWorldTransform ~= nil
+    before = allocationProbe and collectgarbage("count") or nil
     node._inverseWorldTransform = inverse(node._worldTransform,
         node._inverseWorldTransform)
+    if allocationProbe then
+        recordGeometryAllocation(allocationProbe,
+            "pipelineInverseMatrixCreated",
+            "pipelineInverseMatrixAllocatedKB", before,
+            not existed and node._inverseWorldTransform ~= nil)
+    end
     local x1, y1 = point(node._worldTransform, node.x, node.y)
     local x2, y2 = point(node._worldTransform, node.x + node.width, node.y)
     local x3, y3 = point(node._worldTransform, node.x, node.y + node.height)
     local x4, y4 = point(node._worldTransform,
         node.x + node.width, node.y + node.height)
+    existed = node._visualBounds ~= nil
+    before = allocationProbe and collectgarbage("count") or nil
     node._visualBounds = writeBounds(node._visualBounds,
         x1, y1, x2, y2, x3, y3, x4, y4)
+    if allocationProbe then
+        recordGeometryAllocation(allocationProbe,
+            "pipelineVisualBoundsCreated",
+            "pipelineVisualBoundsAllocatedKB", before,
+            not existed and node._visualBounds ~= nil)
+    end
     local cx1, cy1 = point(node._worldTransform, node.contentX, node.contentY)
     local cx2, cy2 = point(node._worldTransform,
         node.contentX + node.contentWidth, node.contentY)
@@ -946,8 +999,16 @@ local function transformNodeGeometry(node, parent)
         node.contentX, node.contentY + node.contentHeight)
     local cx4, cy4 = point(node._worldTransform,
         node.contentX + node.contentWidth, node.contentY + node.contentHeight)
+    existed = node._visualContentBounds ~= nil
+    before = allocationProbe and collectgarbage("count") or nil
     node._visualContentBounds = writeBounds(node._visualContentBounds,
         cx1, cy1, cx2, cy2, cx3, cy3, cx4, cy4)
+    if allocationProbe then
+        recordGeometryAllocation(allocationProbe,
+            "pipelineVisualContentBoundsCreated",
+            "pipelineVisualContentBoundsAllocatedKB", before,
+            not existed and node._visualContentBounds ~= nil)
+    end
 end
 
 local function storeBoundary(instance, boundary)
@@ -1002,7 +1063,7 @@ local function transformNode(node, parent, traversal, plane, preorder, isRoot)
     end
     preorder = preorder + 1
     stampFullNode(node, boundary, traversal, plane, preorder)
-    transformNodeGeometry(node, boundary)
+    transformNodeGeometry(node, boundary, traversal.allocationProbe)
     traversal.nodesVisited = traversal.nodesVisited + 1
     local samePlaneEnd = preorder
     for _, child in ipairs(node.children or {}) do
@@ -1036,7 +1097,7 @@ local function transformNodeObserved(node, parent, observer, dirtyAncestor,
     local isTarget = noteDiagnosticTarget(observer, plane, node)
     local isDirtyRoot = isTarget and dirtyAncestor == nil
     if isTarget then dirtyAncestor = node end
-    transformNodeGeometry(node, boundary)
+    transformNodeGeometry(node, boundary, traversal.allocationProbe)
     traversal.nodesVisited = traversal.nodesVisited + 1
     local samePlaneEnd = preorder
     local samePlaneCount = 1
@@ -1215,7 +1276,8 @@ end
 -- Recomputes paint/input/F6 transforms only after layout or a clock tick
 -- invalidates committed geometry. Matrix and bounds tables retain identity so
 -- an active frame updates numbers without recreating five tables per node.
-function motion.transformTree(root, diagnosticTargets, options)
+function motion.transformTree(root, diagnosticTargets, options,
+        allocationProbe)
     if not root then
         return false, diagnosticTargets and { nodesVisited = 0 } or nil
     end
@@ -1285,6 +1347,7 @@ function motion.transformTree(root, diagnosticTargets, options)
     end
     nextTransformTreeToken = nextTransformTreeToken + 1
     local traversal = options.scratch or {}
+    traversal.allocationProbe = allocationProbe
     traversal.token = nextTransformTreeToken
     traversal.generation = options.generation
         or root._motionTransformGeneration or 0
@@ -1332,6 +1395,7 @@ function motion.transformTree(root, diagnosticTargets, options)
     root._motionTransformRevision = (root._motionTransformRevision or 0) + 1
     root._motionTransformReady = true
     root._motionTransformDirty = false
+    traversal.allocationProbe = nil
     return true, observer
 end
 

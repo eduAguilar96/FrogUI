@@ -1472,6 +1472,19 @@ local function resetAllocationProbe(probe)
     probe.pipelineFinalizationAllocatedKB = 0
     probe.pipelinePublicationCalls = 0
     probe.pipelinePublicationAllocatedKB = 0
+    probe.pipelineGeometryCalls = 0
+    probe.pipelinePresentationCreated = 0
+    probe.pipelinePresentationAllocatedKB = 0
+    probe.pipelineLocalMatrixCreated = 0
+    probe.pipelineLocalMatrixAllocatedKB = 0
+    probe.pipelineWorldMatrixCreated = 0
+    probe.pipelineWorldMatrixAllocatedKB = 0
+    probe.pipelineInverseMatrixCreated = 0
+    probe.pipelineInverseMatrixAllocatedKB = 0
+    probe.pipelineVisualBoundsCreated = 0
+    probe.pipelineVisualBoundsAllocatedKB = 0
+    probe.pipelineVisualContentBoundsCreated = 0
+    probe.pipelineVisualContentBoundsAllocatedKB = 0
 end
 
 -- Private, globally exclusive allocation attribution for the Battle harness.
@@ -1535,7 +1548,20 @@ function host:_readAllocationProbe()
         probe.pipelineFinalizationCalls,
         probe.pipelineFinalizationAllocatedKB,
         probe.pipelinePublicationCalls,
-        probe.pipelinePublicationAllocatedKB
+        probe.pipelinePublicationAllocatedKB,
+        probe.pipelineGeometryCalls,
+        probe.pipelinePresentationCreated,
+        probe.pipelinePresentationAllocatedKB,
+        probe.pipelineLocalMatrixCreated,
+        probe.pipelineLocalMatrixAllocatedKB,
+        probe.pipelineWorldMatrixCreated,
+        probe.pipelineWorldMatrixAllocatedKB,
+        probe.pipelineInverseMatrixCreated,
+        probe.pipelineInverseMatrixAllocatedKB,
+        probe.pipelineVisualBoundsCreated,
+        probe.pipelineVisualBoundsAllocatedKB,
+        probe.pipelineVisualContentBoundsCreated,
+        probe.pipelineVisualContentBoundsAllocatedKB
 end
 
 -- Pipeline reads stay separate from the historical source/identity/structure
@@ -1569,7 +1595,41 @@ function host:_readPipelineAllocationProbe()
         probe.pipelineFinalizationCalls,
         probe.pipelineFinalizationAllocatedKB,
         probe.pipelinePublicationCalls,
-        probe.pipelinePublicationAllocatedKB
+        probe.pipelinePublicationAllocatedKB,
+        probe.pipelineGeometryCalls,
+        probe.pipelinePresentationCreated,
+        probe.pipelinePresentationAllocatedKB,
+        probe.pipelineLocalMatrixCreated,
+        probe.pipelineLocalMatrixAllocatedKB,
+        probe.pipelineWorldMatrixCreated,
+        probe.pipelineWorldMatrixAllocatedKB,
+        probe.pipelineInverseMatrixCreated,
+        probe.pipelineInverseMatrixAllocatedKB,
+        probe.pipelineVisualBoundsCreated,
+        probe.pipelineVisualBoundsAllocatedKB,
+        probe.pipelineVisualContentBoundsCreated,
+        probe.pipelineVisualContentBoundsAllocatedKB
+end
+
+-- Returns the candidate-transform child partition without requiring callers
+-- to unpack the broader Host pipeline tuple.
+function host:_readTransformAllocationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no transform allocation probe to read")
+    return probe.pipelineGeometryCalls,
+        probe.pipelinePresentationCreated,
+        probe.pipelinePresentationAllocatedKB,
+        probe.pipelineLocalMatrixCreated,
+        probe.pipelineLocalMatrixAllocatedKB,
+        probe.pipelineWorldMatrixCreated,
+        probe.pipelineWorldMatrixAllocatedKB,
+        probe.pipelineInverseMatrixCreated,
+        probe.pipelineInverseMatrixAllocatedKB,
+        probe.pipelineVisualBoundsCreated,
+        probe.pipelineVisualBoundsAllocatedKB,
+        probe.pipelineVisualContentBoundsCreated,
+        probe.pipelineVisualContentBoundsAllocatedKB
 end
 
 function host:_detachAllocationProbe()
@@ -3023,7 +3083,7 @@ end
 -- Applies transformed geometry and consumes one exact committed cause batch.
 -- Only the committed Motion-only context offers the branch plan; every other
 -- context remains a full authoritative transform.
-function host:_transformTree(root, phase, activeMotion)
+function host:_transformTree(root, phase, activeMotion, allocationProbe)
     root = root or self._tree
     local context = phase and TRANSFORM_CONTEXTS[phase] or nil
     if phase and not context then
@@ -3045,7 +3105,8 @@ function host:_transformTree(root, phase, activeMotion)
             or batch and batch.nodes or {}
     end
     local started = profiling and self._diagnostics:start() or nil
-    local ran, stats = Motion.transformTree(root, targets, options)
+    local ran, stats = Motion.transformTree(root, targets, options,
+        allocationProbe)
     options.branch = nil
     if profiling then self._diagnostics:finish(phase, started) end
     if committed and activeWork and not ran then
@@ -3307,7 +3368,8 @@ function host:_build(root)
                     + after - pipelineBefore
         end
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
-        self:_transformTree(candidate, "candidateTransform")
+        self:_transformTree(candidate, "candidateTransform", nil,
+            pipelineProbe)
         if pipelineProbe then
             local after = collectgarbage("count")
             pipelineProbe.pipelineTransformCalls =
