@@ -903,6 +903,17 @@ local function recordGeometryAllocation(probe, createdField, kbField, before,
     probe[kbField] = probe[kbField] + after - before
 end
 
+local function matrixIsIdentity(value)
+    return value.a == 1 and value.b == 0 and value.c == 0 and value.d == 1
+        and value.tx == 0 and value.ty == 0
+end
+
+local function matricesMatch(left, right)
+    return left.a == right.a and left.b == right.b
+        and left.c == right.c and left.d == right.d
+        and left.tx == right.tx and left.ty == right.ty
+end
+
 local function noteDiagnosticTarget(observer, plane, node)
     if not observer.targets[node] then return false end
     local planeState = observer.planes[plane]
@@ -933,11 +944,27 @@ end
 
 -- Writes one node's authoritative transform geometry. Production and observed
 -- recursion share this exact writer; only their traversal bookkeeping differs.
-local function transformNodeGeometry(node, parent, allocationProbe)
+local function transformNodeGeometry(node, parent, allocationProbe, isRoot)
     if node._portal then parent = IDENTITY end
     if allocationProbe then
         allocationProbe.pipelineGeometryCalls =
             allocationProbe.pipelineGeometryCalls + 1
+    end
+    local defaultPresentation = allocationProbe
+        and (node.presentation == nil or node.presentation == DEFAULT_VALUES)
+    if allocationProbe then
+        local presentationField = defaultPresentation
+            and "pipelineDefaultPresentationNodes"
+            or "pipelinePrivatePresentationNodes"
+        allocationProbe[presentationField] =
+            allocationProbe[presentationField] + 1
+        if isRoot then
+            allocationProbe.pipelineRootBoundaryNodes =
+                allocationProbe.pipelineRootBoundaryNodes + 1
+        elseif node._portal then
+            allocationProbe.pipelinePortalBoundaryNodes =
+                allocationProbe.pipelinePortalBoundaryNodes + 1
+        end
     end
     local existed = node.presentation ~= nil
     local before = allocationProbe and collectgarbage("count") or nil
@@ -953,6 +980,16 @@ local function transformNodeGeometry(node, parent, allocationProbe)
     existed = node._localTransform ~= nil
     before = allocationProbe and collectgarbage("count") or nil
     node._localTransform = localMatrix(node, node._localTransform)
+    local localIdentity = allocationProbe
+        and matrixIsIdentity(node._localTransform)
+    if allocationProbe and localIdentity then
+        allocationProbe.pipelineLocalIdentityNodes =
+            allocationProbe.pipelineLocalIdentityNodes + 1
+        local identityField = defaultPresentation
+            and "pipelineDefaultLocalIdentityNodes"
+            or "pipelinePrivateLocalIdentityNodes"
+        allocationProbe[identityField] = allocationProbe[identityField] + 1
+    end
     if allocationProbe then
         recordGeometryAllocation(allocationProbe,
             "pipelineLocalMatrixCreated",
@@ -963,6 +1000,20 @@ local function transformNodeGeometry(node, parent, allocationProbe)
     before = allocationProbe and collectgarbage("count") or nil
     node._worldTransform = multiply(parent or IDENTITY, node._localTransform,
         node._worldTransform)
+    local worldMatchesBoundary = allocationProbe
+        and matricesMatch(node._worldTransform, parent or IDENTITY)
+    if allocationProbe and worldMatchesBoundary then
+        allocationProbe.pipelineWorldBoundaryMatchNodes =
+            allocationProbe.pipelineWorldBoundaryMatchNodes + 1
+        if defaultPresentation then
+            allocationProbe.pipelineDefaultWorldBoundaryMatchNodes =
+                allocationProbe.pipelineDefaultWorldBoundaryMatchNodes + 1
+            local shareField = (isRoot or node._portal)
+                and "pipelineDefaultIdentityShareNodes"
+                or "pipelineDefaultParentShareNodes"
+            allocationProbe[shareField] = allocationProbe[shareField] + 1
+        end
+    end
     if allocationProbe then
         recordGeometryAllocation(allocationProbe,
             "pipelineWorldMatrixCreated",
@@ -973,6 +1024,14 @@ local function transformNodeGeometry(node, parent, allocationProbe)
     before = allocationProbe and collectgarbage("count") or nil
     node._inverseWorldTransform = inverse(node._worldTransform,
         node._inverseWorldTransform)
+    if allocationProbe and node._inverseWorldTransform == nil then
+        allocationProbe.pipelineInverseMissingNodes =
+            allocationProbe.pipelineInverseMissingNodes + 1
+        if defaultPresentation then
+            allocationProbe.pipelineDefaultInverseMissingNodes =
+                allocationProbe.pipelineDefaultInverseMissingNodes + 1
+        end
+    end
     if allocationProbe then
         recordGeometryAllocation(allocationProbe,
             "pipelineInverseMatrixCreated",
@@ -1065,7 +1124,7 @@ local function transformNode(node, parent, traversal, plane, preorder, isRoot)
     end
     preorder = preorder + 1
     stampFullNode(node, boundary, traversal, plane, preorder)
-    transformNodeGeometry(node, boundary, traversal.allocationProbe)
+    transformNodeGeometry(node, boundary, traversal.allocationProbe, isRoot)
     traversal.nodesVisited = traversal.nodesVisited + 1
     local samePlaneEnd = preorder
     for _, child in ipairs(node.children or {}) do
@@ -1099,7 +1158,7 @@ local function transformNodeObserved(node, parent, observer, dirtyAncestor,
     local isTarget = noteDiagnosticTarget(observer, plane, node)
     local isDirtyRoot = isTarget and dirtyAncestor == nil
     if isTarget then dirtyAncestor = node end
-    transformNodeGeometry(node, boundary, traversal.allocationProbe)
+    transformNodeGeometry(node, boundary, traversal.allocationProbe, isRoot)
     traversal.nodesVisited = traversal.nodesVisited + 1
     local samePlaneEnd = preorder
     local samePlaneCount = 1

@@ -1485,6 +1485,19 @@ local function resetAllocationProbe(probe)
     probe.pipelineVisualBoundsAllocatedKB = 0
     probe.pipelineVisualContentBoundsCreated = 0
     probe.pipelineVisualContentBoundsAllocatedKB = 0
+    probe.pipelineDefaultPresentationNodes = 0
+    probe.pipelinePrivatePresentationNodes = 0
+    probe.pipelineRootBoundaryNodes = 0
+    probe.pipelinePortalBoundaryNodes = 0
+    probe.pipelineLocalIdentityNodes = 0
+    probe.pipelineDefaultLocalIdentityNodes = 0
+    probe.pipelinePrivateLocalIdentityNodes = 0
+    probe.pipelineWorldBoundaryMatchNodes = 0
+    probe.pipelineDefaultWorldBoundaryMatchNodes = 0
+    probe.pipelineDefaultParentShareNodes = 0
+    probe.pipelineDefaultIdentityShareNodes = 0
+    probe.pipelineInverseMissingNodes = 0
+    probe.pipelineDefaultInverseMissingNodes = 0
 end
 
 -- Private, globally exclusive allocation attribution for the Battle harness.
@@ -1630,6 +1643,27 @@ function host:_readTransformAllocationProbe()
         probe.pipelineVisualBoundsAllocatedKB,
         probe.pipelineVisualContentBoundsCreated,
         probe.pipelineVisualContentBoundsAllocatedKB
+end
+
+-- Returns the scalar identity/alias classification for candidate geometry.
+-- This is evidence for a later representation decision, not a public tree API.
+function host:_readMatrixClassificationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no matrix classification probe to read")
+    return probe.pipelineDefaultPresentationNodes,
+        probe.pipelinePrivatePresentationNodes,
+        probe.pipelineRootBoundaryNodes,
+        probe.pipelinePortalBoundaryNodes,
+        probe.pipelineLocalIdentityNodes,
+        probe.pipelineDefaultLocalIdentityNodes,
+        probe.pipelinePrivateLocalIdentityNodes,
+        probe.pipelineWorldBoundaryMatchNodes,
+        probe.pipelineDefaultWorldBoundaryMatchNodes,
+        probe.pipelineDefaultParentShareNodes,
+        probe.pipelineDefaultIdentityShareNodes,
+        probe.pipelineInverseMissingNodes,
+        probe.pipelineDefaultInverseMissingNodes
 end
 
 function host:_detachAllocationProbe()
