@@ -941,12 +941,14 @@ local function transformNodeGeometry(node, parent, allocationProbe)
     end
     local existed = node.presentation ~= nil
     local before = allocationProbe and collectgarbage("count") or nil
-    node.presentation = node.presentation or copyValues()
+    -- Static primitives only read the canonical defaults. Motion reconciliation
+    -- installs a private copy before any animated value can be mutated.
+    node.presentation = node.presentation or DEFAULT_VALUES
     if allocationProbe then
         recordGeometryAllocation(allocationProbe,
             "pipelinePresentationCreated",
             "pipelinePresentationAllocatedKB", before,
-            not existed and node.presentation ~= nil)
+            not existed and node.presentation ~= DEFAULT_VALUES)
     end
     existed = node._localTransform ~= nil
     before = allocationProbe and collectgarbage("count") or nil
