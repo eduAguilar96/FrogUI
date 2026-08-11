@@ -320,4 +320,11 @@ function element.isDescriptor(value)
     return descriptor(value)
 end
 
+-- Returns whether one value is a genuine primitive/component definition token.
+-- Diagnostic helpers use identity for these immutable definitions rather than
+-- trusting token-shaped application tables.
+function element.isToken(value)
+    return type(value) == "table" and getmetatable(value) == tokenMeta
+end
+
 return element

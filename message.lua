@@ -177,6 +177,11 @@ local addressMeta = {
     end,
 }
 
+local viewMeta = {
+    __call = function(view, input) return Element.construct(view, input) end,
+    __tostring = function(view) return "FrogUI.view(" .. view.name .. ")" end,
+}
+
 local actorMethods = {}
 
 function actorMethods:address(name)
@@ -203,10 +208,7 @@ function actorMethods:view(name, render)
         render = render,
         source = sourceOutsideFrogUI(),
     }
-    return setmetatable(token, {
-        __call = function(view, input) return Element.construct(view, input) end,
-        __tostring = function(view) return "FrogUI.view(" .. view.name .. ")" end,
-    })
+    return setmetatable(token, viewMeta)
 end
 
 local actorMeta = {
@@ -284,6 +286,14 @@ end
 
 function message.isAddress(value)
     return type(value) == "table" and value.__frogAddress == true
+end
+
+-- Returns whether one value is a genuine actor, addressed-view, or typed
+-- message definition token. Records created from a message use `token()`.
+function message.isDefinitionToken(value)
+    if type(value) ~= "table" then return false end
+    local meta = getmetatable(value)
+    return meta == actorMeta or meta == viewMeta or meta == recordTokenMeta
 end
 
 local function binding(kind, value)

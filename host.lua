@@ -1986,6 +1986,47 @@ function host:_detachAllocationProbe()
     return true
 end
 
+-- Attaches the private diagnostic-only component replay census before mount.
+-- It observes callbacks and never changes component expansion.
+function host:_attachRenderReplayCensus()
+    assert(not self._mounted,
+        "Render replay census must attach before Host mount")
+    assert(self._diagnostics.enabled,
+        "Render replay census requires diagnostics = true")
+    assert(rawget(self, "_renderReplayOracle") == nil,
+        "Render replay census is already attached")
+    local RenderReplayOracle = require("src.frogui.render_replay_oracle")
+    self._renderReplayOracle = RenderReplayOracle.new()
+    return true
+end
+
+-- Clears counters for one warm measurement window while retaining verification.
+function host:_resetRenderReplayCensusCounters()
+    local oracle = assert(rawget(self, "_renderReplayOracle"),
+        "FrogUI Host has no render replay census")
+    oracle:clearCounters()
+    return true
+end
+
+-- Returns one detached bounded census report for development tooling.
+function host:_readRenderReplayCensus()
+    local oracle = assert(rawget(self, "_renderReplayOracle"),
+        "FrogUI Host has no render replay census")
+    return oracle:report()
+end
+
+-- Detaches a census before mount or after a failed mount. Successful unmount
+-- already clears it so retained descriptions cannot cross Host lifetimes.
+function host:_detachRenderReplayCensus()
+    assert(not self._mounted,
+        "Render replay census must detach after Host unmount")
+    local oracle = assert(rawget(self, "_renderReplayOracle"),
+        "FrogUI Host has no render replay census")
+    oracle:reset()
+    self._renderReplayOracle = nil
+    return true
+end
+
 function host.new(options)
     options = options or {}
     local self = setmetatable({}, host)
@@ -2108,6 +2149,10 @@ end
 
 function host.currentViewport()
     assert(renderingHost, "Frog.useViewport() may only run while a component renders")
+    if rawget(renderingHost, "_renderReplayOracle")
+            and renderingHost._renderHook then
+        renderingHost._renderHook.usesViewport = true
+    end
     return renderingHost._viewport:snapshot()
 end
 
@@ -2173,6 +2218,8 @@ function host:_publishRenderHooks(context)
     self._frames = context.frames
     self._refs = context.refs
     Ref.publish(previousRefs, self._refs, context.refRectangles)
+    local oracle = rawget(self, "_renderReplayOracle")
+    if oracle then oracle:commit(context.renderReplayCensus) end
 end
 
 -- Republishes geometry after retained layout mutates the committed tree, such
@@ -2478,6 +2525,9 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
         hooks = {},
         index = 0,
     }
+    if rawget(self, "_renderReplayOracle") then
+        session.usesViewport = false
+    end
     self._renderHook = session
     Element._beginRenderSource(self, token.source)
     local results, renderElapsed
@@ -2513,11 +2563,20 @@ function host:_withOwnerRender(label, token, logicalPath, context, callback, ...
                 .. " to " .. session.index .. "; FrogUI hooks are positional"
                 .. " and unconditional")
     end
-    context.hookOwners[logicalPath] = {
+    local ownerRecord = {
         token = token,
         renderCallback = callback,
         hooks = session.hooks,
     }
+    if rawget(self, "_renderReplayOracle") then
+        ownerRecord.usesViewport = session.usesViewport == true
+    end
+    context.hookOwners[logicalPath] = ownerRecord
+    local renderReplayOracle = rawget(self, "_renderReplayOracle")
+    if renderReplayOracle then
+        renderReplayOracle:afterSemanticCallback(
+            context.renderReplayCensus)
+    end
     if profiler then
         profiler:increment("semanticRenders")
         profiler:ownerRender(token.kind .. ":" .. label, renderElapsed)
@@ -2920,8 +2979,20 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 "pipelinePreparationCalls",
                 "pipelinePreparationAllocatedKB", pipelineBefore)
         end
+        local replayVisit
+        local renderReplayOracle = rawget(self, "_renderReplayOracle")
+        if renderReplayOracle then
+            replayVisit = renderReplayOracle:beforeComponent(
+                context.renderReplayCensus, logicalPath,
+                token, token.render, props)
+        end
         local rendered = self:_withOwnerRender(token.name, token, logicalPath,
             context, token.render, props)
+        if renderReplayOracle then
+            renderReplayOracle:afterComponent(
+                context.renderReplayCensus, replayVisit,
+                context.hookOwners[logicalPath], rendered)
+        end
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         local bookkeepingStarted = profiler and profiler:start() or nil
         if rendered == nil or rendered == false then
@@ -3677,6 +3748,11 @@ function host:_build(root)
         context.logicalIdentityBytes = 0
         context.sourceAttributedDescriptors = 0
     end
+    local renderReplayOracle = rawget(self, "_renderReplayOracle")
+    if renderReplayOracle then
+        context.renderReplayCensus = renderReplayOracle:beginCandidate(
+            self._viewport:snapshot())
+    end
     local function buildCandidate()
         local expansionStarted = self._diagnostics:start()
         local pipelineBefore = pipelineProbe
@@ -3788,6 +3864,9 @@ function host:_build(root)
             local observerStarted = self._diagnostics:start()
             publishDiagnosticStructure(self, candidate, context)
             self._diagnostics:finish("diagnosticObserver", observerStarted)
+        end
+        if renderReplayOracle then
+            renderReplayOracle:prepareCommit(context.renderReplayCensus)
         end
         return candidate
     end
@@ -5140,6 +5219,11 @@ function host:unmount()
     self._feedbackQueue = {}
     self._rawClock:reset()
     self._messageQueue = {}
+    local renderReplayOracle = rawget(self, "_renderReplayOracle")
+    if renderReplayOracle then
+        renderReplayOracle:reset()
+        self._renderReplayOracle = nil
+    end
     self._mounted = false
     if activeHost == self then activeHost = nil end
     local resourceError = self:_commitResourceDisposals()
