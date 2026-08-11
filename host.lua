@@ -3254,7 +3254,8 @@ function host:_resolveDeferred(node, context)
     end
     local structureProbe = context.structureAllocationProbe
     local arrayBefore = structureProbe and collectgarbage("count") or nil
-    local children = {}
+    local children = node.children
+    local childCount = #children
     if structureProbe then
         local arrayAfter = collectgarbage("count")
         structureProbe.deferredArrayCalls =
@@ -3263,13 +3264,15 @@ function host:_resolveDeferred(node, context)
             structureProbe.deferredArrayAllocatedKB + arrayAfter - arrayBefore
     end
     if profiler then profiler:finish("deferredResolution", started) end
-    for _, child in ipairs(node.children or {}) do
-        local resolved = self:_resolveDeferred(child, context)
+    local resolvedCount = 0
+    for index = 1, childCount do
+        local resolved = self:_resolveDeferred(children[index], context)
         started = profiler and profiler:start() or nil
         if resolved then
             local appendBefore = structureProbe
                 and collectgarbage("count") or nil
-            children[#children + 1] = resolved
+            resolvedCount = resolvedCount + 1
+            children[resolvedCount] = resolved
             if structureProbe then
                 local appendAfter = collectgarbage("count")
                 structureProbe.deferredChildCalls =
@@ -3282,7 +3285,7 @@ function host:_resolveDeferred(node, context)
         if profiler then profiler:finish("deferredResolution", started) end
     end
     started = profiler and profiler:start() or nil
-    node.children = children
+    for index = resolvedCount + 1, childCount do children[index] = nil end
     if profiler then profiler:finish("deferredResolution", started) end
     return node
 end
