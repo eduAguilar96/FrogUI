@@ -13,16 +13,6 @@ local function recordAllocation(probe, callsField, kbField, before, created)
     probe[kbField] = probe[kbField] + after - before
 end
 
-local function recordTextHelper(probe, callsField, kbField, before)
-    local allocatedKB = collectgarbage("count") - before
-    probe.pipelineLayoutTextHelperCreated =
-        probe.pipelineLayoutTextHelperCreated + 1
-    probe.pipelineLayoutTextHelperAllocatedKB =
-        probe.pipelineLayoutTextHelperAllocatedKB + allocatedKB
-    probe[callsField] = probe[callsField] + 1
-    probe[kbField] = probe[kbField] + allocatedKB
-end
-
 local function sessionProbe(session)
     return session and session._allocationProbe or nil
 end
@@ -151,178 +141,115 @@ local function explicit(node, maxWidth, maxHeight, probe)
         resolveSize(node.props.height, maxHeight, probe)
 end
 
--- Production text measurement stays free of allocation-probe branches. The
--- instrumented twin below runs only inside the exclusive Battle harness.
-local function textSizeFast(node, maxWidth, maxHeight, host)
-    local text = tostring(node.props.text or "")
-    local size = host:_fontSize(node.props.role) * (node.props.fontScale or 1)
-    local minimum = (host.theme.fontSizes or {}).minimum or 8
-    local font, width, height, lineCount
-    local function measureAt(candidateSize)
-        local candidateFont = host:_font(node.props.role, candidateSize)
-        local candidateWidth, candidateHeight, lines
-        if candidateFont and candidateFont.getWidth
-                and candidateFont.getHeight then
-            candidateWidth, candidateHeight = candidateFont:getWidth(text),
-                candidateFont:getHeight()
-            lines = 1
-            if node.props.wrap and maxWidth < math.huge
-                    and candidateFont.getWrap then
-                local wrappedWidth, wrappedLines = candidateFont:getWrap(text,
-                    math.max(1, maxWidth))
-                candidateWidth = math.min(maxWidth, wrappedWidth)
-                lines = math.max(1, #wrappedLines)
-                candidateHeight = candidateHeight * lines
-            end
-        else
-            candidateWidth, candidateHeight = #text * candidateSize * 0.55,
-                candidateSize * 1.2
-            lines = 1
-            if node.props.wrap and maxWidth < math.huge
-                    and candidateWidth > maxWidth then
-                lines = math.ceil(candidateWidth / math.max(1, maxWidth))
-                candidateHeight = candidateHeight * lines
-                candidateWidth = maxWidth
-            end
+-- Measures one text candidate from explicit inputs. Keeping this helper at
+-- module scope avoids allocating a closure for every Text node and makes the
+-- real-font and deterministic fallback paths share one readable algorithm.
+local function measureTextAt(host, role, text, candidateSize, wrap,
+        maxWidth, probe)
+    local before = probe and collectgarbage("count") or nil
+    local font = host:_font(role, candidateSize)
+    if probe then
+        recordAllocation(probe, "pipelineLayoutTextFontCalls",
+            "pipelineLayoutTextFontAllocatedKB", before, 1)
+    end
+
+    local width, height, lines
+    if font and font.getWidth and font.getHeight then
+        before = probe and collectgarbage("count") or nil
+        width, height = font:getWidth(text), font:getHeight()
+        if probe then
+            recordAllocation(probe, "pipelineLayoutTextMetricCalls",
+                "pipelineLayoutTextMetricAllocatedKB", before, 1)
         end
-        return candidateFont, candidateWidth, candidateHeight, lines
-    end
-    font, width, height, lineCount = measureAt(size)
-    local function visibleHeight()
-        if not node.props.maxLines then return height end
-        local lineHeight = font and font.getHeight and font:getHeight()
-            or size * 1.2
-        return math.min(height, lineHeight * node.props.maxLines)
-    end
-    if node.props.fitDown then
-        while size > minimum and (width > maxWidth
-                or visibleHeight() > maxHeight
-                or node.props.maxLines and lineCount > node.props.maxLines) do
-            size = size - 1
-            font, width, height, lineCount = measureAt(size)
+        lines = 1
+        if wrap and maxWidth < math.huge and font.getWrap then
+            before = probe and collectgarbage("count") or nil
+            local wrappedWidth, wrappedLines = font:getWrap(text,
+                math.max(1, maxWidth))
+            if probe then
+                recordAllocation(probe, "pipelineLayoutTextWrapCalls",
+                    "pipelineLayoutTextWrapAllocatedKB", before, 1)
+            end
+            width = math.min(maxWidth, wrappedWidth)
+            lines = math.max(1, #wrappedLines)
+            height = height * lines
+        end
+    else
+        before = probe and collectgarbage("count") or nil
+        width, height = #text * candidateSize * 0.55, candidateSize * 1.2
+        lines = 1
+        if wrap and maxWidth < math.huge and width > maxWidth then
+            lines = math.ceil(width / math.max(1, maxWidth))
+            height = height * lines
+            width = maxWidth
+        end
+        if probe then
+            recordAllocation(probe, "pipelineLayoutTextFallbackCalls",
+                "pipelineLayoutTextFallbackAllocatedKB", before, 1)
         end
     end
-    node._resolvedFont = font
-    node._resolvedFontSize = size
-    if node.props.maxLines then
-        local lineHeight = font and font.getHeight and font:getHeight()
-            or size * 1.2
-        height = math.min(height, lineHeight * node.props.maxLines)
-    end
-    return width, height
+    return font, width, height, lines
 end
 
-local function textSize(node, maxWidth, maxHeight, host, probe)
-    if not probe then
-        return textSizeFast(node, maxWidth, maxHeight, host)
-    end
-    local setupBefore = collectgarbage("count")
-    local text = tostring(node.props.text or "")
-    local size = host:_fontSize(node.props.role) * (node.props.fontScale or 1)
-    local minimum = (host.theme.fontSizes or {}).minimum or 8
-    local font, width, height, lineCount
-    recordAllocation(probe, "pipelineLayoutTextSetupCalls",
-        "pipelineLayoutTextSetupAllocatedKB", setupBefore, 1)
-    local helperBefore = collectgarbage("count")
-    local function measureAt(candidateSize)
+-- Returns the height visible after an optional line cap. Explicit values make
+-- this usable during fit-down and final publication without captured state.
+local function textVisibleHeight(maxLines, font, height, size, probe)
+    if not maxLines then return height end
+    local lineHeight
+    if font and font.getHeight then
         local before = probe and collectgarbage("count") or nil
-        local candidateFont = host:_font(node.props.role, candidateSize)
+        lineHeight = font:getHeight()
         if probe then
-            recordAllocation(probe, "pipelineLayoutTextFontCalls",
-                "pipelineLayoutTextFontAllocatedKB", before, 1)
+            recordAllocation(probe, "pipelineLayoutTextMaxLineCalls",
+                "pipelineLayoutTextMaxLineAllocatedKB", before, 1)
         end
-        local candidateWidth, candidateHeight, lines
-        if candidateFont and candidateFont.getWidth and candidateFont.getHeight then
-            before = probe and collectgarbage("count") or nil
-            candidateWidth, candidateHeight = candidateFont:getWidth(text),
-                candidateFont:getHeight()
-            if probe then
-                recordAllocation(probe, "pipelineLayoutTextMetricCalls",
-                    "pipelineLayoutTextMetricAllocatedKB", before, 1)
-            end
-            lines = 1
-            if node.props.wrap and maxWidth < math.huge and candidateFont.getWrap then
-                before = probe and collectgarbage("count") or nil
-                local wrappedWidth, wrappedLines = candidateFont:getWrap(text,
-                    math.max(1, maxWidth))
-                if probe then
-                    recordAllocation(probe, "pipelineLayoutTextWrapCalls",
-                        "pipelineLayoutTextWrapAllocatedKB", before, 1)
-                end
-                candidateWidth = math.min(maxWidth, wrappedWidth)
-                lines = math.max(1, #wrappedLines)
-                candidateHeight = candidateHeight * lines
-            end
-        else
-            before = probe and collectgarbage("count") or nil
-            candidateWidth, candidateHeight = #text * candidateSize * 0.55, candidateSize * 1.2
-            lines = 1
-            if node.props.wrap and maxWidth < math.huge and candidateWidth > maxWidth then
-                lines = math.ceil(candidateWidth / math.max(1, maxWidth))
-                candidateHeight = candidateHeight * lines
-                candidateWidth = maxWidth
-            end
-            if probe then
-                recordAllocation(probe, "pipelineLayoutTextFallbackCalls",
-                    "pipelineLayoutTextFallbackAllocatedKB", before, 1)
-            end
-        end
-        return candidateFont, candidateWidth, candidateHeight, lines
+    else
+        lineHeight = size * 1.2
     end
-    recordTextHelper(probe, "pipelineLayoutTextMeasureHelperCreated",
-        "pipelineLayoutTextMeasureHelperAllocatedKB", helperBefore)
-    font, width, height, lineCount = measureAt(size)
-    helperBefore = collectgarbage("count")
-    local function visibleHeight()
-        if not node.props.maxLines then return height end
-        local lineHeight
-        if font and font.getHeight then
-            local before = probe and collectgarbage("count") or nil
-            lineHeight = font:getHeight()
-            if probe then
-                recordAllocation(probe, "pipelineLayoutTextMaxLineCalls",
-                    "pipelineLayoutTextMaxLineAllocatedKB", before, 1)
-            end
-        else
-            lineHeight = size * 1.2
-        end
-        return math.min(height, lineHeight * node.props.maxLines)
+    return math.min(height, lineHeight * maxLines)
+end
+
+-- Resolves one Text node, including wrapping, fit-down and line clipping.
+-- Allocation diagnostics observe this same production algorithm; they do not
+-- maintain a second behaviorally equivalent implementation.
+local function textSize(node, maxWidth, maxHeight, host, probe)
+    local setupBefore = probe and collectgarbage("count") or nil
+    local text = tostring(node.props.text or "")
+    local role = node.props.role
+    local size = host:_fontSize(role) * (node.props.fontScale or 1)
+    local minimum = (host.theme.fontSizes or {}).minimum or 8
+    local wrap = node.props.wrap
+    local maxLines = node.props.maxLines
+    if probe then
+        recordAllocation(probe, "pipelineLayoutTextSetupCalls",
+            "pipelineLayoutTextSetupAllocatedKB", setupBefore, 1)
     end
-    recordTextHelper(probe, "pipelineLayoutTextVisibleHelperCreated",
-        "pipelineLayoutTextVisibleHelperAllocatedKB", helperBefore)
+
+    local font, width, height, lineCount = measureTextAt(host, role, text,
+        size, wrap, maxWidth, probe)
     if node.props.fitDown then
         if probe then
             probe.pipelineLayoutTextFitDownCalls =
                 probe.pipelineLayoutTextFitDownCalls + 1
         end
         while size > minimum and (width > maxWidth
-                or visibleHeight() > maxHeight
-                or node.props.maxLines and lineCount > node.props.maxLines) do
+                or textVisibleHeight(maxLines, font, height, size, probe)
+                    > maxHeight
+                or maxLines and lineCount > maxLines) do
             if probe then
                 probe.pipelineLayoutTextFitIterations =
                     probe.pipelineLayoutTextFitIterations + 1
             end
             size = size - 1
-            font, width, height, lineCount = measureAt(size)
+            font, width, height, lineCount = measureTextAt(host, role, text,
+                size, wrap, maxWidth, probe)
         end
     end
+
     node._resolvedFont = font
     node._resolvedFontSize = size
-    if node.props.maxLines then
-        local lineHeight
-        if font and font.getHeight then
-            local before = probe and collectgarbage("count") or nil
-            lineHeight = font:getHeight()
-            if probe then
-                recordAllocation(probe, "pipelineLayoutTextMaxLineCalls",
-                    "pipelineLayoutTextMaxLineAllocatedKB", before, 1)
-            end
-        else
-            lineHeight = size * 1.2
-        end
-        height = math.min(height, lineHeight * node.props.maxLines)
-    end
-    return width, height
+    return width,
+        textVisibleHeight(maxLines, font, height, size, probe)
 end
 
 local function imageSize(node, host)
