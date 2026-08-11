@@ -13,6 +13,7 @@ local Shader = require("src.frogui.shader")
 local Interaction = require("src.frogui.interaction")
 local Ref = require("src.frogui.ref")
 local Diagnostics = require("src.frogui.diagnostics")
+local DiagnosticComparison = require("src.frogui.diagnostic_comparison")
 
 local host = {}
 host.__index = host
@@ -165,6 +166,8 @@ local TYPE_PROPS = {
     },
     DropTarget = { accepts = true, address = true },
 }
+
+DiagnosticComparison.validateProps(COMMON_PROPS, TYPE_PROPS)
 
 -- Immutable validation catalogs are shared across candidate generations.
 -- Validators only iterate these values; they never mutate them.
@@ -3618,6 +3621,9 @@ local function publishDiagnosticStructure(self, root, context)
         primitiveNames[name] = true
     end
     self._diagnosticPrimitiveNames = primitiveNames
+    local comparisonStarted = self._diagnostics:start()
+    context.candidateComparison = DiagnosticComparison.compare(self._tree, root)
+    self._diagnostics:finish("candidateComparison", comparisonStarted)
 end
 
 function host:_build(root)
@@ -3899,6 +3905,10 @@ function host:render(root)
         self._diagnostics:finish("external", externalStarted)
         error(appendFailure(commitError,
             "unpublished candidate cleanup failed", cleanupError), 0)
+    end
+    if context.candidateComparison then
+        self._diagnostics:recordCandidateComparison(
+            context.candidateComparison)
     end
     self._diagnostics:finish("reconcile", reconcileStarted)
     self._diagnostics:finish("external", externalStarted)
@@ -4813,6 +4823,10 @@ function host:resize(width, height)
         self._diagnostics:finish("external", externalStarted)
         error(appendFailure(commitError,
             "unpublished candidate cleanup failed", cleanupError), 0)
+    end
+    if context.candidateComparison then
+        self._diagnostics:recordCandidateComparison(
+            context.candidateComparison)
     end
     self._diagnostics:finish("reconcile", reconcileStarted)
     self._diagnostics:finish("external", externalStarted)

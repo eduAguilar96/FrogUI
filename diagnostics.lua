@@ -22,7 +22,7 @@ local PHASES = {
     "runtime", "interaction", "motion", "motionUpdate",
     "committedTransform", "refs", "effects", "effectRefresh",
     "effectUpdate", "effectBounds",
-    "diagnosticObserver", "external", "paint",
+    "candidateComparison", "diagnosticObserver", "external", "paint",
 }
 
 local HEAP_PHASES = {
@@ -70,6 +70,43 @@ local function copyAttribution(source)
     return output
 end
 
+local function copyCandidateComparisons(source)
+    local output = {}
+    for index, row in ipairs(source or {}) do
+        local copy = {
+            rootActor = row.rootActor,
+            rootRevision = row.rootRevision,
+            candidateNodes = row.candidateNodes,
+            committedNodes = row.committedNodes,
+            matchedNodes = row.matchedNodes,
+            addedNodes = row.addedNodes,
+            removedNodes = row.removedNodes,
+            callbackUnknownObservations = row.callbackUnknownObservations,
+            stable = shallowCopy(row.stable),
+            changed = shallowCopy(row.changed),
+            unknown = shallowCopy(row.unknown),
+            changedOwners = {},
+            stableTopologyBranches = {},
+            stableGeometryBranches = {},
+        }
+        for category, owners in pairs(row.changedOwners or {}) do
+            copy.changedOwners[category] = shallowCopy(owners)
+        end
+        for _, name in ipairs {
+                "stableTopologyBranches", "stableGeometryBranches" } do
+            for branchIndex, branch in ipairs(row[name] or {}) do
+                copy[name][branchIndex] = {
+                    owner = branch.owner,
+                    logicalIdentity = branch.logicalIdentity,
+                    nodes = branch.nodes,
+                }
+            end
+        end
+        output[index] = copy
+    end
+    return output
+end
+
 -- Creates one disabled-by-default profiler. A fixed ring prevents the tool
 -- itself from creating unbounded history during long Battle sessions.
 function diagnostics.new(options)
@@ -106,6 +143,7 @@ function diagnostics:ensureFrame()
             ownerRenders = {},
             transformAttribution = {},
             refAttribution = {},
+            candidateComparisons = {},
         }
     end
 end
@@ -201,6 +239,19 @@ function diagnostics:recordRefs(context, row)
         "calls", "treeVisits", "published", "cleared", "changedRectangles",
         "visualTransformChanged", "interactionInvalidated",
     })
+end
+
+-- Accepts one already scalar candidate/committed census after the Host commit
+-- succeeds. Failed candidates never cross this boundary, and no node, prop,
+-- state, callback, or retained process table is kept in the profiler ring.
+function diagnostics:recordCandidateComparison(row)
+    if not self.enabled or not self.current then return end
+    assert(type(row) == "table"
+            and row.candidateNodes == row.matchedNodes + row.addedNodes
+            and row.committedNodes == row.matchedNodes + row.removedNodes,
+        "invalid FrogUI candidate comparison coverage")
+    self.current.candidateComparisons[
+        #self.current.candidateComparisons + 1] = row
 end
 
 -- Starts the update portion of a graphical frame. Input/reload work may have
@@ -308,6 +359,11 @@ end
 function diagnostics:_commit()
     local sample = assert(self.current, "FrogUI diagnostics has no current sample")
     boundTransformCategories(sample.transformAttribution)
+    for _, comparison in ipairs(sample.candidateComparisons or {}) do
+        for category, owners in pairs(comparison.changedOwners or {}) do
+            comparison.changedOwners[category] = boundedCategories(owners)
+        end
+    end
     local memory = collectgarbage("count")
     sample.memoryKB = memory
     sample.memoryDeltaKB = memory - sample.memoryStartKB
@@ -513,6 +569,8 @@ function diagnostics:trace()
             transformAttribution = copyAttribution(
                 sample.transformAttribution),
             refAttribution = copyAttribution(sample.refAttribution),
+            candidateComparisons = copyCandidateComparisons(
+                sample.candidateComparisons),
         }
     end
     return output
@@ -575,6 +633,8 @@ function diagnostics:snapshot()
             quiet = cohortSummary(quiet, phaseNames),
         },
         slowest = slowest,
+        candidateComparisons = copyCandidateComparisons(
+            latest and latest.candidateComparisons or {}),
         memoryKB = latest and latest.memoryKB or collectgarbage("count"),
         memoryDeltaKB = latest and latest.memoryDeltaKB or 0,
     }
