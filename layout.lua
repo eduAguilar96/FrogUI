@@ -132,7 +132,12 @@ local function nodePadding(node, probe)
         return node._padding
     end
     local result = padding(node.props.padding, probe)
+    local before = probe and collectgarbage("count") or nil
     node._padding = result
+    if probe then
+        recordAllocation(probe, "pipelineLayoutPaddingPublishCalls",
+            "pipelineLayoutPaddingPublishAllocatedKB", before, 1)
+    end
     return result
 end
 
@@ -246,8 +251,12 @@ local function textSize(node, maxWidth, maxHeight, host, probe)
         end
     end
 
-    node._resolvedFont = font
-    node._resolvedFontSize = size
+    local publishBefore = probe and collectgarbage("count") or nil
+    node._resolvedFont, node._resolvedFontSize = font, size
+    if probe then
+        recordAllocation(probe, "pipelineLayoutTextResolvePublishCalls",
+            "pipelineLayoutTextResolvePublishAllocatedKB", publishBefore, 1)
+    end
     return width,
         textVisibleHeight(maxLines, font, height, size, probe)
 end
@@ -296,6 +305,18 @@ local function measure(node, maxWidth, maxHeight, host, session)
     if allocationProbe then
         allocationProbe.pipelineLayoutMeasureNodes =
             allocationProbe.pipelineLayoutMeasureNodes + 1
+        if session._phase == "initial" then
+            allocationProbe.pipelineLayoutInitialMeasureNodes =
+                allocationProbe.pipelineLayoutInitialMeasureNodes + 1
+        elseif session._phase == "arrange" then
+            allocationProbe.pipelineLayoutArrangeMeasureNodes =
+                allocationProbe.pipelineLayoutArrangeMeasureNodes + 1
+        else
+            assert(session._phase == "planes",
+                "FrogUI allocation probe lost its layout phase")
+            allocationProbe.pipelineLayoutPlanesMeasureNodes =
+                allocationProbe.pipelineLayoutPlanesMeasureNodes + 1
+        end
     end
     maxWidth = math.max(0, maxWidth or math.huge)
     maxHeight = math.max(0, maxHeight or math.huge)
@@ -308,6 +329,16 @@ local function measure(node, maxWidth, maxHeight, host, session)
         if allocationProbe then
             allocationProbe.pipelineLayoutMeasureReuseHits =
                 allocationProbe.pipelineLayoutMeasureReuseHits + 1
+            if session._phase == "initial" then
+                allocationProbe.pipelineLayoutInitialMeasureReuseHits =
+                    allocationProbe.pipelineLayoutInitialMeasureReuseHits + 1
+            elseif session._phase == "arrange" then
+                allocationProbe.pipelineLayoutArrangeMeasureReuseHits =
+                    allocationProbe.pipelineLayoutArrangeMeasureReuseHits + 1
+            else
+                allocationProbe.pipelineLayoutPlanesMeasureReuseHits =
+                    allocationProbe.pipelineLayoutPlanesMeasureReuseHits + 1
+            end
         end
         return node.measuredWidth, node.measuredHeight
     end
@@ -432,15 +463,28 @@ local function measure(node, maxWidth, maxHeight, host, session)
     -- explicit axis. Preserve it like childBox preserves an explicit size, so
     -- a centered overflow-visible figure cannot be silently distorted by its
     -- parent's measurement ceiling.
+    local publishBefore = allocationProbe and collectgarbage("count") or nil
     node._derivedWidth = derivedWidth and width or nil
     node._derivedHeight = derivedHeight and height or nil
     node.measuredWidth = node._derivedWidth or clamp(width, 0, maxWidth)
     node.measuredHeight = node._derivedHeight or clamp(height, 0, maxHeight)
+    if allocationProbe then
+        recordAllocation(allocationProbe,
+            "pipelineLayoutMeasureBoxPublishCalls",
+            "pipelineLayoutMeasureBoxPublishAllocatedKB", publishBefore, 1)
+    end
     if session then
+        publishBefore = allocationProbe and collectgarbage("count") or nil
         node._measureSession = session
         node._measureMaxWidth = maxWidth
         node._measureMaxHeight = maxHeight
         node._measurePortalLayout = node._portalLayout == true
+        if allocationProbe then
+            recordAllocation(allocationProbe,
+                "pipelineLayoutMeasureStampPublishCalls",
+                "pipelineLayoutMeasureStampPublishAllocatedKB",
+                publishBefore, 1)
+        end
     end
     return node.measuredWidth, node.measuredHeight
 end
@@ -731,22 +775,40 @@ function layout.arrange(node, x, y, width, height, host, session)
     -- last-entry stamp before arranging it; descendant stamps remain eligible
     -- until their own arrange begins. This avoids a dependency graph while
     -- making every exact reuse local to the still-valid traversal prefix.
+    local publishBefore = allocationProbe and collectgarbage("count") or nil
     node._measureSession = nil
     node._measureMaxWidth = nil
     node._measureMaxHeight = nil
     node._measurePortalLayout = nil
+    if allocationProbe then
+        recordAllocation(allocationProbe,
+            "pipelineLayoutMeasureStampClearCalls",
+            "pipelineLayoutMeasureStampClearAllocatedKB", publishBefore, 1)
+    end
     local offset = node.props.offset
     if offset then
         x = x + (offset.x or 0)
         y = y + (offset.y or 0)
     end
+    publishBefore = allocationProbe and collectgarbage("count") or nil
     node.x, node.y = x, y
     node.width, node.height = math.max(0, width), math.max(0, height)
+    if allocationProbe then
+        recordAllocation(allocationProbe,
+            "pipelineLayoutArrangedBoxPublishCalls",
+            "pipelineLayoutArrangedBoxPublishAllocatedKB", publishBefore, 1)
+    end
     local pad = nodePadding(node, allocationProbe)
+    publishBefore = allocationProbe and collectgarbage("count") or nil
     node.contentX = x + pad.left
     node.contentY = y + pad.top
     node.contentWidth = math.max(0, width - pad.left - pad.right)
     node.contentHeight = math.max(0, height - pad.top - pad.bottom)
+    if allocationProbe then
+        recordAllocation(allocationProbe,
+            "pipelineLayoutContentBoxPublishCalls",
+            "pipelineLayoutContentBoxPublishAllocatedKB", publishBefore, 1)
+    end
 
     if (node.type == "Modal" or node.type == "Chrome")
             and not node._portalLayout then return end
@@ -895,6 +957,7 @@ function layout.run(root, width, height, host, allocationProbe)
     -- measurement and clear any obsolete candidate stamp while arranging.
     local before = allocationProbe and collectgarbage("count") or nil
     local session = { _allocationProbe = allocationProbe }
+    if allocationProbe then session._phase = "initial" end
     if allocationProbe then
         recordAllocation(allocationProbe, "pipelineLayoutSessionCreated",
             "pipelineLayoutSessionAllocatedKB", before, 1)
@@ -909,12 +972,14 @@ function layout.run(root, width, height, host, allocationProbe)
         or width
     local arrangedHeight = resolveSize(root.props.height, height,
         allocationProbe) or height
+    if allocationProbe then session._phase = "arrange" end
     before = allocationProbe and collectgarbage("count") or nil
     layout.arrange(root, 0, 0, arrangedWidth, arrangedHeight, host, session)
     if allocationProbe then
         recordAllocation(allocationProbe, "pipelineLayoutArrangePhaseCalls",
             "pipelineLayoutArrangePhaseAllocatedKB", before, 1)
     end
+    if allocationProbe then session._phase = "planes" end
     before = allocationProbe and collectgarbage("count") or nil
     preparePlanes(root, width, height, host, session)
     if allocationProbe then

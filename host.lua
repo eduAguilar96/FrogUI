@@ -1508,6 +1508,12 @@ local function resetAllocationProbe(probe)
     probe.pipelineLayoutPlanesPhaseAllocatedKB = 0
     probe.pipelineLayoutMeasureNodes = 0
     probe.pipelineLayoutMeasureReuseHits = 0
+    probe.pipelineLayoutInitialMeasureNodes = 0
+    probe.pipelineLayoutInitialMeasureReuseHits = 0
+    probe.pipelineLayoutArrangeMeasureNodes = 0
+    probe.pipelineLayoutArrangeMeasureReuseHits = 0
+    probe.pipelineLayoutPlanesMeasureNodes = 0
+    probe.pipelineLayoutPlanesMeasureReuseHits = 0
     probe.pipelineLayoutArrangeNodes = 0
     probe.pipelineLayoutFlowNodes = 0
     probe.pipelineLayoutWrappedRowNodes = 0
@@ -1518,9 +1524,21 @@ local function resetAllocationProbe(probe)
     probe.pipelineLayoutWrapperNodes = 0
     probe.pipelineLayoutPortalNodes = 0
     probe.pipelineLayoutDetachedNodes = 0
+    probe.pipelineLayoutMeasureBoxPublishCalls = 0
+    probe.pipelineLayoutMeasureBoxPublishAllocatedKB = 0
+    probe.pipelineLayoutMeasureStampPublishCalls = 0
+    probe.pipelineLayoutMeasureStampPublishAllocatedKB = 0
+    probe.pipelineLayoutMeasureStampClearCalls = 0
+    probe.pipelineLayoutMeasureStampClearAllocatedKB = 0
+    probe.pipelineLayoutArrangedBoxPublishCalls = 0
+    probe.pipelineLayoutArrangedBoxPublishAllocatedKB = 0
+    probe.pipelineLayoutContentBoxPublishCalls = 0
+    probe.pipelineLayoutContentBoxPublishAllocatedKB = 0
     probe.pipelineLayoutPaddingNormalizations = 0
     probe.pipelineLayoutZeroPaddingAliases = 0
     probe.pipelineLayoutPaddingReuseHits = 0
+    probe.pipelineLayoutPaddingPublishCalls = 0
+    probe.pipelineLayoutPaddingPublishAllocatedKB = 0
     probe.pipelineLayoutPaddingCreated = 0
     probe.pipelineLayoutPaddingAllocatedKB = 0
     probe.pipelineLayoutZeroPaddingCreated = 0
@@ -1555,6 +1573,8 @@ local function resetAllocationProbe(probe)
     probe.pipelineLayoutTextFallbackAllocatedKB = 0
     probe.pipelineLayoutTextMaxLineCalls = 0
     probe.pipelineLayoutTextMaxLineAllocatedKB = 0
+    probe.pipelineLayoutTextResolvePublishCalls = 0
+    probe.pipelineLayoutTextResolvePublishAllocatedKB = 0
     probe.pipelineLayoutTextFitDownCalls = 0
     probe.pipelineLayoutTextFitIterations = 0
     probe.pipelineLayoutImageCalls = 0
@@ -1752,6 +1772,12 @@ function host:_readLayoutAllocationProbe()
         probe.pipelineLayoutPlanesPhaseAllocatedKB,
         probe.pipelineLayoutMeasureNodes,
         probe.pipelineLayoutMeasureReuseHits,
+        probe.pipelineLayoutInitialMeasureNodes,
+        probe.pipelineLayoutInitialMeasureReuseHits,
+        probe.pipelineLayoutArrangeMeasureNodes,
+        probe.pipelineLayoutArrangeMeasureReuseHits,
+        probe.pipelineLayoutPlanesMeasureNodes,
+        probe.pipelineLayoutPlanesMeasureReuseHits,
         probe.pipelineLayoutArrangeNodes,
         probe.pipelineLayoutFlowNodes,
         probe.pipelineLayoutWrappedRowNodes,
@@ -1762,9 +1788,21 @@ function host:_readLayoutAllocationProbe()
         probe.pipelineLayoutWrapperNodes,
         probe.pipelineLayoutPortalNodes,
         probe.pipelineLayoutDetachedNodes,
+        probe.pipelineLayoutMeasureBoxPublishCalls,
+        probe.pipelineLayoutMeasureBoxPublishAllocatedKB,
+        probe.pipelineLayoutMeasureStampPublishCalls,
+        probe.pipelineLayoutMeasureStampPublishAllocatedKB,
+        probe.pipelineLayoutMeasureStampClearCalls,
+        probe.pipelineLayoutMeasureStampClearAllocatedKB,
+        probe.pipelineLayoutArrangedBoxPublishCalls,
+        probe.pipelineLayoutArrangedBoxPublishAllocatedKB,
+        probe.pipelineLayoutContentBoxPublishCalls,
+        probe.pipelineLayoutContentBoxPublishAllocatedKB,
         probe.pipelineLayoutPaddingNormalizations,
         probe.pipelineLayoutZeroPaddingAliases,
         probe.pipelineLayoutPaddingReuseHits,
+        probe.pipelineLayoutPaddingPublishCalls,
+        probe.pipelineLayoutPaddingPublishAllocatedKB,
         probe.pipelineLayoutPaddingCreated,
         probe.pipelineLayoutPaddingAllocatedKB,
         probe.pipelineLayoutZeroPaddingCreated,
@@ -1799,6 +1837,8 @@ function host:_readLayoutAllocationProbe()
         probe.pipelineLayoutTextFallbackAllocatedKB,
         probe.pipelineLayoutTextMaxLineCalls,
         probe.pipelineLayoutTextMaxLineAllocatedKB,
+        probe.pipelineLayoutTextResolvePublishCalls,
+        probe.pipelineLayoutTextResolvePublishAllocatedKB,
         probe.pipelineLayoutTextFitDownCalls,
         probe.pipelineLayoutTextFitIterations,
         probe.pipelineLayoutImageCalls,
