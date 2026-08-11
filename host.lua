@@ -166,6 +166,32 @@ local TYPE_PROPS = {
     DropTarget = { accepts = true, address = true },
 }
 
+-- Immutable validation catalogs are shared across candidate generations.
+-- Validators only iterate these values; they never mutate them.
+local VALIDATION_VALUES = {
+    overflow = { "clip", "visible" },
+    stretchAlign = { "start", "center", "end", "stretch" },
+    flowJustify = { "start", "center", "end", "space-between" },
+    textAlign = { "left", "center", "right", "start", "end" },
+    popupVariant = { "float", "impact", "notice" },
+    imageFit = { "contain", "cover", "stretch" },
+    filter = { "nearest", "linear" },
+    repeatAxis = { "x", "y", "both", "none" },
+    shaderFallback = { "plain", "hidden" },
+    shaderBlend = { "alpha", "add" },
+    scrollAxis = { "vertical", "horizontal" },
+    modalDismiss = { "back", "outside", "both", "none" },
+}
+
+local VALIDATION_COLOR_PROPS = {
+    "background", "border", "color", "tint", "outlineColor",
+    "shadowColor",
+    "hoverBackground", "hoverBorder",
+    "pressedBackground", "pressedBorder",
+    "focusedBackground", "focusedBorder",
+    "selectedBackground", "selectedBorder",
+}
+
 local function shallowCopy(input)
     local output = {}
     for key, value in pairs(input or {}) do output[key] = value end
@@ -241,7 +267,16 @@ local function validateActorState(token, value, label)
     return value
 end
 
-local function validatePrimitive(name, children)
+-- Adds one stopped-GC validation interval to the private Battle probe.
+-- Ordinary Hosts never call this helper.
+local function recordValidationAllocation(probe, callsField, kbField, before)
+    local after = collectgarbage("count")
+    probe[callsField] = probe[callsField] + 1
+    probe[kbField] = probe[kbField] + after - before
+end
+
+local function validatePrimitive(name, children, probe)
+    local before = probe and collectgarbage("count") or nil
     assert(PRIMITIVES[name], "unknown FrogUI primitive " .. tostring(name))
     if name == "Box" or name == "Button" or name == "Motion" then
         assert(#children <= 1, "Frog." .. name .. " accepts at most one child")
@@ -258,6 +293,11 @@ local function validatePrimitive(name, children)
             or name == "TiledImage"
             or name == "Icon" or name == "Canvas" then
         assert(#children == 0, "Frog." .. name .. " does not accept children")
+    end
+    if probe then
+        recordValidationAllocation(probe,
+            "pipelineValidationArityCalls",
+            "pipelineValidationArityAllocatedKB", before)
     end
 end
 
@@ -519,7 +559,8 @@ local function oneOf(value, accepted, label)
     error(label .. " has unsupported value " .. tostring(value), 0)
 end
 
-local function validatePrimitiveProps(self, name, props)
+local function validatePrimitiveProps(self, name, props, probe)
+    local commonBefore = probe and collectgarbage("count") or nil
     local allowed = TYPE_PROPS[name] or {}
     for key in pairs(props) do
         assert(COMMON_PROPS[key] or allowed[key],
@@ -564,16 +605,16 @@ local function validatePrimitiveProps(self, name, props)
     end
     assert(props.clip == nil or type(props.clip) == "boolean",
         name .. " clip must be a boolean")
-    oneOf(props.overflow, { "clip", "visible" }, name .. " overflow")
+    oneOf(props.overflow, VALIDATION_VALUES.overflow, name .. " overflow")
 
-    for _, colorProp in ipairs({
-        "background", "border", "color", "tint", "outlineColor",
-        "shadowColor",
-        "hoverBackground", "hoverBorder",
-        "pressedBackground", "pressedBorder",
-        "focusedBackground", "focusedBorder",
-        "selectedBackground", "selectedBorder",
-    }) do
+    if probe then
+        recordValidationAllocation(probe,
+            "pipelineValidationCommonCalls",
+            "pipelineValidationCommonAllocatedKB", commonBefore)
+    end
+
+    local colorScanBefore = probe and collectgarbage("count") or nil
+    for _, colorProp in ipairs(VALIDATION_COLOR_PROPS) do
         local color = props[colorProp]
         if name == "Motion" and colorProp == "tint" then color = nil end
         if type(color) == "string" then
@@ -583,19 +624,27 @@ local function validatePrimitiveProps(self, name, props)
             validateColorTable(color, colorProp .. " color")
         end
     end
+    if probe then
+        recordValidationAllocation(probe,
+            "pipelineValidationColorScanCalls",
+            "pipelineValidationColorScanAllocatedKB", colorScanBefore)
+    end
 
+    local specificBefore = probe and collectgarbage("count") or nil
     if name == "Row" or name == "Column" then
         validateNumber(props.gap, name .. " gap", 0)
-        oneOf(props.align, { "start", "center", "end", "stretch" }, name .. " align")
-        oneOf(props.justify,
-            { "start", "center", "end", "space-between" }, name .. " justify")
+        oneOf(props.align, VALIDATION_VALUES.stretchAlign,
+            name .. " align")
+        oneOf(props.justify, VALIDATION_VALUES.flowJustify,
+            name .. " justify")
         assert(props.wrap == nil or type(props.wrap) == "boolean",
             name .. " wrap must be a boolean")
         assert(not props.wrap or name == "Row", "wrap is currently supported on Row only")
     elseif name == "Box" or name == "Overlay" or name == "Button" then
-        oneOf(props.align, { "start", "center", "end", "stretch" }, name .. " align")
-        oneOf(props.justify,
-            { "start", "center", "end", "stretch" }, name .. " justify")
+        oneOf(props.align, VALIDATION_VALUES.stretchAlign,
+            name .. " align")
+        oneOf(props.justify, VALIDATION_VALUES.stretchAlign,
+            name .. " justify")
     end
     if name == "Button" then
         assert(props.onPress == nil or type(props.onPress) == "function",
@@ -712,8 +761,7 @@ local function validatePrimitiveProps(self, name, props)
             validateNumber(props.shine, "PopupText shine", 0, 1)
             validateNumber(props.shineSplit, "PopupText shineSplit", 0, 1)
         end
-        oneOf(props.align, { "left", "center", "right", "start", "end" },
-            "Text align")
+        oneOf(props.align, VALIDATION_VALUES.textAlign, "Text align")
         if name == "PopupText" then
             assert(type(props.at) == "table" and getmetatable(props.at) == nil,
                 "PopupText at must be a plain { x, y } point")
@@ -724,7 +772,7 @@ local function validatePrimitiveProps(self, name, props)
             end
             assert(finite(props.at.x) and finite(props.at.y),
                 "PopupText at.x/at.y must be finite numbers")
-            oneOf(props.variant, { "float", "impact", "notice" },
+            oneOf(props.variant, VALIDATION_VALUES.popupVariant,
                 "PopupText variant")
             validateNumber(props.duration, "PopupText duration", 0)
             validateNumber(props.distance, "PopupText distance", 0)
@@ -802,12 +850,10 @@ local function validatePrimitiveProps(self, name, props)
             "SpriteSheet fps must be positive")
         assert(Clock.isClock(props.clock),
             "SpriteSheet clock must come from Frog.clock")
-        oneOf(props.fit, { "contain", "cover", "stretch" },
-            "SpriteSheet fit")
+        oneOf(props.fit, VALIDATION_VALUES.imageFit, "SpriteSheet fit")
         assert(props.mirror == nil or type(props.mirror) == "boolean",
             "SpriteSheet mirror must be a boolean")
-        oneOf(props.filter, { "nearest", "linear" },
-            "SpriteSheet filter")
+        oneOf(props.filter, VALIDATION_VALUES.filter, "SpriteSheet filter")
         local asset = self:_asset(props.source)
         if asset then
             assert(asset:getWidth() % props.frameCount == 0,
@@ -823,9 +869,9 @@ local function validatePrimitiveProps(self, name, props)
             "TiledImage clock must come from Frog.clock")
         assert(props.velocity == nil or props.clock ~= nil,
             "TiledImage velocity requires an explicit Frog.clock")
-        oneOf(props.repeatAxis, { "x", "y", "both", "none" },
+        oneOf(props.repeatAxis, VALIDATION_VALUES.repeatAxis,
             "TiledImage repeatAxis")
-        oneOf(props.filter, { "nearest", "linear" }, "TiledImage filter")
+        oneOf(props.filter, VALIDATION_VALUES.filter, "TiledImage filter")
     elseif name == "ShaderImage" then
         assert(type(props.shader) == "string" and props.shader ~= "",
             "ShaderImage shader must be a non-empty semantic token")
@@ -839,9 +885,10 @@ local function validatePrimitiveProps(self, name, props)
                 "ShaderImage uniform names must be non-empty strings")
             validateShaderUniform(value, "ShaderImage uniform " .. uniform)
         end
-        oneOf(props.fallback, { "plain", "hidden" },
+        oneOf(props.fallback, VALIDATION_VALUES.shaderFallback,
             "ShaderImage fallback")
-        oneOf(props.blend, { "alpha", "add" }, "ShaderImage blend")
+        oneOf(props.blend, VALIDATION_VALUES.shaderBlend,
+            "ShaderImage blend")
     elseif name == "Motion" then
         assert(props.reactions == nil or #props.reactions == 0 or props.juice ~= nil,
             "Frog.Motion reactions require named juice recipes")
@@ -893,7 +940,7 @@ local function validatePrimitiveProps(self, name, props)
         validateSound(props.sound, "RadialDial sound")
         validateSound(props.spinSound, "RadialDial spinSound")
     elseif name == "Scroll" then
-        oneOf(props.axis, { "vertical", "horizontal" }, "Scroll axis")
+        oneOf(props.axis, VALIDATION_VALUES.scrollAxis, "Scroll axis")
         assert(props.axis ~= nil, "Scroll axis is required")
         assert(props.bar == nil or type(props.bar) == "boolean",
             "Scroll bar must be a boolean")
@@ -906,29 +953,33 @@ local function validatePrimitiveProps(self, name, props)
     elseif name == "Modal" then
         assert(props.offset == nil,
             "Modal is a root portal and does not accept offset")
-        oneOf(props.dismiss, { "back", "outside", "both", "none" },
+        oneOf(props.dismiss, VALIDATION_VALUES.modalDismiss,
             "Modal dismiss")
         assert(props.onDismiss == nil or type(props.onDismiss) == "function",
             "Modal onDismiss must be a function")
         assert((props.dismiss or "back") == "none" or props.onDismiss,
             "dismissible Modal requires onDismiss")
         validateSound(props.dismissSound, "Modal dismissSound")
-        oneOf(props.align, { "start", "center", "end", "stretch" },
-            "Modal align")
-        oneOf(props.justify, { "start", "center", "end", "stretch" },
+        oneOf(props.align, VALIDATION_VALUES.stretchAlign, "Modal align")
+        oneOf(props.justify, VALIDATION_VALUES.stretchAlign,
             "Modal justify")
         assert(props.allowChrome == nil or type(props.allowChrome) == "boolean",
             "Modal allowChrome must be a boolean")
     elseif name == "Chrome" then
         assert(props.offset == nil,
             "Chrome is a root portal and does not accept offset")
-        oneOf(props.align, { "start", "center", "end", "stretch" },
-            "Chrome align")
-        oneOf(props.justify, { "start", "center", "end", "stretch" },
+        oneOf(props.align, VALIDATION_VALUES.stretchAlign, "Chrome align")
+        oneOf(props.justify, VALIDATION_VALUES.stretchAlign,
             "Chrome justify")
     elseif name == "DragSource" then
+        local snapshotBefore = probe and collectgarbage("count") or nil
         local payload = Interaction.snapshotPlain(props.payload,
             "DragSource payload")
+        if probe then
+            recordValidationAllocation(probe,
+                "pipelineValidationSnapshotCalls",
+                "pipelineValidationSnapshotAllocatedKB", snapshotBefore)
+        end
         assert(type(payload) == "table" and type(payload.kind) == "string"
                 and payload.kind ~= "",
             "DragSource payload requires a non-empty string kind")
@@ -946,11 +997,22 @@ local function validatePrimitiveProps(self, name, props)
     elseif name == "DropTarget" then
         assert(type(props.accepts) == "string" and props.accepts ~= "",
             "DropTarget accepts must be a non-empty string")
+        local snapshotBefore = probe and collectgarbage("count") or nil
         Interaction.snapshotPlain(props.address, "DropTarget address")
+        if probe then
+            recordValidationAllocation(probe,
+                "pipelineValidationSnapshotCalls",
+                "pipelineValidationSnapshotAllocatedKB", snapshotBefore)
+        end
         assert(type(props.address) == "table",
             "DropTarget address must be a plain table")
         assert(type(props.key) == "string" or type(props.key) == "number",
             "DropTarget requires a stable string/number key")
+    end
+    if probe then
+        recordValidationAllocation(probe,
+            "pipelineValidationSpecificCalls",
+            "pipelineValidationSpecificAllocatedKB", specificBefore)
     end
 end
 
@@ -1456,6 +1518,20 @@ local function resetAllocationProbe(probe)
     probe.pipelineBookkeepingAllocatedKB = 0
     probe.pipelineValidationCalls = 0
     probe.pipelineValidationAllocatedKB = 0
+    probe.pipelineValidationArityCalls = 0
+    probe.pipelineValidationArityAllocatedKB = 0
+    probe.pipelineValidationCommonCalls = 0
+    probe.pipelineValidationCommonAllocatedKB = 0
+    probe.pipelineValidationColorListCreated = 0
+    probe.pipelineValidationColorListAllocatedKB = 0
+    probe.pipelineValidationColorScanCalls = 0
+    probe.pipelineValidationColorScanAllocatedKB = 0
+    probe.pipelineValidationSpecificCalls = 0
+    probe.pipelineValidationSpecificAllocatedKB = 0
+    probe.pipelineValidationAcceptedListCreated = 0
+    probe.pipelineValidationAcceptedListAllocatedKB = 0
+    probe.pipelineValidationSnapshotCalls = 0
+    probe.pipelineValidationSnapshotAllocatedKB = 0
     probe.pipelineReconciliationCalls = 0
     probe.pipelineReconciliationAllocatedKB = 0
     probe.pipelinePostValidationCalls = 0
@@ -1712,6 +1788,27 @@ function host:_readPipelineAllocationProbe()
         probe.pipelineVisualBoundsAllocatedKB,
         probe.pipelineVisualContentBoundsCreated,
         probe.pipelineVisualContentBoundsAllocatedKB
+end
+
+-- Returns the disjoint primitive-validation phases plus nested scratch sites.
+function host:_readValidationAllocationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no validation allocation probe to read")
+    return probe.pipelineValidationArityCalls,
+        probe.pipelineValidationArityAllocatedKB,
+        probe.pipelineValidationCommonCalls,
+        probe.pipelineValidationCommonAllocatedKB,
+        probe.pipelineValidationColorListCreated,
+        probe.pipelineValidationColorListAllocatedKB,
+        probe.pipelineValidationColorScanCalls,
+        probe.pipelineValidationColorScanAllocatedKB,
+        probe.pipelineValidationSpecificCalls,
+        probe.pipelineValidationSpecificAllocatedKB,
+        probe.pipelineValidationAcceptedListCreated,
+        probe.pipelineValidationAcceptedListAllocatedKB,
+        probe.pipelineValidationSnapshotCalls,
+        probe.pipelineValidationSnapshotAllocatedKB
 end
 
 -- Returns the candidate-transform child partition without requiring callers
@@ -2869,8 +2966,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
 
     pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     local primitiveStarted = profiler and profiler:start() or nil
-    validatePrimitive(token.name, descriptor.children)
-    validatePrimitiveProps(self, token.name, descriptor.props)
+    validatePrimitive(token.name, descriptor.children, pipelineProbe)
+    validatePrimitiveProps(self, token.name, descriptor.props, pipelineProbe)
     if (context.previewDepth or 0) > 0 then
         assert(descriptor.props.ref == nil,
             "DragSource preview cannot attach committed refs")
