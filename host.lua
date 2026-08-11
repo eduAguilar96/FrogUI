@@ -1529,8 +1529,34 @@ local function resetAllocationProbe(probe)
     probe.pipelineLayoutUniformPaddingAllocatedKB = 0
     probe.pipelineLayoutSidedPaddingCreated = 0
     probe.pipelineLayoutSidedPaddingAllocatedKB = 0
+    probe.pipelineLayoutSizeNilCalls = 0
+    probe.pipelineLayoutSizeNilAllocatedKB = 0
+    probe.pipelineLayoutSizeNumberCalls = 0
+    probe.pipelineLayoutSizeNumberAllocatedKB = 0
+    probe.pipelineLayoutSizePercentCalls = 0
+    probe.pipelineLayoutSizePercentAllocatedKB = 0
     probe.pipelineLayoutTextCalls = 0
     probe.pipelineLayoutTextAllocatedKB = 0
+    probe.pipelineLayoutTextSetupCalls = 0
+    probe.pipelineLayoutTextSetupAllocatedKB = 0
+    probe.pipelineLayoutTextHelperCreated = 0
+    probe.pipelineLayoutTextHelperAllocatedKB = 0
+    probe.pipelineLayoutTextMeasureHelperCreated = 0
+    probe.pipelineLayoutTextMeasureHelperAllocatedKB = 0
+    probe.pipelineLayoutTextVisibleHelperCreated = 0
+    probe.pipelineLayoutTextVisibleHelperAllocatedKB = 0
+    probe.pipelineLayoutTextFontCalls = 0
+    probe.pipelineLayoutTextFontAllocatedKB = 0
+    probe.pipelineLayoutTextMetricCalls = 0
+    probe.pipelineLayoutTextMetricAllocatedKB = 0
+    probe.pipelineLayoutTextWrapCalls = 0
+    probe.pipelineLayoutTextWrapAllocatedKB = 0
+    probe.pipelineLayoutTextFallbackCalls = 0
+    probe.pipelineLayoutTextFallbackAllocatedKB = 0
+    probe.pipelineLayoutTextMaxLineCalls = 0
+    probe.pipelineLayoutTextMaxLineAllocatedKB = 0
+    probe.pipelineLayoutTextFitDownCalls = 0
+    probe.pipelineLayoutTextFitIterations = 0
     probe.pipelineLayoutImageCalls = 0
     probe.pipelineLayoutImageAllocatedKB = 0
     probe.pipelineLayoutWrappedLinesCalls = 0
@@ -1551,7 +1577,7 @@ function host:_attachAllocationProbe(mode)
             .. "or pipeline")
     assert(rawget(self, "_allocationProbe") == nil,
         "this FrogUI Host already owns an allocation probe")
-    local probe = { mode = mode }
+    local probe = { mode = mode, active = mode ~= "pipeline" }
     resetAllocationProbe(probe)
     Element._attachAllocationProbe(self, probe)
     self._allocationProbe = probe
@@ -1561,6 +1587,7 @@ function host:_resetAllocationProbe()
     local probe = rawget(self, "_allocationProbe")
     assert(probe, "FrogUI Host has no allocation probe to reset")
     resetAllocationProbe(probe)
+    probe.active = true
 end
 
 -- Returns scalars only so the GC-stopped harness never needs a snapshot row.
@@ -1746,8 +1773,34 @@ function host:_readLayoutAllocationProbe()
         probe.pipelineLayoutUniformPaddingAllocatedKB,
         probe.pipelineLayoutSidedPaddingCreated,
         probe.pipelineLayoutSidedPaddingAllocatedKB,
+        probe.pipelineLayoutSizeNilCalls,
+        probe.pipelineLayoutSizeNilAllocatedKB,
+        probe.pipelineLayoutSizeNumberCalls,
+        probe.pipelineLayoutSizeNumberAllocatedKB,
+        probe.pipelineLayoutSizePercentCalls,
+        probe.pipelineLayoutSizePercentAllocatedKB,
         probe.pipelineLayoutTextCalls,
         probe.pipelineLayoutTextAllocatedKB,
+        probe.pipelineLayoutTextSetupCalls,
+        probe.pipelineLayoutTextSetupAllocatedKB,
+        probe.pipelineLayoutTextHelperCreated,
+        probe.pipelineLayoutTextHelperAllocatedKB,
+        probe.pipelineLayoutTextMeasureHelperCreated,
+        probe.pipelineLayoutTextMeasureHelperAllocatedKB,
+        probe.pipelineLayoutTextVisibleHelperCreated,
+        probe.pipelineLayoutTextVisibleHelperAllocatedKB,
+        probe.pipelineLayoutTextFontCalls,
+        probe.pipelineLayoutTextFontAllocatedKB,
+        probe.pipelineLayoutTextMetricCalls,
+        probe.pipelineLayoutTextMetricAllocatedKB,
+        probe.pipelineLayoutTextWrapCalls,
+        probe.pipelineLayoutTextWrapAllocatedKB,
+        probe.pipelineLayoutTextFallbackCalls,
+        probe.pipelineLayoutTextFallbackAllocatedKB,
+        probe.pipelineLayoutTextMaxLineCalls,
+        probe.pipelineLayoutTextMaxLineAllocatedKB,
+        probe.pipelineLayoutTextFitDownCalls,
+        probe.pipelineLayoutTextFitIterations,
         probe.pipelineLayoutImageCalls,
         probe.pipelineLayoutImageAllocatedKB,
         probe.pipelineLayoutWrappedLinesCalls,
@@ -3366,7 +3419,8 @@ function host:_build(root)
     local feedbackMark = #self._feedbackQueue
     local allocationProbe = rawget(self, "_allocationProbe")
     local pipelineProbe = allocationProbe
-        and allocationProbe.mode == "pipeline" and allocationProbe or nil
+        and allocationProbe.mode == "pipeline" and allocationProbe.active
+        and allocationProbe or nil
     local contextBefore = pipelineProbe and collectgarbage("count") or nil
     local context = {
         actors = {},

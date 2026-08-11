@@ -13,6 +13,16 @@ local function recordAllocation(probe, callsField, kbField, before, created)
     probe[kbField] = probe[kbField] + after - before
 end
 
+local function recordTextHelper(probe, callsField, kbField, before)
+    local allocatedKB = collectgarbage("count") - before
+    probe.pipelineLayoutTextHelperCreated =
+        probe.pipelineLayoutTextHelperCreated + 1
+    probe.pipelineLayoutTextHelperAllocatedKB =
+        probe.pipelineLayoutTextHelperAllocatedKB + allocatedKB
+    probe[callsField] = probe[callsField] + 1
+    probe[kbField] = probe[kbField] + allocatedKB
+end
+
 local function sessionProbe(session)
     return session and session._allocationProbe or nil
 end
@@ -47,14 +57,38 @@ local function clamp(value, low, high)
     return value
 end
 
-local function resolveSize(value, available)
-    if type(value) == "number" then return math.max(0, value) end
+local function resolveSize(value, available, probe)
+    if not probe then
+        if type(value) == "number" then return math.max(0, value) end
+        if type(value) == "string" then
+            local number = value:match("^([%d%.]+)%%$")
+            assert(number, "FrogUI size must be a number or percentage")
+            return math.max(0, available * tonumber(number) / 100)
+        end
+        assert(value == nil,
+            "FrogUI size must be a number, percentage, or nil")
+        return nil
+    end
+    if type(value) == "number" then
+        probe.pipelineLayoutSizeNumberCalls =
+            probe.pipelineLayoutSizeNumberCalls + 1
+        return math.max(0, value)
+    end
     if type(value) == "string" then
+        local before = collectgarbage("count")
         local number = value:match("^([%d%.]+)%%$")
         assert(number, "FrogUI size must be a number or percentage")
-        return math.max(0, available * tonumber(number) / 100)
+        local result = math.max(0, available * tonumber(number) / 100)
+        probe.pipelineLayoutSizePercentCalls =
+            probe.pipelineLayoutSizePercentCalls + 1
+        probe.pipelineLayoutSizePercentAllocatedKB =
+            probe.pipelineLayoutSizePercentAllocatedKB
+                + collectgarbage("count") - before
+        return result
     end
     assert(value == nil, "FrogUI size must be a number, percentage, or nil")
+    probe.pipelineLayoutSizeNilCalls =
+        probe.pipelineLayoutSizeNilCalls + 1
     return nil
 end
 
@@ -112,11 +146,14 @@ local function nodePadding(node, probe)
     return result
 end
 
-local function explicit(node, maxWidth, maxHeight)
-    return resolveSize(node.props.width, maxWidth), resolveSize(node.props.height, maxHeight)
+local function explicit(node, maxWidth, maxHeight, probe)
+    return resolveSize(node.props.width, maxWidth, probe),
+        resolveSize(node.props.height, maxHeight, probe)
 end
 
-local function textSize(node, maxWidth, maxHeight, host)
+-- Production text measurement stays free of allocation-probe branches. The
+-- instrumented twin below runs only inside the exclusive Battle harness.
+local function textSizeFast(node, maxWidth, maxHeight, host)
     local text = tostring(node.props.text or "")
     local size = host:_fontSize(node.props.role) * (node.props.fontScale or 1)
     local minimum = (host.theme.fontSizes or {}).minimum or 8
@@ -124,19 +161,25 @@ local function textSize(node, maxWidth, maxHeight, host)
     local function measureAt(candidateSize)
         local candidateFont = host:_font(node.props.role, candidateSize)
         local candidateWidth, candidateHeight, lines
-        if candidateFont and candidateFont.getWidth and candidateFont.getHeight then
-            candidateWidth, candidateHeight = candidateFont:getWidth(text), candidateFont:getHeight()
+        if candidateFont and candidateFont.getWidth
+                and candidateFont.getHeight then
+            candidateWidth, candidateHeight = candidateFont:getWidth(text),
+                candidateFont:getHeight()
             lines = 1
-            if node.props.wrap and maxWidth < math.huge and candidateFont.getWrap then
-                local wrappedWidth, wrappedLines = candidateFont:getWrap(text, math.max(1, maxWidth))
+            if node.props.wrap and maxWidth < math.huge
+                    and candidateFont.getWrap then
+                local wrappedWidth, wrappedLines = candidateFont:getWrap(text,
+                    math.max(1, maxWidth))
                 candidateWidth = math.min(maxWidth, wrappedWidth)
                 lines = math.max(1, #wrappedLines)
                 candidateHeight = candidateHeight * lines
             end
         else
-            candidateWidth, candidateHeight = #text * candidateSize * 0.55, candidateSize * 1.2
+            candidateWidth, candidateHeight = #text * candidateSize * 0.55,
+                candidateSize * 1.2
             lines = 1
-            if node.props.wrap and maxWidth < math.huge and candidateWidth > maxWidth then
+            if node.props.wrap and maxWidth < math.huge
+                    and candidateWidth > maxWidth then
                 lines = math.ceil(candidateWidth / math.max(1, maxWidth))
                 candidateHeight = candidateHeight * lines
                 candidateWidth = maxWidth
@@ -147,7 +190,8 @@ local function textSize(node, maxWidth, maxHeight, host)
     font, width, height, lineCount = measureAt(size)
     local function visibleHeight()
         if not node.props.maxLines then return height end
-        local lineHeight = font and font.getHeight and font:getHeight() or size * 1.2
+        local lineHeight = font and font.getHeight and font:getHeight()
+            or size * 1.2
         return math.min(height, lineHeight * node.props.maxLines)
     end
     if node.props.fitDown then
@@ -161,7 +205,121 @@ local function textSize(node, maxWidth, maxHeight, host)
     node._resolvedFont = font
     node._resolvedFontSize = size
     if node.props.maxLines then
-        local lineHeight = font and font.getHeight and font:getHeight() or size * 1.2
+        local lineHeight = font and font.getHeight and font:getHeight()
+            or size * 1.2
+        height = math.min(height, lineHeight * node.props.maxLines)
+    end
+    return width, height
+end
+
+local function textSize(node, maxWidth, maxHeight, host, probe)
+    if not probe then
+        return textSizeFast(node, maxWidth, maxHeight, host)
+    end
+    local setupBefore = collectgarbage("count")
+    local text = tostring(node.props.text or "")
+    local size = host:_fontSize(node.props.role) * (node.props.fontScale or 1)
+    local minimum = (host.theme.fontSizes or {}).minimum or 8
+    local font, width, height, lineCount
+    recordAllocation(probe, "pipelineLayoutTextSetupCalls",
+        "pipelineLayoutTextSetupAllocatedKB", setupBefore, 1)
+    local helperBefore = collectgarbage("count")
+    local function measureAt(candidateSize)
+        local before = probe and collectgarbage("count") or nil
+        local candidateFont = host:_font(node.props.role, candidateSize)
+        if probe then
+            recordAllocation(probe, "pipelineLayoutTextFontCalls",
+                "pipelineLayoutTextFontAllocatedKB", before, 1)
+        end
+        local candidateWidth, candidateHeight, lines
+        if candidateFont and candidateFont.getWidth and candidateFont.getHeight then
+            before = probe and collectgarbage("count") or nil
+            candidateWidth, candidateHeight = candidateFont:getWidth(text),
+                candidateFont:getHeight()
+            if probe then
+                recordAllocation(probe, "pipelineLayoutTextMetricCalls",
+                    "pipelineLayoutTextMetricAllocatedKB", before, 1)
+            end
+            lines = 1
+            if node.props.wrap and maxWidth < math.huge and candidateFont.getWrap then
+                before = probe and collectgarbage("count") or nil
+                local wrappedWidth, wrappedLines = candidateFont:getWrap(text,
+                    math.max(1, maxWidth))
+                if probe then
+                    recordAllocation(probe, "pipelineLayoutTextWrapCalls",
+                        "pipelineLayoutTextWrapAllocatedKB", before, 1)
+                end
+                candidateWidth = math.min(maxWidth, wrappedWidth)
+                lines = math.max(1, #wrappedLines)
+                candidateHeight = candidateHeight * lines
+            end
+        else
+            before = probe and collectgarbage("count") or nil
+            candidateWidth, candidateHeight = #text * candidateSize * 0.55, candidateSize * 1.2
+            lines = 1
+            if node.props.wrap and maxWidth < math.huge and candidateWidth > maxWidth then
+                lines = math.ceil(candidateWidth / math.max(1, maxWidth))
+                candidateHeight = candidateHeight * lines
+                candidateWidth = maxWidth
+            end
+            if probe then
+                recordAllocation(probe, "pipelineLayoutTextFallbackCalls",
+                    "pipelineLayoutTextFallbackAllocatedKB", before, 1)
+            end
+        end
+        return candidateFont, candidateWidth, candidateHeight, lines
+    end
+    recordTextHelper(probe, "pipelineLayoutTextMeasureHelperCreated",
+        "pipelineLayoutTextMeasureHelperAllocatedKB", helperBefore)
+    font, width, height, lineCount = measureAt(size)
+    helperBefore = collectgarbage("count")
+    local function visibleHeight()
+        if not node.props.maxLines then return height end
+        local lineHeight
+        if font and font.getHeight then
+            local before = probe and collectgarbage("count") or nil
+            lineHeight = font:getHeight()
+            if probe then
+                recordAllocation(probe, "pipelineLayoutTextMaxLineCalls",
+                    "pipelineLayoutTextMaxLineAllocatedKB", before, 1)
+            end
+        else
+            lineHeight = size * 1.2
+        end
+        return math.min(height, lineHeight * node.props.maxLines)
+    end
+    recordTextHelper(probe, "pipelineLayoutTextVisibleHelperCreated",
+        "pipelineLayoutTextVisibleHelperAllocatedKB", helperBefore)
+    if node.props.fitDown then
+        if probe then
+            probe.pipelineLayoutTextFitDownCalls =
+                probe.pipelineLayoutTextFitDownCalls + 1
+        end
+        while size > minimum and (width > maxWidth
+                or visibleHeight() > maxHeight
+                or node.props.maxLines and lineCount > node.props.maxLines) do
+            if probe then
+                probe.pipelineLayoutTextFitIterations =
+                    probe.pipelineLayoutTextFitIterations + 1
+            end
+            size = size - 1
+            font, width, height, lineCount = measureAt(size)
+        end
+    end
+    node._resolvedFont = font
+    node._resolvedFontSize = size
+    if node.props.maxLines then
+        local lineHeight
+        if font and font.getHeight then
+            local before = probe and collectgarbage("count") or nil
+            lineHeight = font:getHeight()
+            if probe then
+                recordAllocation(probe, "pipelineLayoutTextMaxLineCalls",
+                    "pipelineLayoutTextMaxLineAllocatedKB", before, 1)
+            end
+        else
+            lineHeight = size * 1.2
+        end
         height = math.min(height, lineHeight * node.props.maxLines)
     end
     return width, height
@@ -227,7 +385,7 @@ local function measure(node, maxWidth, maxHeight, host, session)
         return node.measuredWidth, node.measuredHeight
     end
     local pad = nodePadding(node, allocationProbe)
-    local width, height = explicit(node, maxWidth, maxHeight)
+    local width, height = explicit(node, maxWidth, maxHeight, allocationProbe)
     local innerMaxWidth = math.max(0, (width or maxWidth) - pad.left - pad.right)
     local innerMaxHeight = math.max(0, (height or maxHeight) - pad.top - pad.bottom)
     local naturalWidth, naturalHeight = 0, 0
@@ -238,7 +396,7 @@ local function measure(node, maxWidth, maxHeight, host, session)
     elseif node.type == "Text" or node.type == "PopupText" then
         local before = allocationProbe and collectgarbage("count") or nil
         naturalWidth, naturalHeight = textSize(node, innerMaxWidth,
-            innerMaxHeight, host)
+            innerMaxHeight, host, allocationProbe)
         if allocationProbe then
             recordAllocation(allocationProbe, "pipelineLayoutTextCalls",
                 "pipelineLayoutTextAllocatedKB", before, 1)
@@ -378,9 +536,11 @@ local function arrangeRadialDial(node, host, session)
     local largestHalfDiagonal = 0
     for index, child in ipairs(node.children) do
         measure(child, node.contentWidth, node.contentHeight, host, session)
-        local width = resolveSize(child.props.width, node.contentWidth)
+        local width = resolveSize(child.props.width, node.contentWidth,
+            allocationProbe)
             or child.measuredWidth
-        local height = resolveSize(child.props.height, node.contentHeight)
+        local height = resolveSize(child.props.height, node.contentHeight,
+            allocationProbe)
             or child.measuredHeight
         before = allocationProbe and collectgarbage("count") or nil
         measured[index] = { width = width, height = height }
@@ -559,9 +719,12 @@ local function arrangeFlow(node, horizontal, host, session)
 end
 
 local function childBox(node, child, host, session)
+    local allocationProbe = sessionProbe(session)
     measure(child, node.contentWidth, node.contentHeight, host, session)
-    local width = resolveSize(child.props.width, node.contentWidth) or child.measuredWidth
-    local height = resolveSize(child.props.height, node.contentHeight) or child.measuredHeight
+    local width = resolveSize(child.props.width, node.contentWidth,
+        allocationProbe) or child.measuredWidth
+    local height = resolveSize(child.props.height, node.contentHeight,
+        allocationProbe) or child.measuredHeight
     local align = node.props.align
     local justify = node.props.justify
     if node.type == "Overlay" then
@@ -589,6 +752,7 @@ end
 -- Repositions one retained Scroll child after layout, wheel input, or
 -- momentum without asking application components to rerender.
 local function arrangeScroll(node, host, session)
+    local allocationProbe = sessionProbe(session)
     local child = node.children[1]
     local scroll = node._scroll
     if not child or not scroll then return end
@@ -597,7 +761,8 @@ local function arrangeScroll(node, host, session)
         assert(type(child.props.height) ~= "string",
             "vertical Scroll child height must be naturally measured")
         measure(child, node.contentWidth, math.huge, host, session)
-        local width = resolveSize(child.props.width, node.contentWidth)
+        local width = resolveSize(child.props.width, node.contentWidth,
+            allocationProbe)
             or math.max(node.contentWidth, child.measuredWidth)
         local height = child.measuredHeight
         scroll.viewport, scroll.content = node.contentHeight, height
@@ -610,7 +775,8 @@ local function arrangeScroll(node, host, session)
             "horizontal Scroll child width must be naturally measured")
         measure(child, math.huge, node.contentHeight, host, session)
         local width = child.measuredWidth
-        local height = resolveSize(child.props.height, node.contentHeight)
+        local height = resolveSize(child.props.height, node.contentHeight,
+            allocationProbe)
             or math.max(node.contentHeight, child.measuredHeight)
         scroll.viewport, scroll.content = node.contentWidth, width
         scroll.extent = math.max(0, width - node.contentWidth)
@@ -692,9 +858,11 @@ function layout.arrange(node, x, y, width, height, host, session)
         for _, child in ipairs(node.children) do
             if child.type == "PopupText" then
                 measure(child, node.contentWidth, node.contentHeight, host, session)
-                local width = resolveSize(child.props.width, node.contentWidth)
+                local width = resolveSize(child.props.width,
+                    node.contentWidth, allocationProbe)
                     or child.measuredWidth
-                local height = resolveSize(child.props.height, node.contentHeight)
+                local height = resolveSize(child.props.height,
+                    node.contentHeight, allocationProbe)
                     or child.measuredHeight
                 local at = child.props.at
                 layout.arrange(child,
@@ -703,10 +871,10 @@ function layout.arrange(node, x, y, width, height, host, session)
                     width, height, host, session)
             elseif child.type == "Canvas" then
                 local width = assert(resolveSize(child.props.width,
-                    node.contentWidth),
+                    node.contentWidth, allocationProbe),
                     "Canvas needs an explicit EffectLayer width")
                 local height = assert(resolveSize(child.props.height,
-                    node.contentHeight),
+                    node.contentHeight, allocationProbe),
                     "Canvas needs an explicit EffectLayer height")
                 layout.arrange(child, node.contentX, node.contentY,
                     width, height, host, session)
@@ -768,8 +936,10 @@ local function prepareDetached(node, maxWidth, maxHeight, host, session)
             allocationProbe.pipelineLayoutDetachedNodes + 1
     end
     measure(node, maxWidth, maxHeight, host, session)
-    local width = resolveSize(node.props.width, maxWidth) or node.measuredWidth
-    local height = resolveSize(node.props.height, maxHeight) or node.measuredHeight
+    local width = resolveSize(node.props.width, maxWidth, allocationProbe)
+        or node.measuredWidth
+    local height = resolveSize(node.props.height, maxHeight, allocationProbe)
+        or node.measuredHeight
     layout.arrange(node, 0, 0, width, height, host, session)
     for _, child in ipairs(node.children or {}) do
         if child._dragPreview then
@@ -808,8 +978,10 @@ function layout.run(root, width, height, host, allocationProbe)
         recordAllocation(allocationProbe, "pipelineLayoutMeasurePhaseCalls",
             "pipelineLayoutMeasurePhaseAllocatedKB", before, 1)
     end
-    local arrangedWidth = resolveSize(root.props.width, width) or width
-    local arrangedHeight = resolveSize(root.props.height, height) or height
+    local arrangedWidth = resolveSize(root.props.width, width, allocationProbe)
+        or width
+    local arrangedHeight = resolveSize(root.props.height, height,
+        allocationProbe) or height
     before = allocationProbe and collectgarbage("count") or nil
     layout.arrange(root, 0, 0, arrangedWidth, arrangedHeight, host, session)
     if allocationProbe then
