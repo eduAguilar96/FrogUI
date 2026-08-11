@@ -1500,6 +1500,14 @@ local function resetAllocationProbe(probe)
     probe.descriptorAllocatedKB = 0
     probe.primitiveNodeCalls = 0
     probe.primitiveNodeAllocatedKB = 0
+    probe.primitivePropsCopyCalls = 0
+    probe.primitivePropsCopyAllocatedKB = 0
+    probe.primitiveChildrenArrayCalls = 0
+    probe.primitiveChildrenArrayAllocatedKB = 0
+    probe.primitiveNodeShellCalls = 0
+    probe.primitiveNodeShellAllocatedKB = 0
+    probe.primitiveRefAttachmentCalls = 0
+    probe.primitiveRefAttachmentAllocatedKB = 0
     probe.primitiveChildCalls = 0
     probe.primitiveChildAllocatedKB = 0
     probe.deferredArrayCalls = 0
@@ -1675,6 +1683,7 @@ function host:_attachAllocationProbe(mode)
         "this FrogUI Host already owns an allocation probe")
     local probe = { mode = mode, active = mode ~= "pipeline" }
     resetAllocationProbe(probe)
+    probe.materializationActive = false
     Element._attachAllocationProbe(self, probe)
     self._allocationProbe = probe
 end
@@ -1684,6 +1693,7 @@ function host:_resetAllocationProbe()
     assert(probe, "FrogUI Host has no allocation probe to reset")
     resetAllocationProbe(probe)
     probe.active = true
+    probe.materializationActive = probe.mode == "structure"
 end
 
 -- Returns scalars only so the GC-stopped harness never needs a snapshot row.
@@ -1741,6 +1751,21 @@ function host:_readAllocationProbe()
         probe.pipelineVisualBoundsAllocatedKB,
         probe.pipelineVisualContentBoundsCreated,
         probe.pipelineVisualContentBoundsAllocatedKB
+end
+
+-- Returns disjoint creation sites inside the resolved primitive-node parent.
+function host:_readPrimitiveMaterializationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "structure",
+        "FrogUI Host has no primitive materialization probe to read")
+    return probe.primitivePropsCopyCalls,
+        probe.primitivePropsCopyAllocatedKB,
+        probe.primitiveChildrenArrayCalls,
+        probe.primitiveChildrenArrayAllocatedKB,
+        probe.primitiveNodeShellCalls,
+        probe.primitiveNodeShellAllocatedKB,
+        probe.primitiveRefAttachmentCalls,
+        probe.primitiveRefAttachmentAllocatedKB
 end
 
 -- Pipeline reads stay separate from the historical source/identity/structure
@@ -2992,7 +3017,30 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     end
     local materializationStarted = profiler and profiler:start() or nil
     local structureProbe = context.structureAllocationProbe
+    local nodeProbe = structureProbe and structureProbe.materializationActive
+        and structureProbe or nil
     local structureBefore = structureProbe and collectgarbage("count") or nil
+    local propsBefore = nodeProbe and collectgarbage("count") or nil
+    local nodeProps = shallowCopy(descriptor.props)
+    if nodeProbe then
+        local propsAfter = collectgarbage("count")
+        nodeProbe.primitivePropsCopyCalls =
+            nodeProbe.primitivePropsCopyCalls + 1
+        nodeProbe.primitivePropsCopyAllocatedKB =
+            nodeProbe.primitivePropsCopyAllocatedKB
+                + propsAfter - propsBefore
+    end
+    local childrenBefore = nodeProbe and collectgarbage("count") or nil
+    local nodeChildren = {}
+    if nodeProbe then
+        local childrenAfter = collectgarbage("count")
+        nodeProbe.primitiveChildrenArrayCalls =
+            nodeProbe.primitiveChildrenArrayCalls + 1
+        nodeProbe.primitiveChildrenArrayAllocatedKB =
+            nodeProbe.primitiveChildrenArrayAllocatedKB
+                + childrenAfter - childrenBefore
+    end
+    local shellBefore = nodeProbe and collectgarbage("count") or nil
     local node = {
         type = token.name,
         key = descriptor.key,
@@ -3000,9 +3048,17 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         logicalIdentity = logicalPath,
         owner = owner or token.name,
         source = descriptor.source,
-        props = shallowCopy(descriptor.props),
-        children = {},
+        props = nodeProps,
+        children = nodeChildren,
     }
+    if nodeProbe then
+        local shellAfter = collectgarbage("count")
+        nodeProbe.primitiveNodeShellCalls =
+            nodeProbe.primitiveNodeShellCalls + 1
+        nodeProbe.primitiveNodeShellAllocatedKB =
+            nodeProbe.primitiveNodeShellAllocatedKB
+                + shellAfter - shellBefore
+    end
     if profiler then
         context.primitiveTotal = context.primitiveTotal + 1
         context.primitiveHistogram[token.name] =
@@ -3010,6 +3066,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     end
     local attachedRef = descriptor.props.ref
     if attachedRef then
+        local refBefore = nodeProbe and collectgarbage("count") or nil
         assert(context.refs[attachedRef],
             token.name .. " ref is not live in the current render tree")
         assert(not context.refAttachments[attachedRef],
@@ -3017,6 +3074,14 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 .. " is attached to more than one primitive")
         context.refAttachments[attachedRef] = node
         node._ref = attachedRef
+        if nodeProbe then
+            local refAfter = collectgarbage("count")
+            nodeProbe.primitiveRefAttachmentCalls =
+                nodeProbe.primitiveRefAttachmentCalls + 1
+            nodeProbe.primitiveRefAttachmentAllocatedKB =
+                nodeProbe.primitiveRefAttachmentAllocatedKB
+                    + refAfter - refBefore
+        end
     end
     if structureProbe then
         local structureAfter = collectgarbage("count")
