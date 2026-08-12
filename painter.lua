@@ -91,6 +91,14 @@ local function writeTint(out, color, tint)
     return out
 end
 
+-- Writes the Canvas command's final tint and inherited opacity in one owned
+-- color record; Canvas callbacks never receive intermediate theme aliases.
+local function writeTintOpacity(out, color, tint, opacity)
+    writeTint(out, color, tint)
+    out[4] = out[4] * opacity
+    return out
+end
+
 -- Combines tint and opacity in one pass instead of allocating intermediate
 -- tinted and faded colors for every primitive on every draw.
 local function writePaintColor(out, color, tint, opacity)
@@ -905,9 +913,10 @@ local function preflightNode(host, node, inheritedOpacity, inheritedTint,
         defaultScratch(node, paintRow), paintRow)
     if node.type == "Canvas" then
         local commands, inspection = Canvas.record(node.props.draw,
-            node.layout.width, node.layout.height, function(color)
-                return faded(tinted(host:_color(color, "text"),
-                    style.tint), style.opacity)
+            node.layout.width, node.layout.height, function(color, output)
+                return writeTintOpacity(
+                    output, host:_color(color, "text"),
+                    style.tint, style.opacity)
             end)
         inspection.arrangedBounds = {
             x = node.layout.x, y = node.layout.y, width = node.layout.width, height = node.layout.height,

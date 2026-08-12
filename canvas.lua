@@ -97,6 +97,8 @@ local ELLIPSE_FIELDS = {
 local TRANSFORM_FIELDS = {
     x = true, y = true, rotation = true, scale = true,
 }
+local NAMED_COLOR_FIELDS = { r = true, g = true, b = true, a = true }
+local ARRAY_COLOR_FIELDS = { [1] = true, [2] = true, [3] = true, [4] = true }
 
 local function stateFor(self)
     local state = STATES[self]
@@ -137,24 +139,25 @@ local function color(state, value, label)
         plain(value, label .. " color")
         local named = value.r ~= nil or value.g ~= nil
             or value.b ~= nil or value.a ~= nil
-        local allowed = named and { r = true, g = true, b = true, a = true }
-            or { [1] = true, [2] = true, [3] = true, [4] = true }
-        local required = named and { "r", "g", "b" } or { 1, 2, 3 }
+        local allowed = named and NAMED_COLOR_FIELDS or ARRAY_COLOR_FIELDS
         for key in pairs(value) do
             assert(allowed[key], label .. " color has unknown channel "
                 .. tostring(key))
         end
-        for _, key in ipairs(required) do
-            assert(value[key] ~= nil, label .. " color is missing channel "
-                .. tostring(key))
-        end
+        assert((named and value.r ~= nil and value.g ~= nil and value.b ~= nil)
+                or (not named and value[1] ~= nil and value[2] ~= nil
+                    and value[3] ~= nil),
+            label .. " color is missing a required channel")
         for key, channel in pairs(value) do
             assert(finite(channel) and channel >= 0 and channel <= 1,
                 label .. " color channel " .. tostring(key)
                     .. " must be between 0 and 1")
         end
     end
-    return detached(state.resolveColor(value))
+    local output = {}
+    assert(state.resolveColor(value, output) == output,
+        "FrogUI Canvas color resolver must fill its output")
+    return output
 end
 
 local function lineWidth(value, label, state)

@@ -1948,6 +1948,15 @@ no longer stored explicitly in the private parallel status table. Complete
 late rebuilt message delivery fell from 3.451 to 3.099 KB/frame; public F6 and
 `messageTrace()` records are unchanged.
 
+The source-exact B4p.70 run is
+`build/frogui/battle-performance-20260812T085316Z-40905`. Canvas still records
+and validates every dynamic callback before every draw, but each command color
+now uses static channel catalogs and one Canvas-owned tint/opacity output
+instead of temporary validation, tint, fade, and detached-copy tables. Late
+Canvas preflight fell 4.611 KB/quiet frame and 4.351 KB/rebuilt frame. Complete
+late allocation fell from 515.365 to 510.878 KB/frame and now passes the
+code-owned 512 KB target.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.
