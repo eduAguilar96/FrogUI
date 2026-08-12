@@ -5314,27 +5314,37 @@ function host:_processEvent(entry, trackActorChanges)
                     local recipient = actorLabel(instance)
                     recipients[#recipients + 1] = recipient
                     local accepted, didChange = false, false
-                    -- Each actor reducer owns one detached delivery record.
-                    -- An impure reducer cannot corrupt the canonical broadcast
+                    -- Declarative matching is framework-owned and read-only,
+                    -- so a rejected actor needs no private payload. Every
+                    -- reducer that runs still owns one detached record; an
+                    -- impure reducer cannot corrupt the canonical broadcast
                     -- inspected by a later ordered recipient.
-                    local snapshotBefore = frameProbe
+                    local matchBefore = frameProbe
                         and collectgarbage("count") or nil
-                    local delivery = Message.snapshot(record, "event")
-                    recordPendingFrameAllocation(frameProbe,
-                        "pendingFrameMessageRecipientSnapshotCalls",
-                        "pendingFrameMessageRecipientSnapshotAllocatedKB",
-                        snapshotBefore)
-                    local reactionBefore = frameProbe
-                        and collectgarbage("count") or nil
-                    if Message.matches(reaction.match, delivery, instance.props) then
-                        accepted, didChange = self:_applyTransition(
-                            instance, reaction.transition, delivery,
-                            entry.origin or "event:" .. token.name)
-                    end
+                    local matches = Message.matches(
+                        reaction.match, record, instance.props)
                     recordPendingFrameAllocation(frameProbe,
                         "pendingFrameMessageActorReactionCalls",
                         "pendingFrameMessageActorReactionAllocatedKB",
-                        reactionBefore)
+                        matchBefore)
+                    if matches then
+                        local snapshotBefore = frameProbe
+                            and collectgarbage("count") or nil
+                        local delivery = Message.snapshot(record, "event")
+                        recordPendingFrameAllocation(frameProbe,
+                            "pendingFrameMessageRecipientSnapshotCalls",
+                            "pendingFrameMessageRecipientSnapshotAllocatedKB",
+                            snapshotBefore)
+                        local reactionBefore = frameProbe
+                            and collectgarbage("count") or nil
+                        accepted, didChange = self:_applyTransition(
+                            instance, reaction.transition, delivery,
+                            entry.origin or "event:" .. token.name)
+                        recordPendingFrameAllocation(frameProbe,
+                            "pendingFrameMessageActorReactionCalls",
+                            "pendingFrameMessageActorReactionAllocatedKB",
+                            reactionBefore)
+                    end
                     transitions[#transitions + 1] = {
                         recipient = recipient,
                         accepted = accepted,

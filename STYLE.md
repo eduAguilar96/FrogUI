@@ -193,11 +193,12 @@ projections, companion style files, or geometry files.
 - Semantic font roles remain the default. Use `Text.fontScale` for deliberate
   local emphasis and keep the multiplier beside its component owner; change the
   theme role only when every semantic user should change.
-- Typed messages cross into the Host as one validated canonical copy. Each
-  actor reaction receives a detached delivery copy, so an impure reducer cannot
-  alter what later recipients observe. Keep payloads small and semantic. F6
-  retains only compact delivery metadata—not payload archives or full
-  before/after actor states.
+- Typed messages cross into the Host as one validated canonical copy.
+  Framework-owned declarative matches read that canonical record; authored
+  reducers do not. Each reducer whose match accepts receives a detached
+  delivery copy, so an impure reducer cannot alter what later recipients
+  observe. Keep payloads small and semantic. F6 retains only compact delivery
+  metadata—not payload archives or full before/after actor states.
 - Actor actions, events, route props, and retained-process revisions reconcile
   the tree. A typed actor change reruns that actor and its semantic subtree;
   quiet owners retain their descriptions while FrogUI still rebuilds and lays

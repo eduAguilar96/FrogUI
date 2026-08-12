@@ -728,12 +728,13 @@ Do not put menu state into a root component merely because the root can see the
 menu.
 
 Typed actions and events become one validated canonical copy when they cross
-into the Host. Each actor reaction receives a detached delivery copy, so one
-impure reducer cannot alter the event observed by later recipients. Reducers
-return replacement semantic state; a non-nil result requests one
-reconciliation. F6 keeps a bounded diagnostic trace of token, origin, ordered
-recipients, acceptance, and reconciliation only. It deliberately retains no
-message payloads or full before/after actor states.
+into the Host. FrogUI evaluates declarative reaction matches against that
+read-only canonical record. Each reducer whose match accepts then receives its
+own detached delivery copy, so one impure reducer cannot alter the event
+observed by later recipients. Reducers return replacement semantic state; a
+non-nil result requests one reconciliation. F6 keeps a bounded diagnostic trace
+of token, origin, ordered recipients, acceptance, and reconciliation only. It
+deliberately retains no message payloads or full before/after actor states.
 
 FrogUI schedules that reconciliation at the actors whose typed state changed.
 The changed actor and its semantic descendants rerun; quiet component, actor,
@@ -1905,6 +1906,15 @@ recycling a retired shell mutated a node retained by a caller and failed the
 focused descriptor-props ownership contract. No arena remains. FrogUI keeps
 old returned trees stable instead of adding proxies, epoch handles, or a hidden
 public-tree lifetime rule.
+
+The source-exact B4p.65 run is
+`build/frogui/battle-performance-20260812T082804Z-32761`. Declarative reaction
+matches now read the validated canonical event before FrogUI allocates a
+private delivery. The 515 late matching-token reactions accepted only 54
+reducers, so detached snapshot allocation fell from 22.312 to 2.339
+KB/rebuilt frame and complete typed delivery fell from 28.984 to 9.012.
+Complete late allocation fell from 525.194 to 517.686 KB/frame. Every accepted
+reducer remains isolated by its own detached record.
 
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
