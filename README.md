@@ -1682,6 +1682,20 @@ hits, conservative misses, and committed branches/nodes. This is framework
 evidence, not a component memoization API. Components declare no dependencies
 or revisions.
 
+That same private pipeline window also partitions `Painter.draw` without
+adding another Battle replay. One preallocated row receives quiet draws and a
+second receives draws whose immediately preceding update published a
+candidate. Parent counters cover Canvas preflight, frame setup, visible-tree
+traversal, inspector work, and finish; nested counters name first-draw storage
+for the node scratch root, base style/transform/colors, Text and image leaves,
+Icon outline treatment, clip callbacks, and PopupText shine. The nested cold
+sites are already inside preflight/tree and must not be added to the Painter
+parent. Normal Hosts perform one nil probe lookup at the start of a draw and
+never allocate these rows, call `collectgarbage`, or retain attribution data.
+The focused contract warms one candidate, proves its later draw reports zero
+cold storage, publishes a replacement, and proves its first draw reports the
+fresh storage families.
+
 #### Current measured checkpoint
 
 B4p.47 retains B4p.46's conservative incremental-layout implementation and

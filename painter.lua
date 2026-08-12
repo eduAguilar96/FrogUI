@@ -29,6 +29,23 @@ local function graphics()
     return love and love.graphics or nil
 end
 
+-- Returns the preallocated row used only by the private Battle allocation
+-- harness. Ordinary Hosts do not own a probe, so normal painting takes the
+-- single raw lookup and no diagnostic storage or snapshots.
+local function paintAllocationRow(host)
+    local probe = rawget(host, "_allocationProbe")
+    return probe and probe.mode == "pipeline" and probe.active
+        and probe.paintActiveRow or nil
+end
+
+-- Adds one measured site's already-bounded scalar delta to its active cohort.
+local function recordAllocation(row, callsField, allocatedField, before)
+    if not row then return end
+    row[callsField] = row[callsField] + 1
+    row[allocatedField] = row[allocatedField]
+        + collectgarbage("count") - before
+end
+
 local function setColor(color)
     local g = graphics()
     if not g then return end
@@ -117,14 +134,18 @@ local function endClip(state, drawShape)
     else g.setStencilTest("equal", state.depth) end
 end
 
-local function nodeShape(node, content)
+local function nodeShape(node, content, paintRow)
     local scratch = node._paintScratch
     if not scratch then
+        local before = paintRow and collectgarbage("count") or nil
         scratch = {}
         node._paintScratch = scratch
+        recordAllocation(paintRow, "scratchCreated", "scratchAllocatedKB",
+            before)
     end
     local key = content and "contentShape" or "boundsShape"
     if not scratch[key] then
+        local before = paintRow and collectgarbage("count") or nil
         -- The callback reads the committed node at invocation time, so Scroll
         -- rearrangement and in-place Motion bounds remain current. Retaining
         -- it on the node also gives stencil begin/end one stable identity.
@@ -137,11 +158,14 @@ local function nodeShape(node, content)
                 g.rectangle("fill", node.layout.x, node.layout.y, node.layout.width, node.layout.height)
             end
         end
+        recordAllocation(paintRow, "clipShapeCreated",
+            "clipShapeAllocatedKB", before)
     end
     return scratch[key]
 end
 
-local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch)
+local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch,
+        paintRow)
     local props = node.props
     local presentation = node.presentation or {}
     local authoredOpacity = node.type ~= "Motion" and node.type ~= "PopupText"
@@ -150,6 +174,8 @@ local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch)
     local retainedScratch = scratch ~= nil
     scratch = scratch or {}
     local style = scratch.style
+    local coldBefore = retainedScratch and not style and paintRow
+        and collectgarbage("count") or nil
     if not style then
         style = { transform = {} }
         scratch.style = style
@@ -246,16 +272,23 @@ local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch)
     style.border = writePaintColor(scratch.border, border, tint, opacity)
     if style.background then scratch.background = style.background end
     if style.border then scratch.border = style.border end
+    if coldBefore then
+        recordAllocation(paintRow, "styleColdCalls",
+            "styleColdAllocatedKB", coldBefore)
+    end
     return style
 end
 
 -- Default painting owns reusable ephemeral style storage on the committed
 -- node. It carries no semantic state and disappears with that candidate.
-local function defaultScratch(node)
+local function defaultScratch(node, paintRow)
     local scratch = node._paintScratch
     if not scratch then
+        local before = paintRow and collectgarbage("count") or nil
         scratch = {}
         node._paintScratch = scratch
+        recordAllocation(paintRow, "scratchCreated", "scratchAllocatedKB",
+            before)
     end
     return scratch
 end
@@ -263,9 +296,9 @@ end
 -- Default leaf styles reuse storage beneath their committed node. Custom
 -- painters take the fresh branch so retained user arguments can never alias
 -- or mutate the default Painter's next frame.
-local function leafScratch(node, custom, name)
+local function leafScratch(node, custom, name, paintRow)
     if custom then return {}, {} end
-    local root = defaultScratch(node)
+    local root = defaultScratch(node, paintRow)
     local leaves = root.leaves
     if not leaves then
         leaves = {}
@@ -279,8 +312,12 @@ local function leafScratch(node, custom, name)
     return entry.style, entry
 end
 
-local function textStyleFor(host, node, inherited, custom)
-    local style, scratch = leafScratch(node, custom, "text")
+local function textStyleFor(host, node, inherited, custom, paintRow)
+    local root = node._paintScratch
+    local leaves = root and root.leaves
+    local coldBefore = not custom and not (leaves and leaves.text)
+        and paintRow and collectgarbage("count") or nil
+    local style, scratch = leafScratch(node, custom, "text", paintRow)
     scratch.color = writePaintColor(scratch.color,
         host:_color(node.props.color, "text"),
         inherited.tint, inherited.opacity)
@@ -299,15 +336,27 @@ local function textStyleFor(host, node, inherited, custom)
     style.shadowColor = scratch.shadowColor
     style.shine = node.props.shine or 0
     style.shineSplit = node.props.shineSplit or 0.5
+    if coldBefore then
+        recordAllocation(paintRow, "textLeafColdCalls",
+            "textLeafColdAllocatedKB", coldBefore)
+    end
     return style
 end
 
-local function imageStyleFor(host, node, inherited, custom, name)
-    local style, scratch = leafScratch(node, custom, name)
+local function imageStyleFor(host, node, inherited, custom, name, paintRow)
+    local root = node._paintScratch
+    local leaves = root and root.leaves
+    local coldBefore = not custom and not (leaves and leaves[name])
+        and paintRow and collectgarbage("count") or nil
+    local style, scratch = leafScratch(node, custom, name, paintRow)
     scratch.tint = writePaintColor(scratch.tint,
         host:_color(node.props.tint, nil, WHITE),
         inherited.tint, inherited.opacity)
     style.tint = scratch.tint
+    if coldBefore then
+        recordAllocation(paintRow, "imageLeafColdCalls",
+            "imageLeafColdAllocatedKB", coldBefore)
+    end
     return style, scratch
 end
 
@@ -365,20 +414,23 @@ local function stampText(g, node, value, align, dx, dy)
         math.max(0, node.layout.width), align)
 end
 
-local function textShineShape(node, shineSplit)
-    local scratch = defaultScratch(node)
+local function textShineShape(node, shineSplit, paintRow)
+    local scratch = defaultScratch(node, paintRow)
     scratch.shineSplit = shineSplit
     if not scratch.shineShape then
+        local before = paintRow and collectgarbage("count") or nil
         scratch.shineShape = function()
             local g = graphics()
             g.rectangle("fill", node.layout.x, node.layout.y,
                 node.layout.width, node.layout.height * scratch.shineSplit)
         end
+        recordAllocation(paintRow, "shineShapeCreated",
+            "shineShapeAllocatedKB", before)
     end
     return scratch.shineShape
 end
 
-local function defaultText(host, node, style, clipState)
+local function defaultText(host, node, style, clipState, paintRow)
     local g = graphics()
     if not g then return end
     local font = node.layout.resolvedFont or host:_font(node.props.role)
@@ -403,11 +455,17 @@ local function defaultText(host, node, style, clipState)
     setColor(style.color)
     stampText(g, node, value, align, 0, 0)
     if style.shine > 0 and style.shineSplit > 0 then
-        local shineShape = textShineShape(node, style.shineSplit)
+        local shineShape = textShineShape(node, style.shineSplit, paintRow)
         beginClip(clipState, shineShape)
-        local scratch = defaultScratch(node)
+        local scratch = defaultScratch(node, paintRow)
+        local coldBefore = not scratch.shineColor and paintRow
+            and collectgarbage("count") or nil
         scratch.shineColor = writeBrightened(
             scratch.shineColor, style.color, style.shine)
+        if coldBefore then
+            recordAllocation(paintRow, "shineColorCreated",
+                "shineColorAllocatedKB", coldBefore)
+        end
         setColor(scratch.shineColor)
         stampText(g, node, value, align, 0, 0)
         endClip(clipState, shineShape)
@@ -530,7 +588,7 @@ local function missingAsset(node, style)
     g.line(node.layout.x + node.layout.width, node.layout.y, node.layout.x, node.layout.y + node.layout.height)
 end
 
-local function defaultImage(host, node, asset, style, clipState)
+local function defaultImage(host, node, asset, style, clipState, paintRow)
     local g = graphics()
     if not g then return end
     if not asset or not asset.getWidth or not asset.getHeight then
@@ -539,7 +597,8 @@ local function defaultImage(host, node, asset, style, clipState)
     end
     local geometry = imageGeometry(node, asset, style.fit, style.sourceRect)
     setColor(style.tint)
-    local shape = style.fit == "cover" and nodeShape(node, false) or nil
+    local shape = style.fit == "cover"
+        and nodeShape(node, false, paintRow) or nil
     if style.fit == "cover" then beginClip(clipState, shape) end
     local quad = sourceQuad(asset, style.sourceRect)
     local scaleX = style.mirror and -geometry.scaleX or geometry.scaleX
@@ -602,7 +661,8 @@ local function drawSpriteSheetFrame(g, asset, geometry, style)
         geometry.imageWidth / 2, geometry.imageHeight / 2)
 end
 
-local function defaultSpriteSheet(node, asset, geometry, style, clipState)
+local function defaultSpriteSheet(host, node, asset, geometry, style,
+        clipState, paintRow)
     local g = graphics()
     if not g then return end
     if not asset or not asset.getWidth or not asset.getHeight then
@@ -614,7 +674,8 @@ local function defaultSpriteSheet(node, asset, geometry, style, clipState)
         previousMin, previousMag, previousAnisotropy = asset:getFilter()
         asset:setFilter(geometry.filter, geometry.filter)
     end
-    local shape = geometry.fit == "cover" and nodeShape(node, false) or nil
+    local shape = geometry.fit == "cover"
+        and nodeShape(node, false, paintRow) or nil
     if geometry.fit == "cover" then beginClip(clipState, shape) end
     local ok, reason = pcall(
         drawSpriteSheetFrame, g, asset, geometry, style)
@@ -658,7 +719,7 @@ local function stampIcon(g, asset, quad, geometry, scaleX, dx, dy)
     end
 end
 
-local function defaultIcon(host, node, asset, style, clipState)
+local function defaultIcon(host, node, asset, style, clipState, paintRow)
     local g = graphics()
     if not g then return end
     if not asset or not asset.getWidth or not asset.getHeight then
@@ -669,7 +730,8 @@ local function defaultIcon(host, node, asset, style, clipState)
     local quad = sourceQuad(asset, style.sourceRect)
     local scaleX = style.mirror and -geometry.scaleX or geometry.scaleX
 
-    local shape = style.fit == "cover" and nodeShape(node, false) or nil
+    local shape = style.fit == "cover"
+        and nodeShape(node, false, paintRow) or nil
     if style.fit == "cover" then beginClip(clipState, shape) end
     local previousShader = g.getShader and g.getShader() or nil
     g.setShader(alphaMaskShader())
@@ -765,7 +827,8 @@ local function drawTiles(g, asset, geometry)
     end
 end
 
-local function defaultTiledImage(node, asset, geometry, style, clipState)
+local function defaultTiledImage(host, node, asset, geometry, style, clipState,
+        paintRow)
     local g = graphics()
     if not g or not asset then return end
     local previousMin, previousMag, previousAnisotropy
@@ -775,12 +838,13 @@ local function defaultTiledImage(node, asset, geometry, style, clipState)
     end
     local activeShader = g.getShader and g.getShader() or nil
     if activeShader then g.setShader() end
-    beginClip(clipState, nodeShape(node, false))
+    local shape = nodeShape(node, false, paintRow)
+    beginClip(clipState, shape)
     if activeShader then g.setShader(activeShader) end
     setColor(style.tint)
     local ok, reason = pcall(drawTiles, g, asset, geometry)
     if activeShader then g.setShader() end
-    endClip(clipState, nodeShape(node, false))
+    endClip(clipState, shape)
     if activeShader then g.setShader(activeShader) end
     if previousMin then
         asset:setFilter(previousMin, previousMag, previousAnisotropy)
@@ -830,10 +894,10 @@ local function replayCanvasCommands(g, commands)
 end
 
 -- Clips and replays one recorded leaf while restoring state on GPU failure.
-local function defaultCanvas(node, commands, clipState)
+local function defaultCanvas(host, node, commands, clipState, paintRow)
     local g = graphics()
     if not g then return true end
-    local shape = nodeShape(node, false)
+    local shape = nodeShape(node, false, paintRow)
     beginClip(clipState, shape)
     g.push("all")
     g.translate(node.layout.x, node.layout.y)
@@ -845,14 +909,14 @@ end
 
 -- Records every visible Canvas before a frame clears or touches GPU state.
 local function preflightNode(host, node, inheritedOpacity, inheritedTint,
-        portalRoot)
+        portalRoot, paintRow)
     if not node._containsCanvas then return nil end
     if node._portal and node ~= portalRoot then return nil end
     local session = host._interactionSession
     if session and session.claimed == "drag"
             and node.identity == session.sourceIdentity then return nil end
     local style = styleFor(host, node, inheritedOpacity or 1, inheritedTint,
-        defaultScratch(node))
+        defaultScratch(node, paintRow), paintRow)
     if node.type == "Canvas" then
         local commands, inspection = Canvas.record(node.props.draw,
             node.layout.width, node.layout.height, function(color)
@@ -868,34 +932,36 @@ local function preflightNode(host, node, inheritedOpacity, inheritedTint,
     end
     for _, child in ipairs(node.children) do
         local failure = preflightNode(host, child, style.opacity, style.tint,
-            portalRoot)
+            portalRoot, paintRow)
         if failure then return failure end
     end
 end
 
 -- Mirrors visible root-plane order so callbacks observe authored paint order.
-local function preflightCanvases(host)
-    local failure = preflightNode(host, host._tree)
+local function preflightCanvases(host, paintRow)
+    local failure = preflightNode(host, host._tree, nil, nil, nil, paintRow)
     if failure then return failure end
     local chrome = host._chrome
     local chromeAboveModal = chrome and host._modal
         and host._modal.props.allowChrome == true
     if chrome and not chromeAboveModal then
-        failure = preflightNode(host, chrome, nil, nil, chrome)
+        failure = preflightNode(host, chrome, nil, nil, chrome, paintRow)
         if failure then return failure end
     end
     for _, modal in ipairs(host._modals or {}) do
-        failure = preflightNode(host, modal, nil, nil, modal)
+        failure = preflightNode(host, modal, nil, nil, modal, paintRow)
         if failure then return failure end
     end
     if chromeAboveModal then
-        failure = preflightNode(host, chrome, nil, nil, chrome)
+        failure = preflightNode(host, chrome, nil, nil, chrome, paintRow)
         if failure then return failure end
     end
     local session = host._interactionSession
     local preview = session and session.claimed == "drag"
         and session.source and session.source._dragPreview or nil
-    if preview then return preflightNode(host, preview, nil, nil, preview) end
+    if preview then
+        return preflightNode(host, preview, nil, nil, preview, paintRow)
+    end
 end
 
 local function customCall(custom, method, ...)
@@ -952,15 +1018,16 @@ local drawNode
 -- Recurses without allocating one closure per primitive per frame. Shader
 -- error isolation calls this same helper through pcall, preserving its exact
 -- child push/pop and fallback behavior.
-local function drawChildren(host, node, custom, style, clipState, portalRoot)
+local function drawChildren(host, node, custom, style, clipState, portalRoot,
+        paintRow)
     for _, child in ipairs(node.children) do
         drawNode(host, child, custom, style.opacity, style.tint,
-            clipState, portalRoot)
+            clipState, portalRoot, paintRow)
     end
 end
 
 drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
-        clipState, portalRoot)
+        clipState, portalRoot, paintRow)
     if node._portal and node ~= portalRoot then return end
     local session = host._interactionSession
     if session and session.claimed == "drag"
@@ -980,7 +1047,7 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
         g.translate(-centerX, -centerY)
     end
     local style = styleFor(host, node, inheritedOpacity or 1, inheritedTint,
-        not custom and defaultScratch(node) or nil)
+        not custom and defaultScratch(node, paintRow) or nil, paintRow)
     style.transform.scale = style.transform.scale * radialScale
     local customDescriptor = custom and customNode(node) or nil
     if custom then
@@ -998,7 +1065,8 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
             customCall(custom, "canvas", customDescriptor,
                 Canvas.detached(commands), Canvas.detached(inspection))
         elseif inspection.status == "ready" then
-            local ok, reason = defaultCanvas(node, commands, clipState)
+            local ok, reason = defaultCanvas(
+                host, node, commands, clipState, paintRow)
             if not ok then
                 inspection.status = "failed"
                 inspection.commandCount = 0
@@ -1035,20 +1103,20 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
             defaultFlipbook(host, node, node._effect, effectStyle)
         end
     elseif node.type == "Text" or node.type == "PopupText" then
-        local textStyle = textStyleFor(host, node, style, custom)
+        local textStyle = textStyleFor(host, node, style, custom, paintRow)
         if custom then
             customCall(custom, "text", customDescriptor,
                 node.props.text or "", textStyle)
         else
             local shape = node.props.maxLines and g
-                and nodeShape(node, false) or nil
+                and nodeShape(node, false, paintRow) or nil
             if node.props.maxLines and g then beginClip(clipState, shape) end
-            defaultText(host, node, textStyle, clipState)
+            defaultText(host, node, textStyle, clipState, paintRow)
             if node.props.maxLines and g then endClip(clipState, shape) end
         end
     elseif node.type == "TiledImage" then
         local imageStyle = imageStyleFor(
-            host, node, style, custom, "tiledImage")
+            host, node, style, custom, "tiledImage", paintRow)
         local asset = host:_asset(node.props.source)
         local geometry = tiledGeometry(node, asset)
         node._tileGeometry = geometry
@@ -1056,11 +1124,12 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
             customCall(custom, "tiledImage", customDescriptor,
                 asset, geometry, imageStyle)
         else
-            defaultTiledImage(node, asset, geometry, imageStyle, clipState)
+            defaultTiledImage(host, node, asset, geometry, imageStyle,
+                clipState, paintRow)
         end
     elseif node.type == "SpriteSheet" then
         local spriteStyle = imageStyleFor(
-            host, node, style, custom, "spriteSheet")
+            host, node, style, custom, "spriteSheet", paintRow)
         local asset = host:_asset(node.props.source)
         local geometry = spriteSheetGeometry(node, asset)
         node._spriteSheetGeometry = geometry
@@ -1068,28 +1137,33 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
             customCall(custom, "spriteSheet", customDescriptor,
                 asset, safeCustomValue(geometry), spriteStyle)
         else
-            defaultSpriteSheet(node, asset, geometry, spriteStyle, clipState)
+            defaultSpriteSheet(host, node, asset, geometry, spriteStyle,
+                clipState, paintRow)
         end
     elseif node.type == "Image" then
         local imageStyle = imageStyleFor(
-            host, node, style, custom, "image")
+            host, node, style, custom, "image", paintRow)
         imageStyle.fit = node.props.fit or "contain"
         imageStyle.sourceRect = sourceRectFor(node, custom)
         imageStyle.mirror = node.props.mirror == true
         local asset = host:_asset(node.props.source)
         if custom then
             customCall(custom, "image", customDescriptor, asset, imageStyle)
-        else defaultImage(host, node, asset, imageStyle, clipState) end
+        else
+            defaultImage(host, node, asset, imageStyle, clipState, paintRow)
+        end
     elseif node.type == "Icon" then
         local outline = node.props.outline
         local iconStyle, iconScratch = imageStyleFor(
-            host, node, style, custom, "icon")
+            host, node, style, custom, "icon", paintRow)
         iconStyle.fit = node.props.fit or "contain"
         iconStyle.sourceRect = sourceRectFor(node, custom)
         iconStyle.mirror = node.props.mirror == true
         iconStyle.alphaMask = true
         if outline then
             local outlineStyle = iconScratch.outline
+            local coldBefore = not outlineStyle and paintRow
+                and collectgarbage("count") or nil
             if not outlineStyle then
                 outlineStyle = {}
                 iconScratch.outline = outlineStyle
@@ -1101,26 +1175,33 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
             outlineStyle.width = outline.width or 1
             outlineStyle.color = iconScratch.outlineColor
             iconStyle.outline = outlineStyle
+            if coldBefore then
+                recordAllocation(paintRow, "iconExtensionCalls",
+                    "iconExtensionAllocatedKB", coldBefore)
+            end
         else
             iconStyle.outline = nil
         end
         local asset = host:_asset(node.props.source)
         if custom then
             customCall(custom, "icon", customDescriptor, asset, iconStyle)
-        else defaultIcon(host, node, asset, iconStyle, clipState) end
+        else
+            defaultIcon(host, node, asset, iconStyle, clipState, paintRow)
+        end
     end
 
     local clipped = node.type == "Scroll" or node.props.clip
         or node.props.overflow == "clip"
     local contentShape = clipped and not custom and g
-        and nodeShape(node, true) or nil
+        and nodeShape(node, true, paintRow) or nil
     if clipped and not custom and g then beginClip(clipState, contentShape) end
     if node.type == "ShaderImage" then
         if custom then
             node._shaderInspection = Shader.inspect(host, node)
             customCall(custom, "shaderImage", customDescriptor,
                 node._shaderInspection)
-            drawChildren(host, node, custom, style, clipState, portalRoot)
+            drawChildren(host, node, custom, style, clipState, portalRoot,
+                paintRow)
         else
             local previousShader = g.getShader and g.getShader() or nil
             local previousBlend, previousAlpha = g.getBlendMode()
@@ -1128,7 +1209,8 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
             node._shaderInspection = Shader.inspect(host, node)
             if active then
                 local ok, reason = pcall(drawChildren,
-                    host, node, custom, style, clipState, portalRoot)
+                    host, node, custom, style, clipState, portalRoot,
+                    paintRow)
                 if not ok then
                     -- The validated child is one paint leaf, so its unmatched
                     -- drawNode push is the only graphics frame to unwind.
@@ -1139,18 +1221,19 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
                     node._shaderInspection = Shader.inspect(host, node)
                     if (node.props.fallback or "plain") == "plain" then
                         drawChildren(host, node, custom, style,
-                            clipState, portalRoot)
+                            clipState, portalRoot, paintRow)
                     end
                 end
             elseif (node.props.fallback or "plain") == "plain" then
                 g.setShader(previousShader)
                 g.setBlendMode(previousBlend, previousAlpha)
                 drawChildren(host, node, custom, style,
-                    clipState, portalRoot)
+                    clipState, portalRoot, paintRow)
             end
         end
     else
-        drawChildren(host, node, custom, style, clipState, portalRoot)
+        drawChildren(host, node, custom, style, clipState, portalRoot,
+            paintRow)
     end
     if clipped and not custom and g then endClip(clipState, contentShape) end
     if node.type == "Scroll" and node.props.bar and node._scroll
@@ -1439,11 +1522,17 @@ end
 
 function painter.draw(host, custom)
     if not host._tree then return end
+    local paintRow = paintAllocationRow(host)
+    local drawBefore = paintRow and collectgarbage("count") or nil
     host._paintFailure = nil
-    local preflightFailure = preflightCanvases(host)
+    local preflightBefore = paintRow and collectgarbage("count") or nil
+    local preflightFailure = preflightCanvases(host, paintRow)
+    recordAllocation(paintRow, "preflightCalls", "preflightAllocatedKB",
+        preflightBefore)
     if preflightFailure then
         error("FrogUI Canvas draw failed: " .. preflightFailure, 0)
     end
+    local setupBefore = paintRow and collectgarbage("count") or nil
     local g = graphics()
     local snapshot = host._viewport:snapshot()
     customCall(custom, "begin", snapshot)
@@ -1455,18 +1544,21 @@ function painter.draw(host, custom)
         g.scale(host._viewport.scale)
     end
     local clipState = not custom and { depth = 0 } or nil
-    drawNode(host, host._tree, custom, nil, nil, clipState)
+    recordAllocation(paintRow, "setupCalls", "setupAllocatedKB",
+        setupBefore)
+    local treeBefore = paintRow and collectgarbage("count") or nil
+    drawNode(host, host._tree, custom, nil, nil, clipState, nil, paintRow)
     local chrome = host._chrome
     local chromeAboveModal = chrome and host._modal
         and host._modal.props.allowChrome == true
     if chrome and not chromeAboveModal then
-        drawNode(host, chrome, custom, nil, nil, clipState, chrome)
+        drawNode(host, chrome, custom, nil, nil, clipState, chrome, paintRow)
     end
     for _, modal in ipairs(host._modals or {}) do
-        drawNode(host, modal, custom, nil, nil, clipState, modal)
+        drawNode(host, modal, custom, nil, nil, clipState, modal, paintRow)
     end
     if chromeAboveModal then
-        drawNode(host, chrome, custom, nil, nil, clipState, chrome)
+        drawNode(host, chrome, custom, nil, nil, clipState, chrome, paintRow)
     end
     local session = host._interactionSession
     local preview = session and session.claimed == "drag"
@@ -1487,9 +1579,11 @@ function painter.draw(host, custom)
                 session.y - preview.height / 2)
         end
         drawNode(host, preview, custom, nil, nil,
-            not custom and { depth = 0 } or nil, preview)
+            not custom and { depth = 0 } or nil, preview, paintRow)
         if not custom and g then g.pop() end
     end
+    recordAllocation(paintRow, "treeCalls", "treeAllocatedKB", treeBefore)
+    local inspectorBefore = paintRow and collectgarbage("count") or nil
     if host._inspectorVisible then
         local inspection = host:inspectionTree()
         for _, entry in ipairs(inspection.nodes) do
@@ -1504,10 +1598,16 @@ function painter.draw(host, custom)
         if custom then customCall(custom, "interaction", inspection.interaction)
         else defaultInteraction(host, inspection.interaction) end
     end
+    recordAllocation(paintRow, "inspectorCalls", "inspectorAllocatedKB",
+        inspectorBefore)
+    local finishBefore = paintRow and collectgarbage("count") or nil
     if not custom and g then g.pop() end
     customCall(custom, "finish")
     local failure = host._paintFailure
     host._paintFailure = nil
+    recordAllocation(paintRow, "finishCalls", "finishAllocatedKB",
+        finishBefore)
+    recordAllocation(paintRow, "drawCalls", "drawAllocatedKB", drawBefore)
     if failure then error("FrogUI Canvas draw failed: " .. failure, 0) end
 end
 

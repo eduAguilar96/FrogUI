@@ -1489,6 +1489,30 @@ local ALLOCATION_PROBE_MODES = {
     pipeline = true,
 }
 
+local PAINT_ALLOCATION_ROW_FIELDS = {
+    "drawCalls", "drawAllocatedKB",
+    "preflightCalls", "preflightAllocatedKB",
+    "setupCalls", "setupAllocatedKB",
+    "treeCalls", "treeAllocatedKB",
+    "inspectorCalls", "inspectorAllocatedKB",
+    "finishCalls", "finishAllocatedKB",
+    "scratchCreated", "scratchAllocatedKB",
+    "styleColdCalls", "styleColdAllocatedKB",
+    "textLeafColdCalls", "textLeafColdAllocatedKB",
+    "imageLeafColdCalls", "imageLeafColdAllocatedKB",
+    "iconExtensionCalls", "iconExtensionAllocatedKB",
+    "clipShapeCreated", "clipShapeAllocatedKB",
+    "shineShapeCreated", "shineShapeAllocatedKB",
+    "shineColorCreated", "shineColorAllocatedKB",
+}
+
+-- Resets one preallocated painter row without constructing measurement data.
+-- The first attachment creates the two cohort rows before the stopped-GC
+-- window; later resets only overwrite existing scalar keys.
+local function resetPaintAllocationRow(row)
+    for _, field in ipairs(PAINT_ALLOCATION_ROW_FIELDS) do row[field] = 0 end
+end
+
 local function resetAllocationProbe(probe)
     probe.sourceCalls = 0
     probe.sourceAllocatedKB = 0
@@ -1749,6 +1773,11 @@ local function resetAllocationProbe(probe)
     probe.pipelineLayoutRadialScratchAllocatedKB = 0
     probe.pipelineLayoutEffectRectCreated = 0
     probe.pipelineLayoutEffectRectAllocatedKB = 0
+    probe.paintQuiet = probe.paintQuiet or {}
+    probe.paintRebuilt = probe.paintRebuilt or {}
+    resetPaintAllocationRow(probe.paintQuiet)
+    resetPaintAllocationRow(probe.paintRebuilt)
+    probe.paintActiveRow = probe.paintQuiet
 end
 
 -- Private, globally exclusive allocation attribution for the Battle harness.
@@ -2137,6 +2166,37 @@ function host:_readLayoutReuseProbe()
         probe.pipelineLayoutReuseArrangementMisses,
         probe.pipelineLayoutReuseBranchesCommitted,
         probe.pipelineLayoutReuseNodesCommitted
+end
+
+-- Selects the already-allocated quiet or rebuilt paint row for one draw.
+-- This is private Battle-harness plumbing, not a component authoring API.
+function host:_setPaintAllocationCohort(rebuilt)
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no pipeline paint allocation probe")
+    probe.paintActiveRow = rebuilt and probe.paintRebuilt or probe.paintQuiet
+end
+
+-- Returns one painter cohort as scalars after the stopped-GC window ends.
+function host:_readPaintAllocationProbe(rebuilt)
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no pipeline paint allocation probe to read")
+    local row = rebuilt and probe.paintRebuilt or probe.paintQuiet
+    return row.drawCalls, row.drawAllocatedKB,
+        row.preflightCalls, row.preflightAllocatedKB,
+        row.setupCalls, row.setupAllocatedKB,
+        row.treeCalls, row.treeAllocatedKB,
+        row.inspectorCalls, row.inspectorAllocatedKB,
+        row.finishCalls, row.finishAllocatedKB,
+        row.scratchCreated, row.scratchAllocatedKB,
+        row.styleColdCalls, row.styleColdAllocatedKB,
+        row.textLeafColdCalls, row.textLeafColdAllocatedKB,
+        row.imageLeafColdCalls, row.imageLeafColdAllocatedKB,
+        row.iconExtensionCalls, row.iconExtensionAllocatedKB,
+        row.clipShapeCreated, row.clipShapeAllocatedKB,
+        row.shineShapeCreated, row.shineShapeAllocatedKB,
+        row.shineColorCreated, row.shineColorAllocatedKB
 end
 
 function host:_detachAllocationProbe()
