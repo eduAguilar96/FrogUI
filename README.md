@@ -1829,6 +1829,17 @@ presentation publication are zero-allocation in quiet frames; complete late
 FrogUI allocation fell another 14.245 KB/frame, from 560.051 to 545.806.
 The remaining 0.356 KB/frame instance registry is deliberately deferred.
 
+The attribution-only B4p.57 manifest is
+`build/frogui/battle-performance-20260812T072834Z-11441`. It proves the late
+interaction cost is not generic input or Scroll work: the settling RadialDial
+owns the complete 18.542/27.884 KB per quiet/rebuilt frame. Its immediate
+refresh spends 14.750 KB/frame republishing the complete Host ref surface,
+2.633/4.883 arranging the dial, and 0.987/8.080 updating transforms. Session,
+Scroll update, and invalidation allocate zero; the two registry lists together
+cost 0.172 KB/frame. The next implementation is therefore a bounded subtree
+ref publication, preserving exact refs inside the moving dial without walking
+or copying unrelated Battle refs.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.

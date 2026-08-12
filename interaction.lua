@@ -8,6 +8,20 @@ local Motion = require("src.frogui.motion")
 local interaction = {}
 local stageSound
 
+-- Selects the Host's existing stopped-collector diagnostics row. Ordinary
+-- Hosts take the nil path and keep no interaction observer state.
+local function runtimeAllocationRow(host)
+    local probe = host and rawget(host, "_allocationProbe") or nil
+    return probe and probe.active and probe.mode == "pipeline"
+        and probe.runtimeActiveRow or nil
+end
+
+local function recordRuntimeAllocation(row, callsField, kbField, before)
+    if not row then return end
+    row[callsField] = row[callsField] + 1
+    row[kbField] = row[kbField] + collectgarbage("count") - before
+end
+
 interaction.HOLD_SECONDS = 0.35
 interaction.CLAIM_DISTANCE = 8
 interaction.AXIS_BIAS = 1.25
@@ -155,10 +169,31 @@ end
 -- Keeps arranged option centers and transformed/F6 bounds truthful in the
 -- same pointer frame without asking application code to rerender.
 local function refreshRadial(host, node, detail)
+    local row = runtimeAllocationRow(host)
+    local refreshBefore = row and collectgarbage("count") or nil
+    local arrangeBefore = row and collectgarbage("count") or nil
     require("src.frogui.layout").arrangeRadialDial(node, host)
+    recordRuntimeAllocation(row,
+        "interactionRadialArrangeCalls",
+        "interactionRadialArrangeAllocatedKB", arrangeBefore)
+    local invalidateBefore = row and collectgarbage("count") or nil
     host:_invalidateTransform(node, "RadialDial", detail)
+    recordRuntimeAllocation(row,
+        "interactionRadialInvalidateCalls",
+        "interactionRadialInvalidateAllocatedKB", invalidateBefore)
+    local transformBefore = row and collectgarbage("count") or nil
     local _, transform = host:_transformTree(nil, "interactionTransform")
+    recordRuntimeAllocation(row,
+        "interactionRadialTransformCalls",
+        "interactionRadialTransformAllocatedKB", transformBefore)
+    local refsBefore = row and collectgarbage("count") or nil
     host:_refreshCommittedRefs("interaction", transform)
+    recordRuntimeAllocation(row,
+        "interactionRadialRefsCalls",
+        "interactionRadialRefsAllocatedKB", refsBefore)
+    recordRuntimeAllocation(row,
+        "interactionRadialRefreshCalls",
+        "interactionRadialRefreshAllocatedKB", refreshBefore)
 end
 
 -- Internal check seam. Returns a copy so tests cannot mutate input policy.
@@ -989,6 +1024,8 @@ function interaction.pointerUp(host, x, y, pointerId, button)
 end
 
 function interaction.update(host, dt)
+    local runtimeRow = runtimeAllocationRow(host)
+    local sessionBefore = runtimeRow and collectgarbage("count") or nil
     local session = host._interactionSession
     if session and session.kind == "pointer" and not session.claimed then
         session.elapsed = session.elapsed + dt
@@ -1005,10 +1042,19 @@ function interaction.update(host, dt)
             end
         end
     end
+    recordRuntimeAllocation(runtimeRow,
+        "interactionSessionCalls", "interactionSessionAllocatedKB",
+        sessionBefore)
     local decay = interaction.MOMENTUM_FRICTION
+    local scrollRegistryBefore = runtimeRow
+        and collectgarbage("count") or nil
     local identities = {}
     for identity in pairs(host._scrolls or {}) do identities[#identities + 1] = identity end
     table.sort(identities)
+    recordRuntimeAllocation(runtimeRow,
+        "interactionScrollRegistryCalls",
+        "interactionScrollRegistryAllocatedKB", scrollRegistryBefore)
+    local scrollUpdateBefore = runtimeRow and collectgarbage("count") or nil
     for _, identity in ipairs(identities) do
         local scroll = host._scrolls[identity]
         local captured = session and session.claimed == "scroll"
@@ -1029,11 +1075,20 @@ function interaction.update(host, dt)
             scroll.velocity = 0
         end
     end
+    recordRuntimeAllocation(runtimeRow,
+        "interactionScrollUpdateCalls", "interactionScrollUpdateAllocatedKB",
+        scrollUpdateBefore)
+    local radialRegistryBefore = runtimeRow
+        and collectgarbage("count") or nil
     local radialIdentities = {}
     for identity in pairs(host._radials or {}) do
         radialIdentities[#radialIdentities + 1] = identity
     end
     table.sort(radialIdentities)
+    recordRuntimeAllocation(runtimeRow,
+        "interactionRadialRegistryCalls",
+        "interactionRadialRegistryAllocatedKB", radialRegistryBefore)
+    local radialUpdateBefore = runtimeRow and collectgarbage("count") or nil
     for _, identity in ipairs(radialIdentities) do
         local dial = host._radials[identity]
         local captured = session and session.claimed == "radial-dial"
@@ -1066,6 +1121,9 @@ function interaction.update(host, dt)
             refreshRadial(host, dial.node, "settle")
         end
     end
+    recordRuntimeAllocation(runtimeRow,
+        "interactionRadialUpdateCalls", "interactionRadialUpdateAllocatedKB",
+        radialUpdateBefore)
 end
 
 function interaction.wheelMoved(host, dx, dy)
