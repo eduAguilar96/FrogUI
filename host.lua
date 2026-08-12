@@ -4177,8 +4177,9 @@ local function incrementMap(map, name, amount)
 end
 
 -- Marks committed geometry stale and records one bounded single-use routing
--- batch on every Host. Only Motion retains exact instances in ordinary runtime;
--- diagnostic category maps remain opt-in observations.
+-- batch on every Host. Scroll changes arranged ref geometry; Motion changes
+-- only presentation, while RadialDial moves contractually ref-free option
+-- descendants around a root whose own arranged rectangle stays fixed.
 function host:_invalidateTransform(node, family, detail, recipes)
     if not TRANSFORM_FAMILIES[family] then
         error("unknown FrogUI transform invalidation family "
@@ -4189,7 +4190,7 @@ function host:_invalidateTransform(node, family, detail, recipes)
             .. tostring(detail), 0)
     end
     assert(node, "FrogUI transform invalidation requires its changed node")
-    if family ~= "Motion" then
+    if family ~= "Motion" and family ~= "RadialDial" then
         self._arrangedRefRevision = self._arrangedRefRevision + 1
     end
     local motionInstance

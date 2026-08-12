@@ -1836,9 +1836,20 @@ owns the complete 18.542/27.884 KB per quiet/rebuilt frame. Its immediate
 refresh spends 14.750 KB/frame republishing the complete Host ref surface,
 2.633/4.883 arranging the dial, and 0.987/8.080 updating transforms. Session,
 Scroll update, and invalidation allocate zero; the two registry lists together
-cost 0.172 KB/frame. The next implementation is therefore a bounded subtree
-ref publication, preserving exact refs inside the moving dial without walking
-or copying unrelated Battle refs.
+cost 0.172 KB/frame. RadialDial's enforced contract makes option descendants
+static and ref-free; its root rectangle does not move. The next implementation
+therefore removes this false ref invalidation instead of adding a subtree-ref
+capability the primitive currently rejects.
+
+The source-exact B4p.58 manifest is
+`build/frogui/battle-performance-20260812T073952Z-16027`. RadialDial orbit no
+longer republishes refs or dirties the arranged-ref revision: option descendants
+are still enforced static/ref-free, and an explicit root-ref contract proves
+the fixed dial rectangle remains exact through settling. Late quiet/rebuilt
+interaction fell from 18.542/27.884 to 3.792/13.134 KB/frame; both immediate
+and end-of-update ref work are now zero/skip paths. Complete late FrogUI
+allocation fell from 545.739 to 531.030 KB/frame (2.70%). Arrangement and
+transform now explain the remaining active dial cost.
 
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in

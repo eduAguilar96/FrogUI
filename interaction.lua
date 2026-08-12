@@ -186,8 +186,10 @@ local function refreshRadial(host, node, detail)
     recordRuntimeAllocation(row,
         "interactionRadialTransformCalls",
         "interactionRadialTransformAllocatedKB", transformBefore)
+    -- RadialDial option descendants are contractually static and ref-free.
+    -- The dial root may own a ref, but its arranged rectangle does not move
+    -- when options orbit, so its already-published rectangle remains exact.
     local refsBefore = row and collectgarbage("count") or nil
-    host:_refreshCommittedRefs("interaction", transform)
     recordRuntimeAllocation(row,
         "interactionRadialRefsCalls",
         "interactionRadialRefsAllocatedKB", refsBefore)
