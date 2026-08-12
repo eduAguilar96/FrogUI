@@ -1851,6 +1851,16 @@ and end-of-update ref work are now zero/skip paths. Complete late FrogUI
 allocation fell from 545.739 to 531.030 KB/frame (2.70%). Arrangement and
 transform now explain the remaining active dial cost.
 
+The source-exact B4p.59 run is
+`build/frogui/battle-performance-20260812T074401Z-17634`. Full candidate layout
+still measures every option, validates circular containment, and publishes the
+controlled-change geometry signature. Retained drag/settle motion reuses those
+committed immutable sizes and track radius, repositioning only the upright
+static option subtrees. Late quiet/rebuilt arrangement fell from 2.633/4.883
+to 1.125/3.375 KB/frame; complete late allocation fell from 531.030 to
+529.502 KB/frame. Resize, rerender, failed candidates, input, and inspection
+remain on their existing exact paths.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.

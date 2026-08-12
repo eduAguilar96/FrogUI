@@ -96,6 +96,7 @@ local function copyRadial(instance)
         reducedMotion = instance.reducedMotion,
         trackRadius = instance.trackRadius,
         geometrySignature = instance.geometrySignature,
+        optionSizes = instance.optionSizes,
         pendingCommit = instance.pendingCommit and {
             value = instance.pendingCommit.value,
             restartBounce = instance.pendingCommit.restartBounce,
@@ -172,7 +173,7 @@ local function refreshRadial(host, node, detail)
     local row = runtimeAllocationRow(host)
     local refreshBefore = row and collectgarbage("count") or nil
     local arrangeBefore = row and collectgarbage("count") or nil
-    require("src.frogui.layout").arrangeRadialDial(node, host)
+    require("src.frogui.layout").orbitRadialDial(node, host)
     recordRuntimeAllocation(row,
         "interactionRadialArrangeCalls",
         "interactionRadialArrangeAllocatedKB", arrangeBefore)

@@ -685,13 +685,29 @@ local function measure(node, maxWidth, maxHeight, host, session)
     return node.layout.measuredWidth, node.layout.measuredHeight
 end
 
--- Places every keyed dial option around the Host-owned visual angle. Children
--- move along the track but keep their own upright paint orientation.
-local function arrangeRadialDial(node, host, session)
-    local allocationProbe = sessionProbe(session)
+-- Places already-measured keyed dial options around the Host-owned angle.
+-- Children move along the track but keep their own upright paint orientation.
+local function positionRadialOptions(node, host, session, measured, trackRadius)
     local dial = assert(node._radialDial, "unprepared Frog.RadialDial")
     local centerX = node.layout.contentX + node.layout.contentWidth / 2
     local centerY = node.layout.contentY + node.layout.contentHeight / 2
+    local angle = dial.previewAngle or dial.angle
+    local step = math.pi * 2 / #node.children
+    for index, child in ipairs(node.children) do
+        local childAngle = angle + (index - 1) * step - math.pi / 2
+        local size = measured[index]
+        layout.arrange(child,
+            centerX + math.cos(childAngle) * trackRadius - size.width / 2,
+            centerY + math.sin(childAngle) * trackRadius - size.height / 2,
+            size.width, size.height, host, session)
+    end
+end
+
+-- Full candidate layout owns option measurement, containment validation, and
+-- the exact geometry signature used to cancel stale pointer sessions.
+local function arrangeRadialDial(node, host, session)
+    local allocationProbe = sessionProbe(session)
+    local dial = assert(node._radialDial, "unprepared Frog.RadialDial")
     local maximum = math.min(node.layout.width, node.layout.height) / 2
     local before = allocationProbe and collectgarbage("count") or nil
     local measured = {}
@@ -739,27 +755,33 @@ local function arrangeRadialDial(node, host, session)
         geometry[#geometry + 1] = string.format("%.17g", size.height)
     end
     dial.geometrySignature = table.concat(geometry, ":")
+    dial.optionSizes = measured
     if allocationProbe then
         recordAllocation(allocationProbe,
             "pipelineLayoutRadialScratchCreated",
             "pipelineLayoutRadialScratchAllocatedKB", before, 1)
     end
-    local angle = dial.previewAngle or dial.angle
-    local step = math.pi * 2 / #node.children
-    for index, child in ipairs(node.children) do
-        local childAngle = angle + (index - 1) * step - math.pi / 2
-        local size = measured[index]
-        layout.arrange(child,
-            centerX + math.cos(childAngle) * trackRadius - size.width / 2,
-            centerY + math.sin(childAngle) * trackRadius - size.height / 2,
-            size.width, size.height, host, session)
-    end
+    positionRadialOptions(node, host, session, measured, trackRadius)
 end
 
 -- Retained dial motion is outside candidate reconciliation and never receives
 -- a measurement session.
 function layout.arrangeRadialDial(node, host)
     return arrangeRadialDial(node, host, nil)
+end
+
+-- Retained drag/settle motion cannot alter static option measurements or the
+-- candidate-validated track geometry. Reposition only; rerender/resize still
+-- enters the complete arrangement path above.
+function layout.orbitRadialDial(node, host)
+    local dial = assert(node._radialDial, "unprepared Frog.RadialDial")
+    local measured = assert(dial.optionSizes,
+        "RadialDial orbit requires committed option measurements")
+    assert(#measured == #node.children,
+        "RadialDial orbit measurements lost child cardinality")
+    return positionRadialOptions(node, host, nil,
+        measured, assert(dial.trackRadius,
+            "RadialDial orbit requires a committed track radius"))
 end
 
 local function alignedStart(align, start, available, size)
