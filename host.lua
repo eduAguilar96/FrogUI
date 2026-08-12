@@ -200,6 +200,16 @@ local VALIDATION_COLOR_PROPS = {
     "selectedBackground", "selectedBorder",
 }
 
+-- Descriptions and their detached props are framework-owned/read-only after
+-- Element.construct. A Host may therefore remember successful validation for
+-- a retained description. Weak keys keep this cache from extending a
+-- description's semantic lifetime.
+local WEAK_DESCRIPTOR_KEYS = { __mode = "k" }
+
+local function newDescriptorValidationCache()
+    return setmetatable({}, WEAK_DESCRIPTOR_KEYS)
+end
+
 local function shallowCopy(input)
     local output = {}
     for key, value in pairs(input or {}) do output[key] = value end
@@ -2618,6 +2628,7 @@ function host.new(options)
     self._viewport = Viewport.new(viewportOptions)
     self._fontCache = {}
     self._assetCache = {}
+    self._validatedPrimitiveDescriptors = newDescriptorValidationCache()
     Shader.clear(self)
     self._captures = {}
     self._inspectorVisible = options.inspectorActive == true
@@ -3052,6 +3063,9 @@ function host:mount(root)
     assertOperational(self, "mount")
     assert(activeHost == nil,
         "FrogUI permits only one mounted Host")
+    -- A Host may be mounted again after an exact unmount. Revalidate the new
+    -- tree against its current theme, assets, and Host-owned refs.
+    self._validatedPrimitiveDescriptors = newDescriptorValidationCache()
     local feedbackMark = #self._feedbackQueue
     local motionSequence = self._motionStartSequence
     local refSequence = self._nextRefId
@@ -3859,8 +3873,12 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
 
     pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     local primitiveStarted = profiler and profiler:start() or nil
-    validatePrimitive(token.name, descriptor.children, pipelineProbe)
-    validatePrimitiveProps(self, token.name, descriptor.props, pipelineProbe)
+    if not self._validatedPrimitiveDescriptors[descriptor] then
+        validatePrimitive(token.name, descriptor.children, pipelineProbe)
+        validatePrimitiveProps(
+            self, token.name, descriptor.props, pipelineProbe)
+        self._validatedPrimitiveDescriptors[descriptor] = true
+    end
     if (context.previewDepth or 0) > 0 then
         assert(descriptor.props.ref == nil,
             "DragSource preview cannot attach committed refs")
@@ -4910,12 +4928,15 @@ function host:_refreshTheme(theme, assets, root)
     local previousTheme, previousAssets = self.theme, self.assets
     local previousGeneration = self._generation
     local previousFonts, previousAssetCache = self._fontCache, self._assetCache
+    local previousDescriptorValidationCache =
+        self._validatedPrimitiveDescriptors
     local previousShaderCache, previousShaderFailures =
         self._shaderCache, self._shaderFailures
     self.theme = theme
     self.assets = assets
     self._fontCache = {}
     self._assetCache = {}
+    self._validatedPrimitiveDescriptors = newDescriptorValidationCache()
     Shader.clear(self)
     local previousLayoutReuseBlocked = self._layoutReuseBlocked
     self._layoutReuseBlocked = true
@@ -4928,6 +4949,8 @@ function host:_refreshTheme(theme, assets, root)
         if self._generation == previousGeneration then
             self.theme, self.assets = previousTheme, previousAssets
             self._fontCache, self._assetCache = previousFonts, previousAssetCache
+            self._validatedPrimitiveDescriptors =
+                previousDescriptorValidationCache
             self._shaderCache, self._shaderFailures =
                 previousShaderCache, previousShaderFailures
         end

@@ -142,8 +142,8 @@ local Interaction = require("src.frogui.interaction")
 
 ---@class FrogUIElementDescription
 ---@field __frogDescriptor true
----@field props table
----@field children FrogUIElementDescription[]
+---@field props table Framework-owned read-only props detached at construction.
+---@field children FrogUIElementDescription[] Framework-owned read-only children.
 
 ---@class FrogUICanvasRect
 ---@field x 0 Canvas-local left edge; drawing always begins at zero.

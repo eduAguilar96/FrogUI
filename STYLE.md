@@ -147,6 +147,10 @@ projections, companion style files, or geometry files.
 - Keep child paint/layout order visible in the Lua table.
 - Use local names for precomputed descriptions only when they remove real
   noise or are reused.
+- Treat constructed descriptions, their props, and committed node props as
+  framework-owned read-only values. Publish changing presentation through an
+  actor/action, event reaction, viewport change, or explicit root prop; never
+  mutate a retained description to force a later rebuild.
 - Prefer a readable `if` over a dense `and/or` chain when the condition is not
   immediately obvious.
 - Conditional children may use `condition and Child { ... }`; FrogUI ignores
