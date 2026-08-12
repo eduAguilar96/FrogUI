@@ -67,25 +67,6 @@ local function properties(input, label)
     return out
 end
 
-local function copyRecipe(value)
-    local out = {}
-    for key, nested in pairs(value) do
-        if key == "clock" then
-            out[key] = nested
-        elseif type(nested) == "table" then
-            local copy = {}
-            for childKey, childValue in pairs(nested) do
-                copy[childKey] = type(childValue) == "table"
-                    and copyRecipe(childValue) or childValue
-            end
-            out[key] = copy
-        else
-            out[key] = nested
-        end
-    end
-    return out
-end
-
 local function onlyFields(input, allowed, label)
     for key in pairs(input) do
         assert(allowed[key], label .. " has unknown field " .. tostring(key))
@@ -167,7 +148,7 @@ local function recipeArray(input, label)
     local out = {}
     for index, child in ipairs(input) do
         assert(juice.isRecipe(child), label .. " item " .. index .. " is not a recipe")
-        out[index] = copyRecipe(child)
+        out[index] = child
     end
     assert(#out > 0, label .. " needs at least one recipe")
     for key in pairs(input) do
@@ -197,14 +178,17 @@ function juice.loop(child, count)
                 and count <= 10000,
             "Frog.loop count must be a positive integer at most 10000")
     end
-    return recipe("loop", { recipe = copyRecipe(child), count = count })
+    return recipe("loop", { recipe = child, count = count })
 end
 
 -- Selects an explicit deterministic clock instead of the Host raw clock.
 function juice.withClock(value, child)
     assert(Clock.isClock(value), "Frog.withClock expects a Frog.clock")
     assert(juice.isRecipe(child), "Frog.withClock expects a recipe")
-    return recipe("with_clock", { clock = value, recipe = copyRecipe(child) })
+    return recipe("with_clock", {
+        clock = value,
+        recipe = child,
+    })
 end
 
 -- Creates the reaction instruction consumed by `Frog.on(...).do_`.
@@ -232,11 +216,12 @@ function juice.properties()
     return out
 end
 
--- Takes the defensive recipe snapshot retained by a mounted element. This is
--- internal framework vocabulary; application code uses the constructors.
+-- Returns the constructor-owned immutable value retained by a mounted element.
+-- Constructors detach mutable spec/array inputs; application code must create
+-- a new recipe rather than mutate a returned recipe value.
 function juice.snapshot(value)
     assert(juice.isRecipe(value), "FrogUI expected a juice recipe")
-    return copyRecipe(value)
+    return value
 end
 
 return juice

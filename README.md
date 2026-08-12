@@ -1228,6 +1228,15 @@ restart it. Recipes with the same name replace each other. Simultaneous names
 compose in stable start order: shake contributes x, y, and rotation additively;
 the later recipe owns a shared non-additive property.
 
+Recipe constructors detach mutable property tables and recipe arrays once.
+The returned recipe is an immutable declarative value by authoring contract:
+store it in a clearly named local or compose it inline, but never edit it after
+construction. Create a new recipe to express a change. FrogUI retains that
+validated value directly; `{ recipe, key, onComplete }` remains a fresh
+candidate-owned binding, so keys and callbacks are not shared runtime state.
+Like render purity, this is a lightweight Lua contract rather than a per-frame
+deep comparison or proxy system.
+
 A binding may add `onComplete = function() ... end` for one terminal follow-up
 that inherently waits for the recipe, such as leaving a recovery screen after
 its heal beat. FrogUI spends the completion before invoking it, after the Host
