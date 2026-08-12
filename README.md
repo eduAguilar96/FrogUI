@@ -1700,7 +1700,7 @@ build, incompatible replacement, and custom-painter isolation.
 
 #### Current measured checkpoint
 
-B4p.49 retains B4p.46's conservative incremental-layout implementation and
+B4p.50 retains B4p.46's conservative incremental-layout implementation and
 adds commit-safe continuity for the default Painter's callback-free ephemeral
 scratch. Clip and shine callbacks capture a resolved node, so they live in
 candidate-owned storage and always rebuild. Components declare no cache,
@@ -1727,6 +1727,18 @@ published 3,816-row artifact. Its publication probe transferred scratch for
 Timing is `1.843/4.967 ms` mean/p95 early and `3.346/10.078 ms` late, with zero
 FrogUI over-budget frames; timing is machine-variable and B4p.49 claims only
 the allocation recovery.
+
+The attribution-only B4p.50 manifest is
+`build/frogui/battle-performance-20260812T062207Z-86022`. Its same-window
+expansion partition names 1,414.996 of 1,487.379 KB/rebuild early and 690.878
+of 714.809 KB/rebuild late. The late total consists of 340.144 KB already owned
+by semantic/validation/reconciliation phases, 285.869 KB of readable primitive
+materialization, 49.357 KB of exact physical/logical paths, and 15.509 KB of
+child publication; only 23.930 KB remains. The independent structure and
+identity controls agree exactly. Standard allocation remains B4p.49-flat at
+160.062 KB/frame early and 604.155 KB/frame late. This evidence rejects a
+mutable retained-node/subtree cache; the flat candidate tree and rollback
+boundary remain authoritative.
 
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in

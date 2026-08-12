@@ -1038,9 +1038,17 @@ local function childPath(parentPath, descriptor, index, probe, suffix)
         or prefix .. "index:" .. tostring(index)
     if probe then
         local after = collectgarbage("count")
-        probe.physicalCalls = probe.physicalCalls + 1
-        probe.physicalAllocatedKB = probe.physicalAllocatedKB + after - before
-        probe.physicalResultBytes = probe.physicalResultBytes + #result
+        if probe.mode == "pipeline" then
+            probe.pipelinePhysicalPathCalls =
+                probe.pipelinePhysicalPathCalls + 1
+            probe.pipelinePhysicalPathAllocatedKB =
+                probe.pipelinePhysicalPathAllocatedKB + after - before
+        else
+            probe.physicalCalls = probe.physicalCalls + 1
+            probe.physicalAllocatedKB =
+                probe.physicalAllocatedKB + after - before
+            probe.physicalResultBytes = probe.physicalResultBytes + #result
+        end
     end
     return result
 end
@@ -1061,9 +1069,17 @@ local function logicalChildPath(parentPath, descriptor, index, probe, suffix)
         or prefix .. "index:" .. tostring(index)
     if probe then
         local after = collectgarbage("count")
-        probe.logicalCalls = probe.logicalCalls + 1
-        probe.logicalAllocatedKB = probe.logicalAllocatedKB + after - before
-        probe.logicalResultBytes = probe.logicalResultBytes + #result
+        if probe.mode == "pipeline" then
+            probe.pipelineLogicalPathCalls =
+                probe.pipelineLogicalPathCalls + 1
+            probe.pipelineLogicalPathAllocatedKB =
+                probe.pipelineLogicalPathAllocatedKB + after - before
+        else
+            probe.logicalCalls = probe.logicalCalls + 1
+            probe.logicalAllocatedKB =
+                probe.logicalAllocatedKB + after - before
+            probe.logicalResultBytes = probe.logicalResultBytes + #result
+        end
     end
     return result
 end
@@ -1078,10 +1094,21 @@ local function logicalOutputPath(parentPath, descriptor, probe)
     local result = alias and parentPath
         or logicalChildPath(parentPath, descriptor, 1, nil, "/output")
     local after = collectgarbage("count")
-    probe.logicalCalls = probe.logicalCalls + 1
-    probe.logicalAllocatedKB = probe.logicalAllocatedKB + after - before
-    probe.logicalResultBytes = probe.logicalResultBytes + #result
-    if alias then probe.logicalAliasCalls = probe.logicalAliasCalls + 1 end
+    if probe.mode == "pipeline" then
+        probe.pipelineLogicalPathCalls =
+            probe.pipelineLogicalPathCalls + 1
+        probe.pipelineLogicalPathAllocatedKB =
+            probe.pipelineLogicalPathAllocatedKB + after - before
+        if alias then
+            probe.pipelineLogicalPathAliases =
+                probe.pipelineLogicalPathAliases + 1
+        end
+    else
+        probe.logicalCalls = probe.logicalCalls + 1
+        probe.logicalAllocatedKB = probe.logicalAllocatedKB + after - before
+        probe.logicalResultBytes = probe.logicalResultBytes + #result
+        if alias then probe.logicalAliasCalls = probe.logicalAliasCalls + 1 end
+    end
     return result
 end
 
@@ -1550,6 +1577,15 @@ local function resetAllocationProbe(probe)
     probe.pipelineContextAllocatedKB = 0
     probe.pipelineExpansionCalls = 0
     probe.pipelineExpansionAllocatedKB = 0
+    probe.pipelinePhysicalPathCalls = 0
+    probe.pipelinePhysicalPathAllocatedKB = 0
+    probe.pipelineLogicalPathCalls = 0
+    probe.pipelineLogicalPathAllocatedKB = 0
+    probe.pipelineLogicalPathAliases = 0
+    probe.pipelinePrimitiveMaterializationCalls = 0
+    probe.pipelinePrimitiveMaterializationAllocatedKB = 0
+    probe.pipelinePrimitiveChildAppendCalls = 0
+    probe.pipelinePrimitiveChildAppendAllocatedKB = 0
     probe.pipelineOwnerRenderCalls = 0
     probe.pipelineOwnerRenderAllocatedKB = 0
     probe.pipelinePreparationCalls = 0
@@ -1926,6 +1962,23 @@ function host:_readPipelineAllocationProbe()
         probe.pipelineVisualBoundsAllocatedKB,
         probe.pipelineVisualContentBoundsCreated,
         probe.pipelineVisualContentBoundsAllocatedKB
+end
+
+-- Returns disjoint path and primitive-materialization sites inside semantic
+-- expansion without expanding the historical pipeline tuple.
+function host:_readExpansionAllocationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no expansion allocation probe to read")
+    return probe.pipelinePhysicalPathCalls,
+        probe.pipelinePhysicalPathAllocatedKB,
+        probe.pipelineLogicalPathCalls,
+        probe.pipelineLogicalPathAllocatedKB,
+        probe.pipelineLogicalPathAliases,
+        probe.pipelinePrimitiveMaterializationCalls,
+        probe.pipelinePrimitiveMaterializationAllocatedKB,
+        probe.pipelinePrimitiveChildAppendCalls,
+        probe.pipelinePrimitiveChildAppendAllocatedKB
 end
 
 -- Returns the disjoint primitive-validation phases plus nested scratch sites.
@@ -3172,7 +3225,7 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
         return nil
     end
     assert(Element.isDescriptor(rendered), token.name .. " must return one FrogUI element or nil")
-    local identityProbe = context.identityAllocationProbe
+    local identityProbe = context.identityAllocationProbe or pipelineProbe
     local outputPath = childPath(path, rendered, 1, identityProbe, "/output")
     if profiler then
         profiler:finish("semanticBookkeeping", bookkeepingStarted)
@@ -3348,7 +3401,7 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
         return nil
     end
     assert(Element.isDescriptor(rendered), token.name .. " must return one FrogUI element or nil")
-    local identityProbe = context.identityAllocationProbe
+    local identityProbe = context.identityAllocationProbe or pipelineProbe
     local outputPath = childPath(path, rendered, 1, identityProbe, "/output")
     if profiler then
         profiler:finish("semanticBookkeeping", bookkeepingStarted)
@@ -3489,7 +3542,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         end
         assert(Element.isDescriptor(rendered),
             token.name .. " must return one FrogUI element or nil")
-        local identityProbe = context.identityAllocationProbe
+        local identityProbe = context.identityAllocationProbe or pipelineProbe
         local outputPath = childPath(path, rendered, 1,
             identityProbe, "/output")
         if profiler then
@@ -3579,6 +3632,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             pipelineBefore)
     end
     local materializationStarted = profiler and profiler:start() or nil
+    local materializationBefore = pipelineProbe
+        and collectgarbage("count") or nil
     local structureProbe = context.structureAllocationProbe
     local nodeProbe = structureProbe and structureProbe.materializationActive
         and structureProbe or nil
@@ -3658,6 +3713,12 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         structureProbe.primitiveNodeAllocatedKB =
             structureProbe.primitiveNodeAllocatedKB
                 + structureAfter - structureBefore
+    end
+    if pipelineProbe then
+        recordPipelineAllocation(pipelineProbe,
+            "pipelinePrimitiveMaterializationCalls",
+            "pipelinePrimitiveMaterializationAllocatedKB",
+            materializationBefore)
     end
     if profiler then
         profiler:finish("primitiveMaterialization", materializationStarted)
@@ -3751,7 +3812,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             "pipelineReconciliationAllocatedKB", pipelineBefore)
     end
     local childrenPath = descendantPath or path
-    local identityProbe = context.identityAllocationProbe
+    local identityProbe = context.identityAllocationProbe or pipelineProbe
     for index, child in ipairs(descriptor.children) do
         local resolved = self:_resolve(child, owner,
             childPath(childrenPath, child, index, identityProbe),
@@ -3759,6 +3820,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             logicalChildPath(logicalPath, child, index, identityProbe))
         if resolved then
             local appendBefore = structureProbe
+                and collectgarbage("count") or nil
+            local pipelineAppendBefore = pipelineProbe
                 and collectgarbage("count") or nil
             node.children[#node.children + 1] = resolved
             if structureProbe then
@@ -3768,6 +3831,12 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 structureProbe.primitiveChildAllocatedKB =
                     structureProbe.primitiveChildAllocatedKB
                         + appendAfter - appendBefore
+            end
+            if pipelineProbe then
+                recordPipelineAllocation(pipelineProbe,
+                    "pipelinePrimitiveChildAppendCalls",
+                    "pipelinePrimitiveChildAppendAllocatedKB",
+                    pipelineAppendBefore)
             end
         end
     end
@@ -4290,7 +4359,7 @@ function host:_build(root)
         local expansionStarted = self._diagnostics:start()
         local pipelineBefore = pipelineProbe
             and collectgarbage("count") or nil
-        local identityProbe = context.identityAllocationProbe
+        local identityProbe = context.identityAllocationProbe or pipelineProbe
         local rootPath = childPath("root", root, 1, identityProbe)
         local rootLogicalPath = logicalChildPath(
             "logical-root", root, 1, identityProbe)
