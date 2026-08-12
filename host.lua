@@ -1558,6 +1558,24 @@ local function resetAllocationProbe(probe)
     probe.pipelineMotionFirstMountCalls = 0
     probe.pipelineMotionCloneCalls = 0
     probe.pipelineMotionCloneAllocatedKB = 0
+    probe.pipelineMotionCloneInitialCalls = 0
+    probe.pipelineMotionCloneInitialAllocatedKB = 0
+    probe.pipelineMotionCloneShellCalls = 0
+    probe.pipelineMotionCloneShellAllocatedKB = 0
+    probe.pipelineMotionCloneValueCalls = 0
+    probe.pipelineMotionCloneValueAllocatedKB = 0
+    probe.pipelineMotionCloneCollectionCalls = 0
+    probe.pipelineMotionCloneCollectionAllocatedKB = 0
+    probe.pipelineMotionCloneRecipeCalls = 0
+    probe.pipelineMotionCloneRecipeAllocatedKB = 0
+    probe.pipelineMotionCloneIndexCalls = 0
+    probe.pipelineMotionCloneIndexAllocatedKB = 0
+    probe.pipelineMotionCloneRunnerCalls = 0
+    probe.pipelineMotionCloneRunnerAllocatedKB = 0
+    probe.pipelineMotionCloneCompletionCalls = 0
+    probe.pipelineMotionCloneCompletionAllocatedKB = 0
+    probe.pipelineMotionCloneTargetCalls = 0
+    probe.pipelineMotionCloneTargetAllocatedKB = 0
     probe.pipelineMotionSetupCalls = 0
     probe.pipelineMotionSetupAllocatedKB = 0
     probe.pipelineMotionPresentationCalls = 0
@@ -1899,6 +1917,24 @@ function host:_readReconciliationAllocationProbe()
         probe.pipelineMotionFirstMountCalls,
         probe.pipelineMotionCloneCalls,
         probe.pipelineMotionCloneAllocatedKB,
+        probe.pipelineMotionCloneInitialCalls,
+        probe.pipelineMotionCloneInitialAllocatedKB,
+        probe.pipelineMotionCloneShellCalls,
+        probe.pipelineMotionCloneShellAllocatedKB,
+        probe.pipelineMotionCloneValueCalls,
+        probe.pipelineMotionCloneValueAllocatedKB,
+        probe.pipelineMotionCloneCollectionCalls,
+        probe.pipelineMotionCloneCollectionAllocatedKB,
+        probe.pipelineMotionCloneRecipeCalls,
+        probe.pipelineMotionCloneRecipeAllocatedKB,
+        probe.pipelineMotionCloneIndexCalls,
+        probe.pipelineMotionCloneIndexAllocatedKB,
+        probe.pipelineMotionCloneRunnerCalls,
+        probe.pipelineMotionCloneRunnerAllocatedKB,
+        probe.pipelineMotionCloneCompletionCalls,
+        probe.pipelineMotionCloneCompletionAllocatedKB,
+        probe.pipelineMotionCloneTargetCalls,
+        probe.pipelineMotionCloneTargetAllocatedKB,
         probe.pipelineMotionSetupCalls,
         probe.pipelineMotionSetupAllocatedKB,
         probe.pipelineMotionPresentationCalls,

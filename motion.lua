@@ -373,6 +373,15 @@ local function unwrap(recipe, rawClock)
     return recipe, rawClock
 end
 
+-- Records one stopped-collector interval in the private Battle probe.
+local function recordReconciliationAllocation(probe, callsField, kbField,
+        before)
+    if not probe then return end
+    probe[callsField] = probe[callsField] + 1
+    probe[kbField] = probe[kbField]
+        + collectgarbage("count") - before
+end
+
 local function cloneRunner(runner)
     return {
         recipe = runner.recipe,
@@ -386,7 +395,8 @@ local function cloneRunner(runner)
     }
 end
 
-local function cloneInstance(old)
+local function cloneInstance(old, allocationProbe)
+    local shellBefore = allocationProbe and collectgarbage("count") or nil
     local instance = {
         identity = old.identity,
         order = old.order,
@@ -396,17 +406,30 @@ local function cloneInstance(old)
         primitiveType = old.primitiveType,
         eventOrder = old.eventOrder,
         reducedMotion = old.reducedMotion,
-        values = copyValues(old.values),
-        settled = copyValues(old.settled),
-        recipes = {},
-        bindingKeys = {},
-        active = {},
-        motionTargets = {},
         node = old.node,
         lifetime = old.lifetime,
-        pendingCompletions = {},
-        latestStarts = {},
     }
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionCloneShellCalls",
+        "pipelineMotionCloneShellAllocatedKB", shellBefore)
+    local valueBefore = allocationProbe and collectgarbage("count") or nil
+    instance.values = copyValues(old.values)
+    instance.settled = copyValues(old.settled)
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionCloneValueCalls",
+        "pipelineMotionCloneValueAllocatedKB", valueBefore)
+    local collectionBefore = allocationProbe
+        and collectgarbage("count") or nil
+    instance.recipes = {}
+    instance.bindingKeys = {}
+    instance.active = {}
+    instance.motionTargets = {}
+    instance.pendingCompletions = {}
+    instance.latestStarts = {}
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionCloneCollectionCalls",
+        "pipelineMotionCloneCollectionAllocatedKB", collectionBefore)
+    local recipeBefore = allocationProbe and collectgarbage("count") or nil
     for name, binding in pairs(old.recipes) do
         instance.recipes[name] = {
             recipe = binding.recipe,
@@ -414,30 +437,45 @@ local function cloneInstance(old)
             onComplete = binding.onComplete,
         }
     end
-    for name, key in pairs(old.bindingKeys) do instance.bindingKeys[name] = key end
-    for name, runner in pairs(old.active) do instance.active[name] = cloneRunner(runner) end
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionCloneRecipeCalls",
+        "pipelineMotionCloneRecipeAllocatedKB", recipeBefore)
+    local indexBefore = allocationProbe and collectgarbage("count") or nil
+    for name, key in pairs(old.bindingKeys) do
+        instance.bindingKeys[name] = key
+    end
+    for name, order in pairs(old.latestStarts or {}) do
+        instance.latestStarts[name] = order
+    end
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionCloneIndexCalls",
+        "pipelineMotionCloneIndexAllocatedKB", indexBefore)
+    local runnerBefore = allocationProbe and collectgarbage("count") or nil
+    for name, runner in pairs(old.active) do
+        instance.active[name] = cloneRunner(runner)
+    end
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionCloneRunnerCalls",
+        "pipelineMotionCloneRunnerAllocatedKB", runnerBefore)
+    local completionBefore = allocationProbe
+        and collectgarbage("count") or nil
     for name, pending in pairs(old.pendingCompletions or {}) do
         instance.pendingCompletions[name] = {
             key = pending.key,
             order = pending.order,
         }
     end
-    for name, order in pairs(old.latestStarts or {}) do
-        instance.latestStarts[name] = order
-    end
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionCloneCompletionCalls",
+        "pipelineMotionCloneCompletionAllocatedKB", completionBefore)
+    local targetBefore = allocationProbe and collectgarbage("count") or nil
     for name, value in pairs(old.motionTargets) do
         instance.motionTargets[name] = name == "tint" and copyColor(value) or value
     end
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionCloneTargetCalls",
+        "pipelineMotionCloneTargetAllocatedKB", targetBefore)
     return instance
-end
-
--- Records one stopped-collector interval in the private Battle probe.
-local function recordReconciliationAllocation(probe, callsField, kbField,
-        before)
-    if not probe then return end
-    probe[callsField] = probe[callsField] + 1
-    probe[kbField] = probe[kbField]
-        + collectgarbage("count") - before
 end
 
 -- Counts retained Motion collections without allocating diagnostic tables.
@@ -644,8 +682,10 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host,
     local cloneBefore = allocationProbe and collectgarbage("count") or nil
     local instance
     if compatible then
-        instance = cloneInstance(old)
+        instance = cloneInstance(old, allocationProbe)
     else
+        local initialBefore = allocationProbe
+            and collectgarbage("count") or nil
         instance = {
             identity = logicalIdentity,
             values = copyValues(),
@@ -653,6 +693,9 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host,
             recipes = {}, bindingKeys = {}, active = {}, motionTargets = {},
             lifetime = {}, pendingCompletions = {}, latestStarts = {},
         }
+        recordReconciliationAllocation(allocationProbe,
+            "pipelineMotionCloneInitialCalls",
+            "pipelineMotionCloneInitialAllocatedKB", initialBefore)
     end
     recordReconciliationAllocation(allocationProbe,
         "pipelineMotionCloneCalls", "pipelineMotionCloneAllocatedKB",
