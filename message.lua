@@ -166,7 +166,12 @@ end
 
 function message.snapshot(record, expectedKind)
     local _, token = message.validate(record, expectedKind)
-    return token(snapshotPlain(record, token.name .. " payload"))
+    local output = snapshotPlain(record, token.name .. " payload")
+    -- The validated copy is already detached plain data. Mark it directly
+    -- instead of sending it back through the public constructor, which would
+    -- copy and validate the same top-level payload a second time.
+    recordTokens[output] = token
+    return output, token
 end
 
 message.snapshotPlain = snapshotPlain

@@ -1924,6 +1924,15 @@ Complete late rebuilt delivery fell from 9.012 to 5.354 KB and late all-frame
 allocation fell from 517.686 to 516.264 KB/frame. No diagnostic field or
 recipient was removed.
 
+The source-exact B4p.67 run is
+`build/frogui/battle-performance-20260812T083903Z-36224`. A Host queue boundary
+now creates one recursively detached, validated canonical record and retains
+its already-known typed token. It no longer feeds that record through the
+public constructor for a second top-level copy/validation or rediscovers its
+token during delivery. Accepted reducers remain independently detached.
+Complete late rebuilt delivery fell from 5.354 to 3.751 KB and late all-frame
+allocation fell from 516.264 to 515.542 KB/frame.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.

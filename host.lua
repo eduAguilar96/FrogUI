@@ -5024,10 +5024,12 @@ function host:_runDropCallback(callback, ...)
 end
 
 function host:_enqueueAction(target, record, origin)
-    record = Message.snapshot(record, "action")
+    local token
+    record, token = Message.snapshot(record, "action")
     local function enqueue()
         self:_enqueue({
             kind = "action",
+            token = token,
             target = target,
             record = record,
             origin = origin or self._currentOrigin or "Frog.send",
@@ -5041,10 +5043,12 @@ function host:_enqueueAction(target, record, origin)
 end
 
 function host:_enqueueEvent(record, origin)
-    record = Message.snapshot(record, "event")
+    local token
+    record, token = Message.snapshot(record, "event")
     local function enqueue()
         self:_enqueue({
             kind = "event",
+            token = token,
             record = record,
             origin = origin or self._currentOrigin or "Frog.emit",
             originSource = self._currentOriginSource,
@@ -5194,9 +5198,10 @@ function host:_emitTransitionFact(template, props, origin, originSource)
     local token = Message.token(template)
     assert(token and token.messageKind == "event", "Frog.go emit must be a typed event")
     local resolved = Message.resolve(template, props, "emit")
-    local record = Message.snapshot(token(resolved), "event")
+    local record, recordToken = Message.snapshot(token(resolved), "event")
     self._messageQueue[#self._messageQueue + 1] = {
         kind = "event",
+        token = recordToken,
         record = record,
         origin = origin,
         originSource = originSource,
@@ -5262,7 +5267,9 @@ function host:_applyTransition(instance, spec, record, origin)
 end
 
 function host:_processAction(entry, trackActorChanges)
-    local record, token = Message.validate(entry.record, "action")
+    local record, token = entry.record, entry.token
+    assert(token and token.messageKind == "action",
+        "queued FrogUI action lost its validated token")
     local instance = self:_resolveTarget(entry.target)
     assert(instance.token.definition.actions[token] ~= nil,
         "action " .. token.name .. " does not belong to actor " .. instance.token.name)
@@ -5298,7 +5305,9 @@ function host:_processEvent(entry, trackActorChanges)
     local frameProbe = allocationProbe and allocationProbe.active
         and allocationProbe.mode == "pipeline" and allocationProbe or nil
     local validationBefore = frameProbe and collectgarbage("count") or nil
-    local record, token = Message.validate(entry.record, "event")
+    local record, token = entry.record, entry.token
+    assert(token and token.messageKind == "event",
+        "queued FrogUI event lost its validated token")
     recordPendingFrameAllocation(frameProbe,
         "pendingFrameMessageValidationCalls",
         "pendingFrameMessageValidationAllocatedKB", validationBefore)
