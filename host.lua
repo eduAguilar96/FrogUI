@@ -3458,16 +3458,24 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             or descriptor.props.reactions then
         local started = profiler and profiler:start() or nil
         local detailBefore = pipelineProbe and collectgarbage("count") or nil
-        local instance = Motion.reconcile(self._motions[logicalPath], node,
-            node.props, logicalPath, context.nextReceiverOrder, self,
-            pipelineProbe)
+        local retained = Motion.usesRetainedRuntime(node, node.props)
+        local instance
+        if retained then
+            instance = Motion.reconcile(self._motions[logicalPath], node,
+                node.props, logicalPath, context.nextReceiverOrder, self,
+                pipelineProbe)
+        else
+            Motion.reconcileStatic(node, node.props)
+        end
         if pipelineProbe then
             recordPipelineAllocation(pipelineProbe,
                 "pipelineMotionReconciliationCalls",
                 "pipelineMotionReconciliationAllocatedKB", detailBefore)
         end
-        context.nextReceiverOrder = context.nextReceiverOrder + 1
-        context.motions[logicalPath] = instance
+        if retained then
+            context.nextReceiverOrder = context.nextReceiverOrder + 1
+            context.motions[logicalPath] = instance
+        end
         if profiler then
             profiler:increment("motionReconciliations")
             profiler:finish("motionReconciliation", started)

@@ -10,6 +10,12 @@ local composeActive
 local DEFAULT_VALUES = {
     x = 0, y = 0, rotation = 0, scale = 1, opacity = 1,
 }
+local MOTION_TARGET_NAMES = {
+    "x", "y", "rotation", "scale", "opacity", "tint",
+}
+local STATIC_NUMERIC_TARGET_NAMES = {
+    "x", "y", "rotation", "scale", "opacity",
+}
 
 local SPRINGS = {
     gentle = { frequency = 8, damping = 1 },
@@ -22,6 +28,22 @@ local SPRINGS = {
 -- animated targets.
 local function ownsMotionTargets(node)
     return node.type == "Motion" or node.type == "PopupText"
+end
+
+-- A plain Motion wrapper can describe a fixed transform without owning an
+-- animation process. Springs, recipes, and reactions still need retained
+-- runtime state; direct scalar/color targets do not.
+function motion.usesRetainedRuntime(node, props)
+    if node.type ~= "Motion" then return true end
+    if props.juice and next(props.juice)
+            or props.reactions and next(props.reactions) then
+        return true
+    end
+    for _, name in ipairs(MOTION_TARGET_NAMES) do
+        local value = props[name]
+        if type(value) == "table" and value.target ~= nil then return true end
+    end
+    return false
 end
 
 local function finite(value)
@@ -45,6 +67,37 @@ local function copyValues(values)
     end
     out.tint = copyColor(values and values.tint)
     return out
+end
+
+-- Publishes one fixed Motion transform without manufacturing retained recipe,
+-- runner, target, completion, or lifetime tables. The candidate node owns any
+-- non-default presentation record, so failed renders cannot touch live state.
+function motion.reconcileStatic(node, props)
+    assert(node.type == "Motion" and not motion.usesRetainedRuntime(node, props),
+        "static Motion reconciliation requires a fixed Motion description")
+    local presentation
+    for _, name in ipairs(STATIC_NUMERIC_TARGET_NAMES) do
+        local value = props[name]
+        if value ~= nil then
+            assert(finite(value),
+                "Frog.Motion " .. name .. " target must be finite")
+            assert(name ~= "opacity" or value >= 0 and value <= 1,
+                "Frog.Motion opacity target must be between 0 and 1")
+            assert(name ~= "scale" or value >= 0,
+                "Frog.Motion scale target must be non-negative")
+            if value ~= DEFAULT_VALUES[name] then
+                presentation = presentation or {}
+                presentation[name] = value
+            end
+        end
+    end
+    if props.tint ~= nil then
+        assert(Juice.isColor(props.tint),
+            "Frog.Motion tint target must be a numeric color")
+        presentation = presentation or {}
+        presentation.tint = copyColor(props.tint)
+    end
+    node.presentation = presentation
 end
 
 local function sameValue(left, right)
@@ -518,7 +571,7 @@ end
 
 local function reconcileMotionTargets(instance, props, host, firstMount)
     local changedAny = false
-    for _, name in ipairs({ "x", "y", "rotation", "scale", "opacity", "tint" }) do
+    for _, name in ipairs(MOTION_TARGET_NAMES) do
         local spec = props[name]
         if spec == nil then
             if instance.motionTargets[name] ~= nil then

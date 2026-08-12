@@ -1168,6 +1168,13 @@ Frog.Motion {
 }
 ```
 
+A Motion with only immediate scalar/color values is fixed presentation. It
+does not mount an animation process, even when `juice = {}` or
+`reactions = {}` is present. Adding a spring target, a named recipe, or an
+element reaction mounts retained runtime automatically; removing all of them
+returns the same keyed element to fixed presentation. Component authors do not
+manage that lifecycle or choose a separate primitive.
+
 The current presentation properties are `x`, `y`, `rotation` in radians,
 non-negative `scale`, `opacity` from 0–1, and `tint`. Animated tint endpoints
 must be numeric `{ r = ..., g = ..., b = ..., a = ... }` tables or
