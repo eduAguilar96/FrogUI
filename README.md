@@ -1795,6 +1795,17 @@ transform owns 41.283 KB, RadialDial interaction owns 18.542 KB, refs own only
 39.297/27.884 KB. This is transient presentation-process scratch, not
 simulation state, component rendering, refs, or layout publication.
 
+The attribution-only B4p.54 manifest is
+`build/frogui/battle-performance-20260812T070729Z-3502`. It locates the Motion
+cost without changing behavior: late quiet Motion remains 41.283 KB/frame,
+of which runner sampling owns 30.430 KB, value seeding 3.428 KB, presentation
+publication 3.408 KB, runner ordering 2.678 KB, and completion scratch/finalize
+0.945 KB. Instance registry and completion sorting own another 0.395 KB; the
+measured parent remainder is zero. Rebuilt frames repeat the same shape at
+39.293 KB/frame, with runner sampling again dominant at 28.966 KB. The next
+implementation therefore targets recipe sampling first and keeps deterministic
+runner/completion order and candidate-isolated Motion state intact.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.

@@ -382,6 +382,20 @@ local function recordReconciliationAllocation(probe, callsField, kbField,
         + collectgarbage("count") - before
 end
 
+-- Selects the current stopped-collector Host:update row. Ordinary Hosts and
+-- every non-pipeline probe take the nil branch and retain no observer state.
+local function runtimeAllocationRow(host)
+    local probe = host and rawget(host, "_allocationProbe") or nil
+    return probe and probe.active and probe.mode == "pipeline"
+        and probe.runtimeActiveRow or nil
+end
+
+local function recordRuntimeAllocation(row, callsField, kbField, before)
+    if not row then return end
+    row[callsField] = row[callsField] + 1
+    row[kbField] = row[kbField] + collectgarbage("count") - before
+end
+
 local function cloneRunner(runner)
     return {
         recipe = runner.recipe,
@@ -884,7 +898,9 @@ end
 -- Samples one active owner. Keeping this separate lets updateAll preserve
 -- pending-completion delivery while idle owners take a plain conditional fast
 -- path with no runner/value allocations.
-local function updateActive(instance, host, completions, attribution)
+local function updateActive(instance, host, completions, attribution,
+        runtimeRow)
+    local runnerOrderBefore = runtimeRow and collectgarbage("count") or nil
     local ordered = {}
     for name, runner in pairs(instance.active) do
         ordered[#ordered + 1] = { name = name, runner = runner }
@@ -904,9 +920,23 @@ local function updateActive(instance, host, completions, attribution)
                 attribution.activeGeometryMotions + 1
         end
     end
+    recordRuntimeAllocation(runtimeRow,
+        "motionRunnerOrderCalls", "motionRunnerOrderAllocatedKB",
+        runnerOrderBefore)
+    local valueSeedBefore = runtimeRow and collectgarbage("count") or nil
     local values = copyValues(instance.settled)
+    recordRuntimeAllocation(runtimeRow,
+        "motionValueSeedCalls", "motionValueSeedAllocatedKB",
+        valueSeedBefore)
+    local completedScratchBefore = runtimeRow
+        and collectgarbage("count") or nil
     local completed = {}
+    recordRuntimeAllocation(runtimeRow,
+        "motionCompletedScratchCalls", "motionCompletedScratchAllocatedKB",
+        completedScratchBefore)
     for _, entry in ipairs(ordered) do
+        local runnerSampleBefore = runtimeRow
+            and collectgarbage("count") or nil
         local runner = entry.runner
         local elapsed = runner.clock:now() - runner.startedAt
         if elapsed < runner.previous then runner.previous = -1e-12 end
@@ -916,7 +946,11 @@ local function updateActive(instance, host, completions, attribution)
         if elapsed >= duration(runner.recipe) then
             completed[#completed + 1] = entry
         end
+        recordRuntimeAllocation(runtimeRow,
+            "motionRunnerSampleCalls", "motionRunnerSampleAllocatedKB",
+            runnerSampleBefore)
     end
+    local completionBefore = runtimeRow and collectgarbage("count") or nil
     for _, entry in ipairs(completed) do
         local runner = entry.runner
         local result = finalValues(runner.recipe, runner.base)
@@ -940,6 +974,10 @@ local function updateActive(instance, host, completions, attribution)
             }
         end
     end
+    recordRuntimeAllocation(runtimeRow,
+        "motionCompletionFinalizeCalls",
+        "motionCompletionFinalizeAllocatedKB", completionBefore)
+    local presentationBefore = runtimeRow and collectgarbage("count") or nil
     local visualChanged = not sameValues(instance.values, values)
     local geometryChanged = not sameGeometry(instance.values, values)
     instance.values = values
@@ -950,12 +988,17 @@ local function updateActive(instance, host, completions, attribution)
                 "frame-sample", geometryRecipes)
         end
     end
+    recordRuntimeAllocation(runtimeRow,
+        "motionPresentationCalls", "motionPresentationAllocatedKB",
+        presentationBefore)
 end
 
 -- Advances every committed runner from its selected absolute clock. Active
 -- names compose in stable start order: additive shake sums; later replacement
 -- recipes own properties they share with earlier recipes.
 function motion.updateAll(instances, host)
+    local runtimeRow = runtimeAllocationRow(host)
+    local registryBefore = runtimeRow and collectgarbage("count") or nil
     local changed = false
     local completions = {}
     local orderedInstances = {}
@@ -967,7 +1010,10 @@ function motion.updateAll(instances, host)
     table.sort(orderedInstances, function(left, right)
         return left.eventOrder < right.eventOrder
     end)
+    recordRuntimeAllocation(runtimeRow,
+        "motionRegistryCalls", "motionRegistryAllocatedKB", registryBefore)
     for _, instance in ipairs(orderedInstances) do
+        local pendingBefore = runtimeRow and collectgarbage("count") or nil
         local pendingCompletions = instance.pendingCompletions
         if pendingCompletions then
             for name, pending in pairs(pendingCompletions) do
@@ -987,19 +1033,29 @@ function motion.updateAll(instances, host)
             end
             instance.pendingCompletions = nil
         end
+        recordRuntimeAllocation(runtimeRow,
+            "motionPendingCalls", "motionPendingAllocatedKB", pendingBefore)
         -- Most mounted juice owners are idle most of the time. Pending
         -- completions above still deliver, but an idle owner does not need a
         -- runner array, value snapshot, or replacement presentation table.
         if next(instance.active) ~= nil then
-            updateActive(instance, host, completions, attribution)
+            local activeBefore = runtimeRow and collectgarbage("count") or nil
+            updateActive(instance, host, completions, attribution, runtimeRow)
+            recordRuntimeAllocation(runtimeRow,
+                "motionActiveCalls", "motionActiveAllocatedKB", activeBefore)
             changed = true
         end
     end
+    local completionSortBefore = runtimeRow
+        and collectgarbage("count") or nil
     table.sort(completions, function(left, right)
         if left.order ~= right.order then return left.order < right.order end
         if left.identity ~= right.identity then return left.identity < right.identity end
         return left.name < right.name
     end)
+    recordRuntimeAllocation(runtimeRow,
+        "motionCompletionSortCalls", "motionCompletionSortAllocatedKB",
+        completionSortBefore)
     return changed, completions, attribution
 end
 

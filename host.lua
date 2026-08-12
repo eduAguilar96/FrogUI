@@ -1540,6 +1540,18 @@ local RUNTIME_ALLOCATION_ROW_FIELDS = {
     "runtimeCalls", "runtimeAllocatedKB",
     "interactionCalls", "interactionAllocatedKB",
     "motionCalls", "motionAllocatedKB",
+    "motionUpdateCalls", "motionUpdateAllocatedKB",
+    "committedTransformCalls", "committedTransformAllocatedKB",
+    "motionRegistryCalls", "motionRegistryAllocatedKB",
+    "motionPendingCalls", "motionPendingAllocatedKB",
+    "motionActiveCalls", "motionActiveAllocatedKB",
+    "motionCompletionSortCalls", "motionCompletionSortAllocatedKB",
+    "motionRunnerOrderCalls", "motionRunnerOrderAllocatedKB",
+    "motionValueSeedCalls", "motionValueSeedAllocatedKB",
+    "motionCompletedScratchCalls", "motionCompletedScratchAllocatedKB",
+    "motionRunnerSampleCalls", "motionRunnerSampleAllocatedKB",
+    "motionCompletionFinalizeCalls", "motionCompletionFinalizeAllocatedKB",
+    "motionPresentationCalls", "motionPresentationAllocatedKB",
     "refsCalls", "refsAllocatedKB",
     "effectRefreshCalls", "effectRefreshAllocatedKB",
     "effectUpdateCalls", "effectUpdateAllocatedKB",
@@ -1853,6 +1865,7 @@ local function resetAllocationProbe(probe)
     probe.runtimeRebuilt = probe.runtimeRebuilt or {}
     resetRuntimeAllocationRow(probe.runtimeQuiet)
     resetRuntimeAllocationRow(probe.runtimeRebuilt)
+    probe.runtimeActiveRow = nil
 end
 
 -- Private, globally exclusive allocation attribution for the Battle harness.
@@ -2304,6 +2317,20 @@ function host:_readRuntimeAllocationProbe(rebuilt)
         row.runtimeCalls, row.runtimeAllocatedKB,
         row.interactionCalls, row.interactionAllocatedKB,
         row.motionCalls, row.motionAllocatedKB,
+        row.motionUpdateCalls, row.motionUpdateAllocatedKB,
+        row.committedTransformCalls, row.committedTransformAllocatedKB,
+        row.motionRegistryCalls, row.motionRegistryAllocatedKB,
+        row.motionPendingCalls, row.motionPendingAllocatedKB,
+        row.motionActiveCalls, row.motionActiveAllocatedKB,
+        row.motionCompletionSortCalls, row.motionCompletionSortAllocatedKB,
+        row.motionRunnerOrderCalls, row.motionRunnerOrderAllocatedKB,
+        row.motionValueSeedCalls, row.motionValueSeedAllocatedKB,
+        row.motionCompletedScratchCalls,
+        row.motionCompletedScratchAllocatedKB,
+        row.motionRunnerSampleCalls, row.motionRunnerSampleAllocatedKB,
+        row.motionCompletionFinalizeCalls,
+        row.motionCompletionFinalizeAllocatedKB,
+        row.motionPresentationCalls, row.motionPresentationAllocatedKB,
         row.refsCalls, row.refsAllocatedKB,
         row.effectRefreshCalls, row.effectRefreshAllocatedKB,
         row.effectUpdateCalls, row.effectUpdateAllocatedKB,
@@ -5410,6 +5437,7 @@ function host:update(dt)
         runtimeAllocationRow = self._generation ~= allocationGeneration
             and runtimeAllocationProbe.runtimeRebuilt
             or runtimeAllocationProbe.runtimeQuiet
+        runtimeAllocationProbe.runtimeActiveRow = runtimeAllocationRow
         recordRuntimeAllocation(runtimeAllocationRow,
             "framesCalls", "framesAllocatedKB", allocationFramesBefore)
     end
@@ -5440,14 +5468,24 @@ function host:update(dt)
             and self._diagnostics:start() or nil
         local allocationMotionBefore = runtimeAllocationRow
             and collectgarbage("count") or nil
+        local allocationMotionUpdateBefore = runtimeAllocationRow
+            and collectgarbage("count") or nil
         local motionAttribution
         _, motionCompletions, motionAttribution =
             Motion.updateAll(self._motions, self)
+        recordRuntimeAllocation(runtimeAllocationRow,
+            "motionUpdateCalls", "motionUpdateAllocatedKB",
+            allocationMotionUpdateBefore)
         if profiling then
             self._diagnostics:finish("motionUpdate", motionUpdateStarted)
         end
+        local allocationTransformBefore = runtimeAllocationRow
+            and collectgarbage("count") or nil
         local _, transformAttribution = self:_transformTree(nil,
             "committedTransform", motionAttribution)
+        recordRuntimeAllocation(runtimeAllocationRow,
+            "committedTransformCalls", "committedTransformAllocatedKB",
+            allocationTransformBefore)
         recordRuntimeAllocation(runtimeAllocationRow,
             "motionCalls", "motionAllocatedKB", allocationMotionBefore)
         self._diagnostics:finish("motion", motionStarted)
@@ -5512,6 +5550,9 @@ function host:update(dt)
         "runtimeCalls", "runtimeAllocatedKB", allocationRuntimeBefore)
     self._diagnostics:finish("runtime", runtimeStarted)
     if not ok then
+        if runtimeAllocationProbe then
+            runtimeAllocationProbe.runtimeActiveRow = nil
+        end
         self._diagnosticUpdateActive = nil
         self:_trimFeedback(feedbackMark)
         faultHost(self, "Host:update", err)
@@ -5523,6 +5564,9 @@ function host:update(dt)
     recordRuntimeAllocation(runtimeAllocationRow,
         "feedbackCalls", "feedbackAllocatedKB", allocationFeedbackBefore)
     if not feedbackOk then
+        if runtimeAllocationProbe then
+            runtimeAllocationProbe.runtimeActiveRow = nil
+        end
         self._diagnosticUpdateActive = nil
         faultHost(self, "Host:update feedback", feedbackError)
         error(feedbackError, 0)
@@ -5556,6 +5600,9 @@ function host:update(dt)
         "finishCalls", "finishAllocatedKB", allocationFinishBefore)
     recordRuntimeAllocation(runtimeAllocationRow,
         "updateCalls", "updateAllocatedKB", allocationUpdateBefore)
+    if runtimeAllocationProbe then
+        runtimeAllocationProbe.runtimeActiveRow = nil
+    end
 end
 
 function host:draw(customPainter)
