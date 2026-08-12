@@ -131,10 +131,10 @@ local function nodeShape(node, content)
         scratch[key] = function()
             local g = graphics()
             if content then
-                g.rectangle("fill", node.contentX, node.contentY,
-                    node.contentWidth, node.contentHeight)
+                g.rectangle("fill", node.layout.contentX, node.layout.contentY,
+                    node.layout.contentWidth, node.layout.contentHeight)
             else
-                g.rectangle("fill", node.x, node.y, node.width, node.height)
+                g.rectangle("fill", node.layout.x, node.layout.y, node.layout.width, node.layout.height)
             end
         end
     end
@@ -170,10 +170,10 @@ local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch)
     if retainedScratch then
         -- Static identity nodes use their authoritative layout rectangle
         -- directly instead of retaining a duplicate transformed-bounds table.
-        transform.bounds = node._visualBounds or node
+        transform.bounds = node._visualBounds or node.layout
         transform.world = node._worldTransform
     else
-        local bounds = node._visualBounds or node
+        local bounds = node._visualBounds or node.layout
         transform.bounds = {
             x = bounds.x,
             y = bounds.y,
@@ -291,7 +291,7 @@ local function textStyleFor(host, node, inherited, custom)
         host:_color(node.props.shadowColor, nil, BLACK),
         inherited.tint, inherited.opacity)
     style.color = scratch.color
-    style.font = node._resolvedFont or host:_font(node.props.role)
+    style.font = node.layout.resolvedFont or host:_font(node.props.role)
     style.role = node.props.role or "body"
     style.outlineWidth = node.props.outlineWidth or 0
     style.outlineColor = scratch.outlineColor
@@ -326,9 +326,9 @@ local function defaultBox(host, node, style)
     local g = graphics()
     if not g then return end
     if node.type == "RadialDial" then
-        local centerX = node.x + node.width / 2
-        local centerY = node.y + node.height / 2
-        local radius = math.min(node.width, node.height) / 2
+        local centerX = node.layout.x + node.layout.width / 2
+        local centerY = node.layout.y + node.layout.height / 2
+        local radius = math.min(node.layout.width, node.layout.height) / 2
         if style.background then
             setColor(style.background)
             g.circle("fill", centerX, centerY, radius)
@@ -343,13 +343,13 @@ local function defaultBox(host, node, style)
     end
     if style.background then
         setColor(style.background)
-        g.rectangle("fill", node.x, node.y, node.width, node.height,
+        g.rectangle("fill", node.layout.x, node.layout.y, node.layout.width, node.layout.height,
             style.radius, style.radius)
     end
     if style.border and style.borderWidth > 0 then
         setColor(style.border)
         g.setLineWidth(style.borderWidth)
-        g.rectangle("line", node.x, node.y, node.width, node.height,
+        g.rectangle("line", node.layout.x, node.layout.y, node.layout.width, node.layout.height,
             style.radius, style.radius)
     end
 end
@@ -361,8 +361,8 @@ local OUTLINE_DIRECTIONS = {
 }
 
 local function stampText(g, node, value, align, dx, dy)
-    g.printf(value, node.x + (dx or 0), node.y + (dy or 0),
-        math.max(0, node.width), align)
+    g.printf(value, node.layout.x + (dx or 0), node.layout.y + (dy or 0),
+        math.max(0, node.layout.width), align)
 end
 
 local function textShineShape(node, shineSplit)
@@ -371,8 +371,8 @@ local function textShineShape(node, shineSplit)
     if not scratch.shineShape then
         scratch.shineShape = function()
             local g = graphics()
-            g.rectangle("fill", node.x, node.y,
-                node.width, node.height * scratch.shineSplit)
+            g.rectangle("fill", node.layout.x, node.layout.y,
+                node.layout.width, node.layout.height * scratch.shineSplit)
         end
     end
     return scratch.shineShape
@@ -381,7 +381,7 @@ end
 local function defaultText(host, node, style, clipState)
     local g = graphics()
     if not g then return end
-    local font = node._resolvedFont or host:_font(node.props.role)
+    local font = node.layout.resolvedFont or host:_font(node.props.role)
     if font then g.setFont(font) end
     local align = node.props.align or "left"
     if align == "start" then align = "left"
@@ -478,7 +478,7 @@ end
 local function imageGeometry(node, asset, fit, sourceRect)
     local imageWidth = sourceRect and sourceRect.width or asset:getWidth()
     local imageHeight = sourceRect and sourceRect.height or asset:getHeight()
-    local scaleX, scaleY = node.width / imageWidth, node.height / imageHeight
+    local scaleX, scaleY = node.layout.width / imageWidth, node.layout.height / imageHeight
     if fit == "contain" then
         local scale = math.min(scaleX, scaleY)
         scaleX, scaleY = scale, scale
@@ -496,10 +496,10 @@ local function imageGeometry(node, asset, fit, sourceRect)
         scaleY = scaleY,
         width = width,
         height = height,
-        x = node.x + (node.width - width) / 2,
-        y = node.y + (node.height - height) / 2,
-        centerX = node.x + node.width / 2,
-        centerY = node.y + node.height / 2,
+        x = node.layout.x + (node.layout.width - width) / 2,
+        y = node.layout.y + (node.layout.height - height) / 2,
+        centerX = node.layout.x + node.layout.width / 2,
+        centerY = node.layout.y + node.layout.height / 2,
     }
 end
 
@@ -525,9 +525,9 @@ end
 local function missingAsset(node, style)
     local g = graphics()
     setColor(style.tint)
-    g.rectangle("line", node.x, node.y, node.width, node.height)
-    g.line(node.x, node.y, node.x + node.width, node.y + node.height)
-    g.line(node.x + node.width, node.y, node.x, node.y + node.height)
+    g.rectangle("line", node.layout.x, node.layout.y, node.layout.width, node.layout.height)
+    g.line(node.layout.x, node.layout.y, node.layout.x + node.layout.width, node.layout.y + node.layout.height)
+    g.line(node.layout.x + node.layout.width, node.layout.y, node.layout.x, node.layout.y + node.layout.height)
 end
 
 local function defaultImage(host, node, asset, style, clipState)
@@ -734,9 +734,9 @@ local function tiledGeometry(node, asset)
     local phaseY = (phase.y or 0) + (velocity.y or 0) * time
     local axis = props.repeatAxis or "both"
     local snap = props.filter == "nearest" and 1 or nil
-    local columnFirst, columnCount = tilePlan(node.x, node.width, tileWidth,
+    local columnFirst, columnCount = tilePlan(node.layout.x, node.layout.width, tileWidth,
         phaseX, axis == "x" or axis == "both", snap)
-    local rowFirst, rowCount = tilePlan(node.y, node.height, tileHeight,
+    local rowFirst, rowCount = tilePlan(node.layout.y, node.layout.height, tileHeight,
         phaseY, axis == "y" or axis == "both", snap)
     assert(columnCount * rowCount <= MAX_TILE_COPIES,
         "TiledImage exceeds its per-leaf copy budget")
@@ -836,7 +836,7 @@ local function defaultCanvas(node, commands, clipState)
     local shape = nodeShape(node, false)
     beginClip(clipState, shape)
     g.push("all")
-    g.translate(node.x, node.y)
+    g.translate(node.layout.x, node.layout.y)
     local ok, reason = pcall(replayCanvasCommands, g, commands)
     g.pop()
     endClip(clipState, shape)
@@ -855,12 +855,12 @@ local function preflightNode(host, node, inheritedOpacity, inheritedTint,
         defaultScratch(node))
     if node.type == "Canvas" then
         local commands, inspection = Canvas.record(node.props.draw,
-            node.width, node.height, function(color)
+            node.layout.width, node.layout.height, function(color)
                 return faded(tinted(host:_color(color, "text"),
                     style.tint), style.opacity)
             end)
         inspection.arrangedBounds = {
-            x = node.x, y = node.y, width = node.width, height = node.height,
+            x = node.layout.x, y = node.layout.y, width = node.layout.width, height = node.layout.height,
         }
         node._canvasCommands = commands
         node._canvasInspection = inspection
@@ -931,17 +931,17 @@ local function customNode(node)
         logicalIdentity = node.logicalIdentity,
         owner = node.owner,
         source = safeCustomValue(node.source),
-        x = node.x,
-        y = node.y,
-        width = node.width,
-        height = node.height,
-        contentX = node.contentX,
-        contentY = node.contentY,
-        contentWidth = node.contentWidth,
-        contentHeight = node.contentHeight,
-        measuredWidth = node.measuredWidth,
-        measuredHeight = node.measuredHeight,
-        _resolvedFontSize = node._resolvedFontSize,
+        x = node.layout.x,
+        y = node.layout.y,
+        width = node.layout.width,
+        height = node.layout.height,
+        contentX = node.layout.contentX,
+        contentY = node.layout.contentY,
+        contentWidth = node.layout.contentWidth,
+        contentHeight = node.layout.contentHeight,
+        measuredWidth = node.layout.measuredWidth,
+        measuredHeight = node.layout.measuredHeight,
+        _resolvedFontSize = node.layout.resolvedFontSize,
         presentation = safeCustomValue(node.presentation),
         props = safeCustomValue(node.props) or {},
     }
@@ -971,7 +971,7 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
         and Interaction.radialPresentation(node) or nil
     local radialScale = radialPresentation and radialPresentation.scale or 1
     if not custom and g then
-        local centerX, centerY = node.x + node.width / 2, node.y + node.height / 2
+        local centerX, centerY = node.layout.x + node.layout.width / 2, node.layout.y + node.layout.height / 2
         g.push("all")
         g.translate(presentation.x or 0, presentation.y or 0)
         g.translate(centerX, centerY)
@@ -1160,15 +1160,15 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
         local progress = scroll.offset / scroll.extent
         setColor(host:_color(nil, "textDim", { 0.65, 0.7, 0.72, 0.65 }))
         if scroll.axis == "vertical" then
-            local length = math.max(16, node.contentHeight * ratio)
-            g.rectangle("fill", node.contentX + node.contentWidth - 3,
-                node.contentY + (node.contentHeight - length) * progress,
+            local length = math.max(16, node.layout.contentHeight * ratio)
+            g.rectangle("fill", node.layout.contentX + node.layout.contentWidth - 3,
+                node.layout.contentY + (node.layout.contentHeight - length) * progress,
                 3, length, 1.5, 1.5)
         else
-            local length = math.max(16, node.contentWidth * ratio)
-            g.rectangle("fill", node.contentX
-                    + (node.contentWidth - length) * progress,
-                node.contentY + node.contentHeight - 3,
+            local length = math.max(16, node.layout.contentWidth * ratio)
+            g.rectangle("fill", node.layout.contentX
+                    + (node.layout.contentWidth - length) * progress,
+                node.layout.contentY + node.layout.contentHeight - 3,
                 length, 3, 1.5, 1.5)
         end
     end

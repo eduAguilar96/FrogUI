@@ -234,15 +234,15 @@ end
 
 local function localInside(node, x, y)
     local localX, localY = Motion.localPoint(node, x, y)
-    return localX >= node.x and localY >= node.y
-        and localX <= node.x + node.width and localY <= node.y + node.height
+    return localX >= node.layout.x and localY >= node.layout.y
+        and localX <= node.layout.x + node.layout.width and localY <= node.layout.y + node.layout.height
 end
 
 local function insideContent(node, x, y)
     local localX, localY = Motion.localPoint(node, x, y)
-    return localX >= node.contentX and localY >= node.contentY
-        and localX <= node.contentX + node.contentWidth
-        and localY <= node.contentY + node.contentHeight
+    return localX >= node.layout.contentX and localY >= node.layout.contentY
+        and localX <= node.layout.contentX + node.layout.contentWidth
+        and localY <= node.layout.contentY + node.layout.contentHeight
 end
 
 local function clipped(node)
@@ -257,9 +257,9 @@ local POINTER_TYPES = {
 
 local function radialInside(node, x, y)
     local localX, localY = Motion.localPoint(node, x, y)
-    local centerX, centerY = node.x + node.width / 2, node.y + node.height / 2
+    local centerX, centerY = node.layout.x + node.layout.width / 2, node.layout.y + node.layout.height / 2
     local dx, dy = localX - centerX, localY - centerY
-    local radius = math.min(node.width, node.height) / 2
+    local radius = math.min(node.layout.width, node.layout.height) / 2
     return dx * dx + dy * dy <= radius * radius
 end
 
@@ -340,10 +340,10 @@ end
 
 local function radialPoint(node, x, y)
     local localX, localY = Motion.localPoint(node, x, y)
-    local centerX, centerY = node.x + node.width / 2, node.y + node.height / 2
+    local centerX, centerY = node.layout.x + node.layout.width / 2, node.layout.y + node.layout.height / 2
     local dx, dy = localX - centerX, localY - centerY
     return dx, dy, math.sqrt(dx * dx + dy * dy),
-        math.min(node.width, node.height) / 2
+        math.min(node.layout.width, node.layout.height) / 2
 end
 
 local function beginRadial(host, node, session, x, y)
@@ -354,7 +354,7 @@ local function beginRadial(host, node, session, x, y)
     session.radialSignature = dial.signature
     session.radialValue = dial.value
     session.radialBounds = {
-        x = node.x, y = node.y, width = node.width, height = node.height,
+        x = node.layout.x, y = node.layout.y, width = node.layout.width, height = node.layout.height,
     }
     session.radialGeometrySignature = dial.geometrySignature
     session.radialPointerAngle = distance > radius * RADIAL_DIAL.deadZoneRatio
@@ -1097,13 +1097,15 @@ function interaction.revealFocus(host, identity)
     for _, node in ipairs(path) do
         if node.type == "Scroll" and node._scroll then
             local scroll = node._scroll
-            local low = scroll.axis == "vertical" and focused.y or focused.x
+            local focusedBox = focused.layout
+            local low = scroll.axis == "vertical"
+                and focusedBox.y or focusedBox.x
             local high = low + (scroll.axis == "vertical"
-                and focused.height or focused.width)
+                and focusedBox.height or focusedBox.width)
             local viewLow = scroll.axis == "vertical"
-                and node.contentY or node.contentX
+                and node.layout.contentY or node.layout.contentX
             local viewHigh = viewLow + (scroll.axis == "vertical"
-                and node.contentHeight or node.contentWidth)
+                and node.layout.contentHeight or node.layout.contentWidth)
             if low < viewLow then scroll.offset = scroll.offset + low - viewLow
             elseif high > viewHigh then scroll.offset = scroll.offset + high - viewHigh end
             scroll.offset = math.max(0, math.min(scroll.extent, scroll.offset))
@@ -1161,9 +1163,11 @@ function interaction.rebind(host)
     if session.radialIdentity then
         local radial = findActiveIdentity(host, session.radialIdentity)
         local bounds = session.radialBounds
+        local radialBox = radial and radial.layout
         local geometryChanged = radial and bounds
-            and (radial.x ~= bounds.x or radial.y ~= bounds.y
-                or radial.width ~= bounds.width or radial.height ~= bounds.height)
+            and (radialBox.x ~= bounds.x or radialBox.y ~= bounds.y
+                or radialBox.width ~= bounds.width
+                or radialBox.height ~= bounds.height)
         if not radial or radial.type ~= "RadialDial"
                 or radial.props.disabled
                 or radial._radialDial.signature ~= session.radialSignature

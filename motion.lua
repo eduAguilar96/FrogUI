@@ -1059,7 +1059,7 @@ local function localMatrix(node, out)
     local scale = value.scale or 1
     local rotation = value.rotation or 0
     local cosine, sine = math.cos(rotation) * scale, math.sin(rotation) * scale
-    local centerX, centerY = node.x + node.width / 2, node.y + node.height / 2
+    local centerX, centerY = node.layout.x + node.layout.width / 2, node.layout.y + node.layout.height / 2
     out = out or {}
     out.a, out.b, out.c, out.d = cosine, sine, -sine, cosine
     out.tx = (value.x or 0) + centerX - cosine * centerX + sine * centerY
@@ -1310,13 +1310,13 @@ local function transformNodeGeometry(node, parent, parentInverse,
         -- add no geometry and would be thrown away with this candidate.
         node._visualBounds = nil
     else
-        local x1, y1 = point(node._worldTransform, node.x, node.y)
+        local x1, y1 = point(node._worldTransform, node.layout.x, node.layout.y)
         local x2, y2 = point(node._worldTransform,
-            node.x + node.width, node.y)
+            node.layout.x + node.layout.width, node.layout.y)
         local x3, y3 = point(node._worldTransform,
-            node.x, node.y + node.height)
+            node.layout.x, node.layout.y + node.layout.height)
         local x4, y4 = point(node._worldTransform,
-            node.x + node.width, node.y + node.height)
+            node.layout.x + node.layout.width, node.layout.y + node.layout.height)
         node._visualBounds = writeBounds(node._visualBounds,
             x1, y1, x2, y2, x3, y3, x4, y4)
     end
@@ -1330,14 +1330,14 @@ local function transformNodeGeometry(node, parent, parentInverse,
     before = allocationProbe and collectgarbage("count") or nil
     if clipChildren and not staticIdentity then
         local cx1, cy1 = point(node._worldTransform,
-            node.contentX, node.contentY)
+            node.layout.contentX, node.layout.contentY)
         local cx2, cy2 = point(node._worldTransform,
-            node.contentX + node.contentWidth, node.contentY)
+            node.layout.contentX + node.layout.contentWidth, node.layout.contentY)
         local cx3, cy3 = point(node._worldTransform,
-            node.contentX, node.contentY + node.contentHeight)
+            node.layout.contentX, node.layout.contentY + node.layout.contentHeight)
         local cx4, cy4 = point(node._worldTransform,
-            node.contentX + node.contentWidth,
-            node.contentY + node.contentHeight)
+            node.layout.contentX + node.layout.contentWidth,
+            node.layout.contentY + node.layout.contentHeight)
         node._visualContentBounds = writeBounds(node._visualContentBounds,
             cx1, cy1, cx2, cy2, cx3, cy3, cx4, cy4)
     else

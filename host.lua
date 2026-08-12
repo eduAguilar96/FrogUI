@@ -1088,22 +1088,22 @@ end
 local function inside(node, x, y)
     local localX, localY = Motion.localPoint(node, x, y)
     if node.type == "RadialDial" then
-        local centerX = node.x + node.width / 2
-        local centerY = node.y + node.height / 2
+        local centerX = node.layout.x + node.layout.width / 2
+        local centerY = node.layout.y + node.layout.height / 2
         local dx, dy = localX - centerX, localY - centerY
-        local radius = math.min(node.width, node.height) / 2
+        local radius = math.min(node.layout.width, node.layout.height) / 2
         return dx * dx + dy * dy <= radius * radius
     end
-    return localX >= node.x and localY >= node.y
-        and localX <= node.x + node.width and localY <= node.y + node.height
+    return localX >= node.layout.x and localY >= node.layout.y
+        and localX <= node.layout.x + node.layout.width and localY <= node.layout.y + node.layout.height
 end
 
 -- Describes a RadialDial's stable transformed circle for F6. Its ornamental
 -- bounce deliberately does not change layout, hit ownership, or inspection.
 local function inspectionCircle(node)
-    local centerX = node.x + node.width / 2
-    local centerY = node.y + node.height / 2
-    local radius = math.min(node.width, node.height) / 2
+    local centerX = node.layout.x + node.layout.width / 2
+    local centerY = node.layout.y + node.layout.height / 2
+    local radius = math.min(node.layout.width, node.layout.height) / 2
     local world = node._worldTransform
     if not world then
         return { center = { x = centerX, y = centerY }, radius = radius }
@@ -1132,8 +1132,8 @@ local function nodeEntry(node, depth, visibleBounds)
         depth = depth,
         testId = node.props.testId,
         bounds = deepCopy(visibleBounds or node._visualBounds
-            or { x = node.x, y = node.y, width = node.width, height = node.height }),
-        restBounds = { x = node.x, y = node.y, width = node.width, height = node.height },
+            or { x = node.layout.x, y = node.layout.y, width = node.layout.width, height = node.layout.height }),
+        restBounds = { x = node.layout.x, y = node.layout.y, width = node.layout.width, height = node.layout.height },
     }
     if node._motion then
         local inspected = Motion.inspect(node._motion)
@@ -1197,10 +1197,10 @@ local function nodeEntry(node, depth, visibleBounds)
             transformDepth = 0,
             clipped = true,
             localBounds = {
-                x = 0, y = 0, width = node.width, height = node.height,
+                x = 0, y = 0, width = node.layout.width, height = node.layout.height,
             },
             arrangedBounds = {
-                x = node.x, y = node.y, width = node.width, height = node.height,
+                x = node.layout.x, y = node.layout.y, width = node.layout.width, height = node.layout.height,
             },
         })
     elseif node.type == "HorizontalSwipe" then
@@ -1275,7 +1275,7 @@ end
 local function flatten(node, depth, output, inheritedClip, portalRoot)
     if node._portal and node ~= portalRoot then return end
     local bounds = node._visualBounds
-        or { x = node.x, y = node.y, width = node.width, height = node.height }
+        or { x = node.layout.x, y = node.layout.y, width = node.layout.width, height = node.layout.height }
     local visible = intersection(bounds, inheritedClip)
     if not visible then return end
     output[#output + 1] = nodeEntry(node, depth, visible)
@@ -1283,8 +1283,8 @@ local function flatten(node, depth, output, inheritedClip, portalRoot)
     if node.type == "Scroll" or node.props.clip
             or node.props.overflow == "clip" then
         childClip = intersection(childClip, node._visualContentBounds
-            or { x = node.contentX, y = node.contentY,
-                width = node.contentWidth, height = node.contentHeight })
+            or { x = node.layout.contentX, y = node.layout.contentY,
+                width = node.layout.contentWidth, height = node.layout.contentHeight })
         if not childClip then return end
     end
     for _, child in ipairs(node.children) do
@@ -1299,9 +1299,9 @@ local function deepest(node, x, y, predicate, portalRoot)
             or node.props.overflow == "clip" then
         if not contained then return nil end
         local localX, localY = Motion.localPoint(node, x, y)
-        if localX < node.contentX or localY < node.contentY
-                or localX > node.contentX + node.contentWidth
-                or localY > node.contentY + node.contentHeight then
+        if localX < node.layout.contentX or localY < node.layout.contentY
+                or localX > node.layout.contentX + node.layout.contentWidth
+                or localY > node.layout.contentY + node.layout.contentHeight then
             return predicate(node) and node or nil
         end
     end
@@ -1348,10 +1348,10 @@ local function collectCommittedRefRectangles(node, rectangles, stats)
     if stats then stats.treeVisits = stats.treeVisits + 1 end
     if node._ref then
         rectangles[node._ref] = {
-            x = node.x,
-            y = node.y,
-            width = node.width,
-            height = node.height,
+            x = node.layout.x,
+            y = node.layout.y,
+            width = node.layout.width,
+            height = node.layout.height,
         }
     end
     for _, child in ipairs(node.children or {}) do
@@ -4183,10 +4183,10 @@ function host:_build(root)
         annotateCanvasBranches(candidate)
         for handle, node in pairs(context.refAttachments) do
             context.refRectangles[handle] = {
-                x = node.x,
-                y = node.y,
-                width = node.width,
-                height = node.height,
+                x = node.layout.x,
+                y = node.layout.y,
+                width = node.layout.width,
+                height = node.layout.height,
             }
         end
         Effect.arrangeAll(context.effects, context.refRectangles, self)
@@ -5512,7 +5512,7 @@ function host:_inspect(x, y)
         local fallback = deepest(candidate, virtualX, virtualY,
             function() return true end, portalRoot)
         if fallback then
-            local bounds = fallback._visualBounds or fallback
+            local bounds = fallback._visualBounds or fallback.layout
             local area = bounds.width * bounds.height
             if selectedArea == nil or area < selectedArea then
                 selected, root, selectedArea = fallback, candidate, area
