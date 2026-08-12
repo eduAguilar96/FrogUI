@@ -1993,10 +1993,48 @@ function host:_attachRenderReplayCensus()
         "Render replay census must attach before Host mount")
     assert(self._diagnostics.enabled,
         "Render replay census requires diagnostics = true")
+    assert(rawget(self, "_actorLocalPrototype") == nil,
+        "Render replay census cannot share an actor-local prototype Host")
     assert(rawget(self, "_renderReplayOracle") == nil,
         "Render replay census is already attached")
     local RenderReplayOracle = require("src.frogui.render_replay_oracle")
     self._renderReplayOracle = RenderReplayOracle.new()
+    return true
+end
+
+-- Attaches the private generic actor-local update proof before mount. Ordinary
+-- Hosts keep the existing complete semantic rebuild behavior.
+function host:_attachActorLocalPrototype()
+    assert(not self._mounted,
+        "Actor-local prototype must attach before Host mount")
+    assert(self._diagnostics.enabled,
+        "Actor-local prototype requires diagnostics = true")
+    assert(rawget(self, "_renderReplayOracle") == nil,
+        "Actor-local prototype cannot share a render replay census Host")
+    assert(rawget(self, "_actorLocalPrototype") == nil,
+        "Actor-local prototype is already attached")
+    local ActorLocalPrototype =
+        require("src.frogui.actor_local_prototype")
+    self._actorLocalPrototype = ActorLocalPrototype.new()
+    return true
+end
+
+-- Returns detached scalar prototype evidence without exposing descriptions.
+function host:_readActorLocalPrototype()
+    local prototype = assert(rawget(self, "_actorLocalPrototype"),
+        "FrogUI Host has no actor-local prototype")
+    return prototype:report()
+end
+
+-- Detaches a prototype before mount or after a failed mount. Successful
+-- unmount clears it automatically with the Host lifetime.
+function host:_detachActorLocalPrototype()
+    assert(not self._mounted,
+        "Actor-local prototype must detach after Host unmount")
+    local prototype = assert(rawget(self, "_actorLocalPrototype"),
+        "FrogUI Host has no actor-local prototype")
+    prototype:reset()
+    self._actorLocalPrototype = nil
     return true
 end
 
@@ -2207,6 +2245,37 @@ function host:_newRef(key)
     return Ref.new(self, "ref-" .. tostring(self._nextRefId), key)
 end
 
+-- Carries one untouched semantic owner's positional Hook records into a fresh
+-- actor-local candidate. Every retained capability is re-indexed in ordinary
+-- traversal order; no Hook callback or resource constructor runs.
+function host:_retainOwnerHooks(logicalPath, token, callback, context)
+    assert(not context.hookOwners[logicalPath],
+        "duplicate retained FrogUI render-owner identity " .. logicalPath)
+    local previous = assert(self._hookOwners[logicalPath],
+        "actor-local owner omitted committed Hooks: " .. logicalPath)
+    assert(previous.token == token and previous.renderCallback == callback,
+        "actor-local owner changed token or callback: " .. logicalPath)
+    context.hookOwners[logicalPath] = previous
+    for _, hook in ipairs(previous.hooks or {}) do
+        if hook.kind == "useRef" then
+            context.refs[hook.handle] = true
+        elseif hook.kind == "useKeyedRefs" then
+            for _, handle in pairs(hook.handles) do
+                context.refs[handle] = true
+            end
+        elseif hook.kind == "useResource" then
+            assert(not hook.instance.disposed,
+                "actor-local owner retained a disposed resource")
+            context.resources[#context.resources + 1] = hook.instance
+        elseif hook.kind == "useFrame" then
+            context.frames[#context.frames + 1] = hook.frame
+        else
+            error("actor-local owner has unknown Hook "
+                .. tostring(hook.kind), 0)
+        end
+    end
+end
+
 -- Publishes render-hook ownership, process subscriptions, and arranged refs as
 -- one successful Host commit. Removed resources are staged until the current
 -- callback batch finishes so every committed cleanup is attempted once.
@@ -2220,6 +2289,8 @@ function host:_publishRenderHooks(context)
     Ref.publish(previousRefs, self._refs, context.refRectangles)
     local oracle = rawget(self, "_renderReplayOracle")
     if oracle then oracle:commit(context.renderReplayCensus) end
+    local actorLocal = rawget(self, "_actorLocalPrototype")
+    if actorLocal then actorLocal:commit(context.actorLocalCandidate) end
 end
 
 -- Republishes geometry after retained layout mutates the committed tree, such
@@ -2626,6 +2697,47 @@ function host:_addressSend(address)
     end
 end
 
+-- Reuses one committed semantic description only inside the opt-in actor-local
+-- candidate and only while no changed ancestor forces this owner to render.
+function host:_reuseSemanticOutput(descriptor, logicalPath, token, callback,
+        context, force)
+    local candidate = context.actorLocalCandidate
+    if not candidate or force or context.forceSemanticRender then
+        return false
+    end
+    local prototype = assert(rawget(self, "_actorLocalPrototype"))
+    local reused, rendered = prototype:reuse(candidate, logicalPath,
+        token, callback, descriptor)
+    if not reused then return false end
+    self:_retainOwnerHooks(logicalPath, token, callback, context)
+    return true, rendered
+end
+
+-- Records one real semantic callback result in the current prototype
+-- candidate. Ordinary Hosts take no branch and retain no description.
+function host:_recordSemanticOutput(descriptor, logicalPath, token, callback,
+        rendered, context)
+    local candidate = context.actorLocalCandidate
+    if not candidate then return end
+    assert(rawget(self, "_actorLocalPrototype")):record(candidate,
+        logicalPath, token, callback, descriptor, rendered)
+end
+
+-- Resolves an owner output while forcing all semantic descendants to refresh
+-- after that owner itself rendered. Reused output leaves nested dirty actors
+-- free to select their own exact boundaries.
+function host:_resolveSemanticOutput(rendered, owner, outputPath,
+        descendantPath, context, logicalOutputPathValue, renderedHere)
+    local previousForce = context.forceSemanticRender
+    if context.actorLocalCandidate and renderedHere then
+        context.forceSemanticRender = true
+    end
+    local resolved = self:_resolve(rendered, owner, outputPath,
+        descendantPath, context, logicalOutputPathValue)
+    context.forceSemanticRender = previousForce
+    return resolved
+end
+
 function host:_registerActor(descriptor, owner, path, descendantPath, context,
         logicalPath)
     local profiler = context.diagnostics
@@ -2711,23 +2823,37 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
             pipelineBefore)
     end
 
-    -- Render receives one detached state snapshot. Mutating it is ignored;
-    -- semantic state changes belong to an action/reaction return value.
-    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
-    preparationStarted = profiler and profiler:start() or nil
-    local stateForRender = deepCopy(instance.state)
-    local actorSend = self:_actorSend(instance)
-    if profiler then
-        profiler:finish("semanticPreparation", preparationStarted)
+    local actorLocal = rawget(self, "_actorLocalPrototype")
+    local actorDirty = actorLocal and actorLocal:isDirty(
+        context.actorLocalCandidate, logicalPath) or false
+    local reused, rendered = false, nil
+    if actorLocal then
+        reused, rendered = self:_reuseSemanticOutput(descriptor,
+            logicalPath, token, token.definition.render, context, actorDirty)
     end
-    if pipelineProbe then
-        recordPipelineAllocation(pipelineProbe,
-            "pipelinePreparationCalls", "pipelinePreparationAllocatedKB",
-            pipelineBefore)
+    if not reused then
+        -- Render receives one detached state snapshot. Mutating it is ignored;
+        -- semantic state changes belong to an action/reaction return value.
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
+        preparationStarted = profiler and profiler:start() or nil
+        local stateForRender = deepCopy(instance.state)
+        local actorSend = self:_actorSend(instance)
+        if profiler then
+            profiler:finish("semanticPreparation", preparationStarted)
+        end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelinePreparationCalls", "pipelinePreparationAllocatedKB",
+                pipelineBefore)
+        end
+        rendered = self:_withOwnerRender(token.name, token, logicalPath,
+            context, token.definition.render, props, stateForRender,
+            actorSend)
+        if actorLocal then
+            self:_recordSemanticOutput(descriptor, logicalPath, token,
+                token.definition.render, rendered, context)
+        end
     end
-    local rendered = self:_withOwnerRender(token.name, token, logicalPath,
-        context, token.definition.render, props, stateForRender,
-        actorSend)
     pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     bookkeepingStarted = profiler and profiler:start() or nil
     if rendered == nil or rendered == false then
@@ -2752,8 +2878,16 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
             "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
             pipelineBefore)
     end
-    local resolved = self:_resolve(rendered, token.name, outputPath, path, context,
-        logicalOutputPath(logicalPath, rendered, identityProbe))
+    local outputLogicalPath =
+        logicalOutputPath(logicalPath, rendered, identityProbe)
+    local resolved
+    if actorLocal then
+        resolved = self:_resolveSemanticOutput(rendered, token.name,
+            outputPath, path, context, outputLogicalPath, not reused)
+    else
+        resolved = self:_resolve(rendered, token.name, outputPath, path,
+            context, outputLogicalPath)
+    end
     if resolved then
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         bookkeepingStarted = profiler and profiler:start() or nil
@@ -2856,22 +2990,46 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
             "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
             pipelineBefore)
     end
-    -- Views observe the same detached render snapshot as their actor owner.
-    pipelineBefore = pipelineProbe and collectgarbage("count") or nil
-    preparationStarted = profiler and profiler:start() or nil
-    local stateForRender = instance and deepCopy(instance.state) or nil
-    local addressSend = self:_addressSend(address)
-    if profiler then
-        profiler:finish("semanticPreparation", preparationStarted)
+    local actorLocal = rawget(self, "_actorLocalPrototype")
+    local previousInstance = self._addresses[address]
+    local viewDirty = false
+    if actorLocal then
+        local stage = context.actorLocalCandidate
+        local mountChanged = (previousInstance == nil) ~= (instance == nil)
+        local previousDirty = previousInstance
+            and actorLocal:isDirty(stage, previousInstance.identity) or false
+        local currentDirty = instance
+            and actorLocal:isDirty(stage, instance.identity) or false
+        viewDirty = stage.full
+            or mountChanged or previousDirty or currentDirty
     end
-    if pipelineProbe then
-        recordPipelineAllocation(pipelineProbe,
-            "pipelinePreparationCalls", "pipelinePreparationAllocatedKB",
-            pipelineBefore)
+    local reused, rendered = false, nil
+    if actorLocal then
+        reused, rendered = self:_reuseSemanticOutput(descriptor,
+            logicalPath, token, token.render, context, viewDirty)
     end
-    local rendered = self:_withOwnerRender(token.name, token, logicalPath,
-        context, token.render, props, stateForRender,
-        addressSend, status)
+    if not reused then
+        -- Views observe the same detached render snapshot as their actor owner.
+        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
+        preparationStarted = profiler and profiler:start() or nil
+        local stateForRender = instance and deepCopy(instance.state) or nil
+        local addressSend = self:_addressSend(address)
+        if profiler then
+            profiler:finish("semanticPreparation", preparationStarted)
+        end
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelinePreparationCalls", "pipelinePreparationAllocatedKB",
+                pipelineBefore)
+        end
+        rendered = self:_withOwnerRender(token.name, token, logicalPath,
+            context, token.render, props, stateForRender,
+            addressSend, status)
+        if actorLocal then
+            self:_recordSemanticOutput(descriptor, logicalPath, token,
+                token.render, rendered, context)
+        end
+    end
     pipelineBefore = pipelineProbe and collectgarbage("count") or nil
     bookkeepingStarted = profiler and profiler:start() or nil
     if rendered == nil or rendered == false then
@@ -2896,9 +3054,17 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
             "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
             pipelineBefore)
     end
-    local resolved = self:_resolve(rendered, token.name, outputPath,
-        descendantPath or path, context,
-        logicalOutputPath(logicalPath, rendered, identityProbe))
+    local outputLogicalPath =
+        logicalOutputPath(logicalPath, rendered, identityProbe)
+    local resolved
+    if actorLocal then
+        resolved = self:_resolveSemanticOutput(rendered, token.name,
+            outputPath, descendantPath or path, context,
+            outputLogicalPath, not reused)
+    else
+        resolved = self:_resolve(rendered, token.name, outputPath,
+            descendantPath or path, context, outputLogicalPath)
+    end
     if resolved then
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         bookkeepingStarted = profiler and profiler:start() or nil
@@ -2967,31 +3133,42 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             pipelineBefore)
     end
     if token.kind == "component" then
-        pipelineBefore = pipelineProbe and collectgarbage("count") or nil
-        local preparationStarted = profiler and profiler:start() or nil
-        local props = shallowCopy(descriptor.props)
-        props.children = descriptor.children
-        if profiler then
-            profiler:finish("semanticPreparation", preparationStarted)
+        local reused, rendered = false, nil
+        if context.actorLocalCandidate then
+            reused, rendered = self:_reuseSemanticOutput(descriptor,
+                logicalPath, token, token.render, context, false)
         end
-        if pipelineProbe then
-            recordPipelineAllocation(pipelineProbe,
-                "pipelinePreparationCalls",
-                "pipelinePreparationAllocatedKB", pipelineBefore)
-        end
-        local replayVisit
-        local renderReplayOracle = rawget(self, "_renderReplayOracle")
-        if renderReplayOracle then
-            replayVisit = renderReplayOracle:beforeComponent(
-                context.renderReplayCensus, logicalPath,
-                token, token.render, props)
-        end
-        local rendered = self:_withOwnerRender(token.name, token, logicalPath,
-            context, token.render, props)
-        if renderReplayOracle then
-            renderReplayOracle:afterComponent(
-                context.renderReplayCensus, replayVisit,
-                context.hookOwners[logicalPath], rendered)
+        if not reused then
+            pipelineBefore = pipelineProbe and collectgarbage("count") or nil
+            local preparationStarted = profiler and profiler:start() or nil
+            local props = shallowCopy(descriptor.props)
+            props.children = descriptor.children
+            if profiler then
+                profiler:finish("semanticPreparation", preparationStarted)
+            end
+            if pipelineProbe then
+                recordPipelineAllocation(pipelineProbe,
+                    "pipelinePreparationCalls",
+                    "pipelinePreparationAllocatedKB", pipelineBefore)
+            end
+            local replayVisit
+            local renderReplayOracle = rawget(self, "_renderReplayOracle")
+            if renderReplayOracle then
+                replayVisit = renderReplayOracle:beforeComponent(
+                    context.renderReplayCensus, logicalPath,
+                    token, token.render, props)
+            end
+            rendered = self:_withOwnerRender(token.name, token, logicalPath,
+                context, token.render, props)
+            if renderReplayOracle then
+                renderReplayOracle:afterComponent(
+                    context.renderReplayCensus, replayVisit,
+                    context.hookOwners[logicalPath], rendered)
+            end
+            if context.actorLocalCandidate then
+                self:_recordSemanticOutput(descriptor, logicalPath, token,
+                    token.render, rendered, context)
+            end
         end
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         local bookkeepingStarted = profiler and profiler:start() or nil
@@ -3019,8 +3196,16 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 "pipelineBookkeepingCalls",
                 "pipelineBookkeepingAllocatedKB", pipelineBefore)
         end
-        local resolved = self:_resolve(rendered, token.name, outputPath, path,
-            context, logicalOutputPath(logicalPath, rendered, identityProbe))
+        local outputLogicalPath =
+            logicalOutputPath(logicalPath, rendered, identityProbe)
+        local resolved
+        if context.actorLocalCandidate then
+            resolved = self:_resolveSemanticOutput(rendered, token.name,
+                outputPath, path, context, outputLogicalPath, not reused)
+        else
+            resolved = self:_resolve(rendered, token.name, outputPath, path,
+                context, outputLogicalPath)
+        end
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         bookkeepingStarted = profiler and profiler:start() or nil
         if resolved then
@@ -3753,6 +3938,12 @@ function host:_build(root)
         context.renderReplayCensus = renderReplayOracle:beginCandidate(
             self._viewport:snapshot())
     end
+    local actorLocal = rawget(self, "_actorLocalPrototype")
+    if actorLocal then
+        context.actorLocalCandidate = actorLocal:beginCandidate(
+            rawget(self, "_actorLocalDirtyActors"))
+        context.forceSemanticRender = false
+    end
     local function buildCandidate()
         local expansionStarted = self._diagnostics:start()
         local pipelineBefore = pipelineProbe
@@ -4391,7 +4582,7 @@ function host:_applyTransition(instance, spec, record, origin)
     return true, changed
 end
 
-function host:_processAction(entry)
+function host:_processAction(entry, trackActorChanges)
     local record, token = Message.validate(entry.record, "action")
     local instance = self:_resolveTarget(entry.target)
     assert(instance.token.definition.actions[token] ~= nil,
@@ -4422,14 +4613,17 @@ function host:_processAction(entry)
         } },
         reconciled = false,
     })
-    return changed, traceIndex
+    local changedIdentity = trackActorChanges and changed
+        and instance.identity or nil
+    return changed, traceIndex, changedIdentity
 end
 
-function host:_processEvent(entry)
+function host:_processEvent(entry, trackActorChanges)
     local record, token = Message.validate(entry.record, "event")
     local recipients = {}
     local transitions = {}
     local changed = false
+    local changedActors = trackActorChanges and {} or nil
     for _, receiver in ipairs(orderedEventReceivers(self._actors, self._motions)) do
         local instance = receiver.instance
         for _, reaction in ipairs(instance.reactions) do
@@ -4452,6 +4646,9 @@ function host:_processEvent(entry)
                         accepted = accepted,
                         changed = didChange,
                     }
+                    if didChange and changedActors then
+                        changedActors[instance.identity] = true
+                    end
                     changed = changed or didChange
                 else
                     local recipient = "juice:" .. instance.identity
@@ -4481,11 +4678,14 @@ function host:_processEvent(entry)
         transitions = transitions,
         reconciled = false,
     })
-    return changed, traceIndex
+    return changed, traceIndex, changedActors
 end
 
 function host:_drainMessages(budget)
     local dirty = false
+    local trackActorChanges =
+        rawget(self, "_actorLocalPrototype") ~= nil
+    local dirtyActors = trackActorChanges and {} or nil
     local profiling = self._diagnostics.enabled
     budget = budget or { processed = 0 }
     local lastTraceIndex
@@ -4494,10 +4694,21 @@ function host:_drainMessages(budget)
         assert(budget.processed <= self._messageLoopLimit,
             "FrogUI message loop exceeded " .. self._messageLoopLimit .. " deliveries")
         local entry = table.remove(self._messageQueue, 1)
-        local changed, traceIndex
+        local changed, traceIndex, changedOwner
         local processingStarted = profiling and self._diagnostics:start() or nil
-        if entry.kind == "action" then changed, traceIndex = self:_processAction(entry)
-        else changed, traceIndex = self:_processEvent(entry) end
+        if entry.kind == "action" then
+            changed, traceIndex, changedOwner = self:_processAction(
+                entry, trackActorChanges)
+            if changedOwner then dirtyActors[changedOwner] = true end
+        else
+            changed, traceIndex, changedOwner = self:_processEvent(
+                entry, trackActorChanges)
+            if changedOwner then
+                for identity in pairs(changedOwner) do
+                    dirtyActors[identity] = true
+                end
+            end
+        end
         if profiling then
             local phase = entry.kind == "action"
                     and "actionProcessing" or "eventProcessing"
@@ -4512,7 +4723,24 @@ function host:_drainMessages(budget)
         dirty = dirty or changed
         lastTraceIndex = traceIndex or lastTraceIndex
     end
-    return dirty, lastTraceIndex
+    return dirty, lastTraceIndex, dirtyActors
+end
+
+-- Runs one opt-in actor-local semantic candidate while guaranteeing the dirty
+-- batch cannot leak into a later explicit render after failure.
+function host:_renderActorChanges(dirtyActors)
+    assert(rawget(self, "_actorLocalPrototype"),
+        "actor-local render requires its attached prototype")
+    assert(next(dirtyActors or {}) ~= nil,
+        "actor-local render requires at least one changed actor")
+    assert(rawget(self, "_actorLocalDirtyActors") == nil,
+        "nested actor-local render batch")
+    self._actorLocalDirtyActors = dirtyActors
+    local results = { pcall(self.render, self) }
+    self._actorLocalDirtyActors = nil
+    if not results[1] then error(results[2], 0) end
+    table.remove(results, 1)
+    return unpack(results)
 end
 
 function host:_runCallback(callback, origin, originSource, ...)
@@ -4541,7 +4769,7 @@ function host:_runCallback(callback, origin, originSource, ...)
         local settled = false
         while not settled do
             local deliveryStarted = self._diagnostics:start()
-            local ok, dirty, traceIndex = pcall(
+            local ok, dirty, traceIndex, dirtyActors = pcall(
                 self._drainMessages, self, budget)
             self._diagnostics:finish("messageDelivery", deliveryStarted)
             if not ok then
@@ -4549,7 +4777,13 @@ function host:_runCallback(callback, origin, originSource, ...)
                 break
             end
             if dirty then
-                local rendered, renderError = pcall(self.render, self)
+                local rendered, renderError
+                if rawget(self, "_actorLocalPrototype") then
+                    rendered, renderError = pcall(
+                        self._renderActorChanges, self, dirtyActors)
+                else
+                    rendered, renderError = pcall(self.render, self)
+                end
                 if not rendered then
                     results = { false, renderError }
                     break
@@ -5224,6 +5458,12 @@ function host:unmount()
         renderReplayOracle:reset()
         self._renderReplayOracle = nil
     end
+    local actorLocal = rawget(self, "_actorLocalPrototype")
+    if actorLocal then
+        actorLocal:reset()
+        self._actorLocalPrototype = nil
+    end
+    self._actorLocalDirtyActors = nil
     self._mounted = false
     if activeHost == self then activeHost = nil end
     local resourceError = self:_commitResourceDisposals()
