@@ -421,31 +421,26 @@ local function cloneInstance(old, allocationProbe)
     local collectionBefore = allocationProbe
         and collectgarbage("count") or nil
     instance.recipes = {}
-    instance.bindingKeys = {}
     instance.active = {}
     instance.motionTargets = {}
-    instance.pendingCompletions = {}
-    instance.latestStarts = {}
     recordReconciliationAllocation(allocationProbe,
         "pipelineMotionCloneCollectionCalls",
         "pipelineMotionCloneCollectionAllocatedKB", collectionBefore)
     local recipeBefore = allocationProbe and collectgarbage("count") or nil
     for name, binding in pairs(old.recipes) do
-        instance.recipes[name] = {
-            recipe = binding.recipe,
-            key = binding.key,
-            onComplete = binding.onComplete,
-        }
+        if name:sub(1, 8) == "$motion:" then
+            instance.recipes[name] = binding
+        end
     end
     recordReconciliationAllocation(allocationProbe,
         "pipelineMotionCloneRecipeCalls",
         "pipelineMotionCloneRecipeAllocatedKB", recipeBefore)
     local indexBefore = allocationProbe and collectgarbage("count") or nil
-    for name, key in pairs(old.bindingKeys) do
-        instance.bindingKeys[name] = key
-    end
-    for name, order in pairs(old.latestStarts or {}) do
-        instance.latestStarts[name] = order
+    if old.latestStarts then
+        instance.latestStarts = {}
+        for name, order in pairs(old.latestStarts) do
+            instance.latestStarts[name] = order
+        end
     end
     recordReconciliationAllocation(allocationProbe,
         "pipelineMotionCloneIndexCalls",
@@ -459,11 +454,14 @@ local function cloneInstance(old, allocationProbe)
         "pipelineMotionCloneRunnerAllocatedKB", runnerBefore)
     local completionBefore = allocationProbe
         and collectgarbage("count") or nil
-    for name, pending in pairs(old.pendingCompletions or {}) do
-        instance.pendingCompletions[name] = {
-            key = pending.key,
-            order = pending.order,
-        }
+    if old.pendingCompletions then
+        instance.pendingCompletions = {}
+        for name, pending in pairs(old.pendingCompletions) do
+            instance.pendingCompletions[name] = {
+                key = pending.key,
+                order = pending.order,
+            }
+        end
     end
     recordReconciliationAllocation(allocationProbe,
         "pipelineMotionCloneCompletionCalls",
@@ -481,7 +479,6 @@ end
 -- Counts retained Motion collections without allocating diagnostic tables.
 local MOTION_COLLECTION_PROBE_FIELDS = {
     { "recipes", "pipelineMotionRecipeEntries" },
-    { "bindingKeys", "pipelineMotionBindingEntries" },
     { "active", "pipelineMotionActiveEntries" },
     { "motionTargets", "pipelineMotionTargetEntries" },
     { "pendingCompletions", "pipelineMotionPendingEntries" },
@@ -491,8 +488,11 @@ local MOTION_COLLECTION_PROBE_FIELDS = {
 local function countMotionCollections(probe, old)
     if not probe or not old then return end
     for _, field in ipairs(MOTION_COLLECTION_PROBE_FIELDS) do
-        for _ in pairs(old[field[1]] or {}) do
-            probe[field[2]] = probe[field[2]] + 1
+        local collection = old[field[1]]
+        if collection then
+            for _ in pairs(collection) do
+                probe[field[2]] = probe[field[2]] + 1
+            end
         end
     end
 end
@@ -584,8 +584,15 @@ local function start(instance, name, host)
         clockKind = binding.recipe.kind == "with_clock" and "explicit" or "raw",
         bindingKey = binding.key,
     }
-    instance.latestStarts[name] = runner.order
-    instance.pendingCompletions[name] = nil
+    if binding.onComplete then
+        instance.latestStarts = instance.latestStarts or {}
+        instance.latestStarts[name] = runner.order
+    elseif instance.latestStarts then
+        instance.latestStarts[name] = nil
+    end
+    if instance.pendingCompletions then
+        instance.pendingCompletions[name] = nil
+    end
     if host.reducedMotion then
         emitAllFeedback(recipe, host)
         local result = finalValues(recipe, runner.base)
@@ -594,6 +601,8 @@ local function start(instance, name, host)
         end
         instance.values = copyValues(instance.settled)
         if binding.onComplete then
+            instance.pendingCompletions =
+                instance.pendingCompletions or {}
             instance.pendingCompletions[name] = {
                 key = binding.key,
                 order = runner.order,
@@ -690,8 +699,7 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host,
             identity = logicalIdentity,
             values = copyValues(),
             settled = copyValues(),
-            recipes = {}, bindingKeys = {}, active = {}, motionTargets = {},
-            lifetime = {}, pendingCompletions = {}, latestStarts = {},
+            recipes = {}, active = {}, motionTargets = {}, lifetime = {},
         }
         recordReconciliationAllocation(allocationProbe,
             "pipelineMotionCloneInitialCalls",
@@ -743,15 +751,20 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host,
         "pipelineMotionRecipeParseCalls",
         "pipelineMotionRecipeParseAllocatedKB", parseBefore)
     local cleanupBefore = allocationProbe and collectgarbage("count") or nil
-    for name in pairs(instance.recipes) do
-        if not nextRecipes[name] and name:sub(1, 8) ~= "$motion:" then
-            instance.active[name] = nil
-            instance.bindingKeys[name] = nil
-            instance.pendingCompletions[name] = nil
-            instance.latestStarts[name] = nil
-            if allocationProbe then
-                allocationProbe.pipelineMotionRemovedRecipes =
-                    allocationProbe.pipelineMotionRemovedRecipes + 1
+    if compatible then
+        for name in pairs(old.recipes) do
+            if not nextRecipes[name] and name:sub(1, 8) ~= "$motion:" then
+                instance.active[name] = nil
+                if instance.pendingCompletions then
+                    instance.pendingCompletions[name] = nil
+                end
+                if instance.latestStarts then
+                    instance.latestStarts[name] = nil
+                end
+                if allocationProbe then
+                    allocationProbe.pipelineMotionRemovedRecipes =
+                        allocationProbe.pipelineMotionRemovedRecipes + 1
+                end
             end
         end
     end
@@ -761,11 +774,10 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host,
     local bindingBefore = allocationProbe and collectgarbage("count") or nil
     for _, name in ipairs(sortedKeys(nextRecipes)) do
         local binding = nextRecipes[name]
+        local previous = compatible and old.recipes[name] or nil
         instance.recipes[name] = binding
-        if binding.key == nil then
-            instance.bindingKeys[name] = nil
-        elseif instance.bindingKeys[name] ~= binding.key then
-            instance.bindingKeys[name] = binding.key
+        if binding.key ~= nil
+                and (not previous or previous.key ~= binding.key) then
             start(instance, name, host)
             if allocationProbe then
                 allocationProbe.pipelineMotionKeyStarts =
@@ -956,21 +968,24 @@ function motion.updateAll(instances, host)
         return left.eventOrder < right.eventOrder
     end)
     for _, instance in ipairs(orderedInstances) do
-        for name, pending in pairs(instance.pendingCompletions or {}) do
-            local binding = instance.recipes[name]
-            if binding and binding.onComplete
-                    and binding.key == pending.key then
-                completions[#completions + 1] = {
-                    callback = binding.onComplete,
-                    identity = instance.identity,
-                    lifetime = instance.lifetime,
-                    name = name,
-                    key = pending.key,
-                    order = pending.order,
-                    source = instance.source,
-                }
+        local pendingCompletions = instance.pendingCompletions
+        if pendingCompletions then
+            for name, pending in pairs(pendingCompletions) do
+                local binding = instance.recipes[name]
+                if binding and binding.onComplete
+                        and binding.key == pending.key then
+                    completions[#completions + 1] = {
+                        callback = binding.onComplete,
+                        identity = instance.identity,
+                        lifetime = instance.lifetime,
+                        name = name,
+                        key = pending.key,
+                        order = pending.order,
+                        source = instance.source,
+                    }
+                end
             end
-            instance.pendingCompletions[name] = nil
+            instance.pendingCompletions = nil
         end
         -- Most mounted juice owners are idle most of the time. Pending
         -- completions above still deliver, but an idle owner does not need a
@@ -996,6 +1011,7 @@ function motion.completionIsMounted(instances, completion)
     local binding = instance.recipes[completion.name]
     return binding ~= nil
         and binding.key == completion.key
+        and instance.latestStarts ~= nil
         and instance.latestStarts[completion.name] == completion.order
 end
 
