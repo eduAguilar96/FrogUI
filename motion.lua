@@ -378,6 +378,34 @@ local function cloneInstance(old)
     return instance
 end
 
+-- Records one stopped-collector interval in the private Battle probe.
+local function recordReconciliationAllocation(probe, callsField, kbField,
+        before)
+    if not probe then return end
+    probe[callsField] = probe[callsField] + 1
+    probe[kbField] = probe[kbField]
+        + collectgarbage("count") - before
+end
+
+-- Counts retained Motion collections without allocating diagnostic tables.
+local MOTION_COLLECTION_PROBE_FIELDS = {
+    { "recipes", "pipelineMotionRecipeEntries" },
+    { "bindingKeys", "pipelineMotionBindingEntries" },
+    { "active", "pipelineMotionActiveEntries" },
+    { "motionTargets", "pipelineMotionTargetEntries" },
+    { "pendingCompletions", "pipelineMotionPendingEntries" },
+    { "latestStarts", "pipelineMotionLatestEntries" },
+}
+
+local function countMotionCollections(probe, old)
+    if not probe or not old then return end
+    for _, field in ipairs(MOTION_COLLECTION_PROBE_FIELDS) do
+        for _ in pairs(old[field[1]] or {}) do
+            probe[field[2]] = probe[field[2]] + 1
+        end
+    end
+end
+
 local function validateClockPlacement(recipe, root)
     if recipe.kind == "with_clock" then
         assert(root,
@@ -551,15 +579,32 @@ local function reconcileMotionTargets(instance, props, host, firstMount)
 end
 
 -- Reconciles one mounted primitive without mutating the committed instance.
-function motion.reconcile(old, node, props, logicalIdentity, order, host)
+function motion.reconcile(old, node, props, logicalIdentity, order, host,
+        allocationProbe)
     local compatible = old and old.primitiveType == node.type
-    local instance = compatible and cloneInstance(old) or {
-        identity = logicalIdentity,
-        values = copyValues(),
-        settled = copyValues(),
-        recipes = {}, bindingKeys = {}, active = {}, motionTargets = {},
-        lifetime = {}, pendingCompletions = {}, latestStarts = {},
-    }
+    if allocationProbe then
+        local field = compatible and "pipelineMotionCompatibleCalls"
+            or "pipelineMotionFirstMountCalls"
+        allocationProbe[field] = allocationProbe[field] + 1
+        countMotionCollections(allocationProbe, compatible and old or nil)
+    end
+    local cloneBefore = allocationProbe and collectgarbage("count") or nil
+    local instance
+    if compatible then
+        instance = cloneInstance(old)
+    else
+        instance = {
+            identity = logicalIdentity,
+            values = copyValues(),
+            settled = copyValues(),
+            recipes = {}, bindingKeys = {}, active = {}, motionTargets = {},
+            lifetime = {}, pendingCompletions = {}, latestStarts = {},
+        }
+    end
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionCloneCalls", "pipelineMotionCloneAllocatedKB",
+        cloneBefore)
+    local setupBefore = allocationProbe and collectgarbage("count") or nil
     instance.identity = logicalIdentity
     instance.order = order
     instance.eventOrder = order
@@ -615,7 +660,15 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host)
         end
     end
     node._motion = instance
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionSetupCalls", "pipelineMotionSetupAllocatedKB",
+        setupBefore)
+    local presentationBefore = allocationProbe
+        and collectgarbage("count") or nil
     node.presentation = copyValues(instance.values)
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionPresentationCalls",
+        "pipelineMotionPresentationAllocatedKB", presentationBefore)
     return instance
 end
 

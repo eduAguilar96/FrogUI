@@ -1546,6 +1546,28 @@ local function resetAllocationProbe(probe)
     probe.pipelineValidationSnapshotAllocatedKB = 0
     probe.pipelineReconciliationCalls = 0
     probe.pipelineReconciliationAllocatedKB = 0
+    probe.pipelineMotionReconciliationCalls = 0
+    probe.pipelineMotionReconciliationAllocatedKB = 0
+    probe.pipelineScrollReconciliationCalls = 0
+    probe.pipelineScrollReconciliationAllocatedKB = 0
+    probe.pipelineRadialReconciliationCalls = 0
+    probe.pipelineRadialReconciliationAllocatedKB = 0
+    probe.pipelineEffectReconciliationCalls = 0
+    probe.pipelineEffectReconciliationAllocatedKB = 0
+    probe.pipelineMotionCompatibleCalls = 0
+    probe.pipelineMotionFirstMountCalls = 0
+    probe.pipelineMotionCloneCalls = 0
+    probe.pipelineMotionCloneAllocatedKB = 0
+    probe.pipelineMotionSetupCalls = 0
+    probe.pipelineMotionSetupAllocatedKB = 0
+    probe.pipelineMotionPresentationCalls = 0
+    probe.pipelineMotionPresentationAllocatedKB = 0
+    probe.pipelineMotionRecipeEntries = 0
+    probe.pipelineMotionBindingEntries = 0
+    probe.pipelineMotionActiveEntries = 0
+    probe.pipelineMotionTargetEntries = 0
+    probe.pipelineMotionPendingEntries = 0
+    probe.pipelineMotionLatestEntries = 0
     probe.pipelinePostValidationCalls = 0
     probe.pipelinePostValidationAllocatedKB = 0
     probe.pipelinePostResolutionCalls = 0
@@ -1842,6 +1864,36 @@ function host:_readValidationAllocationProbe()
         probe.pipelineValidationAcceptedListAllocatedKB,
         probe.pipelineValidationSnapshotCalls,
         probe.pipelineValidationSnapshotAllocatedKB
+end
+
+-- Returns the disjoint retained-instance families plus Motion's internal
+-- clone/setup/presentation partition. This is private allocation evidence.
+function host:_readReconciliationAllocationProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no reconciliation allocation probe to read")
+    return probe.pipelineMotionReconciliationCalls,
+        probe.pipelineMotionReconciliationAllocatedKB,
+        probe.pipelineScrollReconciliationCalls,
+        probe.pipelineScrollReconciliationAllocatedKB,
+        probe.pipelineRadialReconciliationCalls,
+        probe.pipelineRadialReconciliationAllocatedKB,
+        probe.pipelineEffectReconciliationCalls,
+        probe.pipelineEffectReconciliationAllocatedKB,
+        probe.pipelineMotionCompatibleCalls,
+        probe.pipelineMotionFirstMountCalls,
+        probe.pipelineMotionCloneCalls,
+        probe.pipelineMotionCloneAllocatedKB,
+        probe.pipelineMotionSetupCalls,
+        probe.pipelineMotionSetupAllocatedKB,
+        probe.pipelineMotionPresentationCalls,
+        probe.pipelineMotionPresentationAllocatedKB,
+        probe.pipelineMotionRecipeEntries,
+        probe.pipelineMotionBindingEntries,
+        probe.pipelineMotionActiveEntries,
+        probe.pipelineMotionTargetEntries,
+        probe.pipelineMotionPendingEntries,
+        probe.pipelineMotionLatestEntries
 end
 
 -- Returns the candidate-transform child partition without requiring callers
@@ -3371,8 +3423,14 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         and collectgarbage("count") or nil
     if token.name == "Scroll" then
         local started = profiler and profiler:start() or nil
+        local detailBefore = pipelineProbe and collectgarbage("count") or nil
         local instance = Interaction.reconcileScroll(
             self._scrolls[logicalPath], node, node.props, logicalPath)
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineScrollReconciliationCalls",
+                "pipelineScrollReconciliationAllocatedKB", detailBefore)
+        end
         context.scrolls[logicalPath] = instance
         if profiler then
             profiler:increment("scrollReconciliations")
@@ -3381,9 +3439,15 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     end
     if token.name == "RadialDial" then
         local started = profiler and profiler:start() or nil
+        local detailBefore = pipelineProbe and collectgarbage("count") or nil
         local instance = Interaction.reconcileRadialDial(
             self._radials[logicalPath], node, node.props, logicalPath,
             self.reducedMotion)
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineRadialReconciliationCalls",
+                "pipelineRadialReconciliationAllocatedKB", detailBefore)
+        end
         context.radials[logicalPath] = instance
         if profiler then
             profiler:increment("radialReconciliations")
@@ -3393,8 +3457,15 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     if token.name == "Motion" or descriptor.props.juice
             or descriptor.props.reactions then
         local started = profiler and profiler:start() or nil
+        local detailBefore = pipelineProbe and collectgarbage("count") or nil
         local instance = Motion.reconcile(self._motions[logicalPath], node,
-            node.props, logicalPath, context.nextReceiverOrder, self)
+            node.props, logicalPath, context.nextReceiverOrder, self,
+            pipelineProbe)
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineMotionReconciliationCalls",
+                "pipelineMotionReconciliationAllocatedKB", detailBefore)
+        end
         context.nextReceiverOrder = context.nextReceiverOrder + 1
         context.motions[logicalPath] = instance
         if profiler then
@@ -3404,8 +3475,14 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     end
     if token.name == "Projectile" or token.name == "Flipbook" then
         local started = profiler and profiler:start() or nil
+        local detailBefore = pipelineProbe and collectgarbage("count") or nil
         local instance = Effect.reconcile(self._effects[logicalPath], node,
             logicalPath, context.nextEffectOrder, self)
+        if pipelineProbe then
+            recordPipelineAllocation(pipelineProbe,
+                "pipelineEffectReconciliationCalls",
+                "pipelineEffectReconciliationAllocatedKB", detailBefore)
+        end
         context.nextEffectOrder = context.nextEffectOrder + 1
         context.effects[logicalPath] = instance
         if profiler then
