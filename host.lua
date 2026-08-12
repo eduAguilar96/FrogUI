@@ -1562,6 +1562,21 @@ local function resetAllocationProbe(probe)
     probe.pipelineMotionSetupAllocatedKB = 0
     probe.pipelineMotionPresentationCalls = 0
     probe.pipelineMotionPresentationAllocatedKB = 0
+    probe.pipelineMotionRecipeParseCalls = 0
+    probe.pipelineMotionRecipeParseAllocatedKB = 0
+    probe.pipelineMotionDeclaredRecipeEntries = 0
+    probe.pipelineMotionCleanupCalls = 0
+    probe.pipelineMotionCleanupAllocatedKB = 0
+    probe.pipelineMotionRemovedRecipes = 0
+    probe.pipelineMotionBindingCalls = 0
+    probe.pipelineMotionBindingAllocatedKB = 0
+    probe.pipelineMotionKeyStarts = 0
+    probe.pipelineMotionReactionCalls = 0
+    probe.pipelineMotionReactionAllocatedKB = 0
+    probe.pipelineMotionReactionEntries = 0
+    probe.pipelineMotionTargetCalls = 0
+    probe.pipelineMotionTargetAllocatedKB = 0
+    probe.pipelineMotionTargetChangedCalls = 0
     probe.pipelineMotionRecipeEntries = 0
     probe.pipelineMotionBindingEntries = 0
     probe.pipelineMotionActiveEntries = 0
@@ -1888,6 +1903,21 @@ function host:_readReconciliationAllocationProbe()
         probe.pipelineMotionSetupAllocatedKB,
         probe.pipelineMotionPresentationCalls,
         probe.pipelineMotionPresentationAllocatedKB,
+        probe.pipelineMotionRecipeParseCalls,
+        probe.pipelineMotionRecipeParseAllocatedKB,
+        probe.pipelineMotionDeclaredRecipeEntries,
+        probe.pipelineMotionCleanupCalls,
+        probe.pipelineMotionCleanupAllocatedKB,
+        probe.pipelineMotionRemovedRecipes,
+        probe.pipelineMotionBindingCalls,
+        probe.pipelineMotionBindingAllocatedKB,
+        probe.pipelineMotionKeyStarts,
+        probe.pipelineMotionReactionCalls,
+        probe.pipelineMotionReactionAllocatedKB,
+        probe.pipelineMotionReactionEntries,
+        probe.pipelineMotionTargetCalls,
+        probe.pipelineMotionTargetAllocatedKB,
+        probe.pipelineMotionTargetChangedCalls,
         probe.pipelineMotionRecipeEntries,
         probe.pipelineMotionBindingEntries,
         probe.pipelineMotionActiveEntries,

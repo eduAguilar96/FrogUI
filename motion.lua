@@ -672,23 +672,50 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host,
     -- before keyed recipes snapshot `instance.values`; compatible rerenders
     -- deliberately keep recipe restart-before-target reconciliation semantics.
     if ownsMotionTargets(node) and not compatible then
-        reconcileMotionTargets(instance, props, host, true)
+        local targetBefore = allocationProbe
+            and collectgarbage("count") or nil
+        local targetsChanged = reconcileMotionTargets(
+            instance, props, host, true)
+        if allocationProbe and targetsChanged then
+            allocationProbe.pipelineMotionTargetChangedCalls =
+                allocationProbe.pipelineMotionTargetChangedCalls + 1
+        end
+        recordReconciliationAllocation(allocationProbe,
+            "pipelineMotionTargetCalls",
+            "pipelineMotionTargetAllocatedKB", targetBefore)
     end
 
+    local parseBefore = allocationProbe and collectgarbage("count") or nil
     local nextRecipes = {}
     for name, value in pairs(props.juice or {}) do
         assert(type(name) == "string" and name ~= "",
             "juice recipe names must be non-empty strings")
         nextRecipes[name] = parseBinding(name, value)
+        if allocationProbe then
+            allocationProbe.pipelineMotionDeclaredRecipeEntries =
+                allocationProbe.pipelineMotionDeclaredRecipeEntries + 1
+        end
     end
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionRecipeParseCalls",
+        "pipelineMotionRecipeParseAllocatedKB", parseBefore)
+    local cleanupBefore = allocationProbe and collectgarbage("count") or nil
     for name in pairs(instance.recipes) do
         if not nextRecipes[name] and name:sub(1, 8) ~= "$motion:" then
             instance.active[name] = nil
             instance.bindingKeys[name] = nil
             instance.pendingCompletions[name] = nil
             instance.latestStarts[name] = nil
+            if allocationProbe then
+                allocationProbe.pipelineMotionRemovedRecipes =
+                    allocationProbe.pipelineMotionRemovedRecipes + 1
+            end
         end
     end
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionCleanupCalls",
+        "pipelineMotionCleanupAllocatedKB", cleanupBefore)
+    local bindingBefore = allocationProbe and collectgarbage("count") or nil
     for _, name in ipairs(sortedKeys(nextRecipes)) do
         local binding = nextRecipes[name]
         instance.recipes[name] = binding
@@ -697,17 +724,41 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host,
         elseif instance.bindingKeys[name] ~= binding.key then
             instance.bindingKeys[name] = binding.key
             start(instance, name, host)
+            if allocationProbe then
+                allocationProbe.pipelineMotionKeyStarts =
+                    allocationProbe.pipelineMotionKeyStarts + 1
+            end
         end
     end
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionBindingCalls",
+        "pipelineMotionBindingAllocatedKB", bindingBefore)
+    local reactionBefore = allocationProbe and collectgarbage("count") or nil
     for index, reaction in ipairs(instance.reactions) do
         local recipeName = reaction.do_ and reaction.do_.name
         assert(recipeName and instance.recipes[recipeName],
             node.type .. " reaction " .. index .. " plays undeclared juice recipe "
                 .. tostring(recipeName))
+        if allocationProbe then
+            allocationProbe.pipelineMotionReactionEntries =
+                allocationProbe.pipelineMotionReactionEntries + 1
+        end
     end
+    recordReconciliationAllocation(allocationProbe,
+        "pipelineMotionReactionCalls",
+        "pipelineMotionReactionAllocatedKB", reactionBefore)
     if ownsMotionTargets(node) and compatible then
+        local targetBefore = allocationProbe
+            and collectgarbage("count") or nil
         local targetsChanged = reconcileMotionTargets(instance, props, host,
             false)
+        if allocationProbe and targetsChanged then
+            allocationProbe.pipelineMotionTargetChangedCalls =
+                allocationProbe.pipelineMotionTargetChangedCalls + 1
+        end
+        recordReconciliationAllocation(allocationProbe,
+            "pipelineMotionTargetCalls",
+            "pipelineMotionTargetAllocatedKB", targetBefore)
         if targetsChanged and composeActive then
             instance.values = composeActive(instance)
         end
