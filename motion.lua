@@ -10,6 +10,7 @@ local composeActive
 local DEFAULT_VALUES = {
     x = 0, y = 0, rotation = 0, scale = 1, opacity = 1,
 }
+local DEFAULT_COLOR = { 1, 1, 1, 1 }
 local MOTION_TARGET_NAMES = {
     "x", "y", "rotation", "scale", "opacity", "tint",
 }
@@ -51,22 +52,35 @@ local function finite(value)
         and value > -math.huge and value < math.huge
 end
 
-local function copyColor(value)
+local function copyColorInto(out, value)
     if value == nil then return nil end
-    return {
-        value[1] or value.r, value[2] or value.g, value[3] or value.b,
-        value[4] or value.a or 1,
-    }
+    out = out or {}
+    out[1] = value[1] or value.r
+    out[2] = value[2] or value.g
+    out[3] = value[3] or value.b
+    out[4] = value[4] or value.a or 1
+    return out
 end
 
-local function copyValues(values)
-    local out = {}
+local function copyColor(value)
+    return copyColorInto(nil, value)
+end
+
+-- Copies the fixed presentation record into caller-owned storage. Runtime
+-- sampling reuses this path so transient animation values never escape their
+-- retained Motion owner.
+local function copyValuesInto(out, values)
+    out = out or {}
     for name, fallback in pairs(DEFAULT_VALUES) do
         local value = values and values[name]
         out[name] = value == nil and fallback or value
     end
-    out.tint = copyColor(values and values.tint)
+    out.tint = copyColorInto(out.tint, values and values.tint)
     return out
+end
+
+local function copyValues(values)
+    return copyValuesInto({}, values)
 end
 
 -- Publishes one fixed Motion transform without manufacturing retained recipe,
@@ -117,6 +131,14 @@ local function setValue(values, name, value)
     values[name] = name == "tint" and copyColor(value) or value
 end
 
+local function setBufferedValue(values, name, value)
+    if name == "tint" then
+        values.tint = copyColorInto(values.tint, value)
+    else
+        values[name] = value
+    end
+end
+
 local function sameValues(left, right)
     for name in pairs(DEFAULT_VALUES) do
         if not sameValue(left[name], right[name]) then return false end
@@ -140,10 +162,13 @@ local function lerp(left, right, amount)
     return left + (right - left) * amount
 end
 
-local function lerpValue(left, right, amount)
-    if type(right) ~= "table" then return lerp(left, right, amount) end
-    left = left or { 1, 1, 1, 1 }
-    local out = {}
+local function lerpBufferedValue(values, name, left, right, amount)
+    if type(right) ~= "table" then
+        values[name] = lerp(left, right, amount)
+        return
+    end
+    left = left or DEFAULT_COLOR
+    local out = values[name] or {}
     for index = 1, 4 do
         local a = left[index]
         if a == nil and index == 4 then a = 1 end
@@ -151,7 +176,7 @@ local function lerpValue(left, right, amount)
         if b == nil and index == 4 then b = 1 end
         out[index] = lerp(a, b, amount)
     end
-    return out
+    values[name] = out
 end
 
 local function eased(name, amount)
@@ -236,28 +261,62 @@ local function diagnosticRecipe(name, recipe)
     }
 end
 
-local sample
-
-local function finalValues(recipe, base)
-    local total = duration(recipe)
-    if total == math.huge then return copyValues(base) end
-    return sample(recipe, total, base)
+-- Compiles immutable recipe facts once per retained runner. The authored
+-- recipe remains inert data; duration, child shape, and write ownership stay
+-- in a detached runtime record that can be shared by candidate runner clones.
+local function analyzeRecipe(recipe)
+    local analysis = {
+        recipe = recipe,
+        duration = duration(recipe),
+        written = writtenProperties(recipe),
+    }
+    local kind = recipe.kind
+    if kind == "sequence" or kind == "parallel" then
+        analysis.children = {}
+        for index, child in ipairs(recipe.recipes) do
+            analysis.children[index] = analyzeRecipe(child)
+        end
+    elseif kind == "loop" or kind == "with_clock" then
+        analysis.child = analyzeRecipe(recipe.recipe)
+    end
+    return analysis
 end
 
-sample = function(recipe, elapsed, base)
+local function scratchValues(scratch, depth)
+    local values = scratch[depth]
+    if not values then
+        values = copyValues()
+        scratch[depth] = values
+    end
+    return values
+end
+
+local sampleInto
+
+local function finalValuesInto(analysis, base, out, scratch, depth)
+    if analysis.duration == math.huge then
+        return copyValuesInto(out, base)
+    end
+    return sampleInto(analysis, analysis.duration, base, out, scratch, depth)
+end
+
+-- Evaluates into retained owner scratch. No returned table is published or
+-- retained outside that owner; callers copy only the fixed properties a recipe
+-- declares into committed presentation state.
+sampleInto = function(analysis, elapsed, base, out, scratch, depth)
+    local recipe = analysis.recipe
     local kind = recipe.kind
-    local values = copyValues(base)
+    local values = copyValuesInto(out, base)
     if kind == "tween" then
         local amount = recipe.duration == 0 and 1
             or math.min(1, math.max(0, elapsed / recipe.duration))
         amount = eased(recipe.ease, amount)
         for name, target in pairs(recipe.to) do
-            values[name] = lerpValue(values[name], target, amount)
+            lerpBufferedValue(values, name, values[name], target, amount)
         end
     elseif kind == "spring" then
-        local total = duration(recipe)
         local amount
-        if elapsed >= total then
+        if elapsed >= analysis.duration then
             amount = 1
         else
             local time = math.max(0, elapsed)
@@ -265,7 +324,7 @@ sample = function(recipe, elapsed, base)
             amount = 1 - decay * math.cos(recipe.frequency * time)
         end
         for name, target in pairs(recipe.to) do
-            values[name] = lerpValue(values[name], target, amount)
+            lerpBufferedValue(values, name, values[name], target, amount)
         end
     elseif kind == "shake" then
         if recipe.duration > 0 and elapsed < recipe.duration then
@@ -279,37 +338,40 @@ sample = function(recipe, elapsed, base)
         end
     elseif kind == "sequence" then
         local remaining = math.max(0, elapsed)
-        for _, child in ipairs(recipe.recipes) do
-            local childDuration = duration(child)
-            if remaining < childDuration then
-                return sample(child, remaining, values)
+        for _, child in ipairs(analysis.children) do
+            if remaining < child.duration then
+                return sampleInto(child, remaining, values, values,
+                    scratch, depth)
             end
-            values = finalValues(child, values)
-            remaining = remaining - childDuration
+            finalValuesInto(child, values, values, scratch, depth)
+            remaining = remaining - child.duration
         end
     elseif kind == "parallel" then
-        for _, child in ipairs(recipe.recipes) do
-            local branch = sample(child, elapsed, base)
-            for name, mode in pairs(writtenProperties(child)) do
+        for _, child in ipairs(analysis.children) do
+            local branch = scratchValues(scratch, depth)
+            sampleInto(child, elapsed, base, branch, scratch, depth + 1)
+            for name, mode in pairs(child.written) do
                 if mode == "add" then
                     values[name] = values[name] + branch[name] - base[name]
                 else
-                    values[name] = name == "tint"
-                        and copyColor(branch[name]) or branch[name]
+                    setBufferedValue(values, name, branch[name])
                 end
             end
         end
     elseif kind == "loop" then
-        local childDuration = duration(recipe.recipe)
+        local child = analysis.child
+        local childDuration = child.duration
         local completed = math.floor(math.max(0, elapsed) / childDuration)
         if recipe.count then completed = math.min(completed, recipe.count) end
-        if completed > 0 then values = finalValues(recipe.recipe, values) end
+        if completed > 0 then
+            finalValuesInto(child, values, values, scratch, depth)
+        end
         if not recipe.count or completed < recipe.count then
             local localTime = math.max(0, elapsed) - completed * childDuration
-            values = sample(recipe.recipe, localTime, values)
+            sampleInto(child, localTime, values, values, scratch, depth)
         end
     elseif kind == "with_clock" then
-        values = sample(recipe.recipe, elapsed, values)
+        sampleInto(analysis.child, elapsed, values, values, scratch, depth)
     elseif kind ~= "delay" and kind ~= "sound" and kind ~= "haptic" then
         error("unknown FrogUI recipe kind " .. tostring(kind), 0)
     end
@@ -399,10 +461,14 @@ end
 local function cloneRunner(runner)
     return {
         recipe = runner.recipe,
+        analysis = runner.analysis,
         clock = runner.clock,
         startedAt = runner.startedAt,
         previous = runner.previous,
         base = copyValues(runner.base),
+        sampled = copyValues(),
+        sampleScratch = {},
+        feedbackBudget = { remaining = 1024 },
         order = runner.order,
         clockKind = runner.clockKind,
         bindingKey = runner.bindingKey,
@@ -590,10 +656,14 @@ local function start(instance, name, host)
     local recipe, clock = unwrap(binding.recipe, host._rawClock)
     local runner = {
         recipe = recipe,
+        analysis = analyzeRecipe(recipe),
         clock = clock,
         startedAt = clock:now(),
         previous = -1e-12,
         base = copyValues(instance.values),
+        sampled = copyValues(),
+        sampleScratch = {},
+        feedbackBudget = { remaining = 1024 },
         order = host:_nextMotionOrder(),
         clockKind = binding.recipe.kind == "with_clock" and "explicit" or "raw",
         bindingKey = binding.key,
@@ -609,11 +679,14 @@ local function start(instance, name, host)
     end
     if host.reducedMotion then
         emitAllFeedback(recipe, host)
-        local result = finalValues(recipe, runner.base)
-        for property, mode in pairs(writtenProperties(recipe)) do
-            if mode ~= "add" then setValue(instance.settled, property, result[property]) end
+        finalValuesInto(runner.analysis, runner.base, runner.sampled,
+            runner.sampleScratch, 1)
+        for property, mode in pairs(runner.analysis.written) do
+            if mode ~= "add" then
+                setValue(instance.settled, property, runner.sampled[property])
+            end
         end
-        instance.values = copyValues(instance.settled)
+        copyValuesInto(instance.values, instance.settled)
         if binding.onComplete then
             instance.pendingCompletions =
                 instance.pendingCompletions or {}
@@ -624,10 +697,13 @@ local function start(instance, name, host)
         end
         return
     end
-    emitFeedback(recipe, runner.previous, 0, host)
+    runner.feedbackBudget.remaining = 1024
+    emitFeedback(recipe, runner.previous, 0, host, nil,
+        runner.feedbackBudget)
     runner.previous = 0
     instance.active[name] = runner
-    instance.values = sample(recipe, 0, runner.base)
+    sampleInto(runner.analysis, 0, runner.base, instance.values,
+        runner.sampleScratch, 1)
 end
 
 local function reconcileMotionTargets(instance, props, host, firstMount)
@@ -871,8 +947,9 @@ local function runnerOrder(left, right)
 end
 
 local function applyRunner(values, runner, elapsed)
-    local sampled = sample(runner.recipe, elapsed, runner.base)
-    for property, mode in pairs(writtenProperties(runner.recipe)) do
+    local sampled = sampleInto(runner.analysis, elapsed, runner.base,
+        runner.sampled, runner.sampleScratch, 1)
+    for property, mode in pairs(runner.analysis.written) do
         if mode == "add" then
             values[property] = values[property] + sampled[property] - runner.base[property]
         else
@@ -940,10 +1017,12 @@ local function updateActive(instance, host, completions, attribution,
         local runner = entry.runner
         local elapsed = runner.clock:now() - runner.startedAt
         if elapsed < runner.previous then runner.previous = -1e-12 end
-        emitFeedback(runner.recipe, runner.previous, elapsed, host)
+        runner.feedbackBudget.remaining = 1024
+        emitFeedback(runner.recipe, runner.previous, elapsed, host, nil,
+            runner.feedbackBudget)
         applyRunner(values, runner, elapsed)
         runner.previous = elapsed
-        if elapsed >= duration(runner.recipe) then
+        if elapsed >= runner.analysis.duration then
             completed[#completed + 1] = entry
         end
         recordRuntimeAllocation(runtimeRow,
@@ -953,10 +1032,9 @@ local function updateActive(instance, host, completions, attribution,
     local completionBefore = runtimeRow and collectgarbage("count") or nil
     for _, entry in ipairs(completed) do
         local runner = entry.runner
-        local result = finalValues(runner.recipe, runner.base)
-        for property, mode in pairs(writtenProperties(runner.recipe)) do
+        for property, mode in pairs(runner.analysis.written) do
             if mode ~= "add" then
-                setValue(instance.settled, property, result[property])
+                setValue(instance.settled, property, runner.sampled[property])
             end
         end
         instance.active[entry.name] = nil

@@ -1806,6 +1806,18 @@ measured parent remainder is zero. Rebuilt frames repeat the same shape at
 implementation therefore targets recipe sampling first and keeps deterministic
 runner/completion order and candidate-isolated Motion state intact.
 
+The source-exact B4p.55 manifest is
+`build/frogui/battle-performance-20260812T071739Z-7171`. Retained runners now
+compile immutable duration/write metadata once and reuse private value,
+parallel-branch, and feedback-budget scratch. Late quiet Motion fell from
+41.283 to 10.767 KB/frame; its runner sampler fell from 30.430 to 0.002
+KB/frame. Rebuilt Motion fell from 39.293 to 16.062 KB/frame, with 5.831 KB of
+first-use runner scratch still visible. Complete late FrogUI allocation fell
+from 585.210 to 560.051 KB/frame (4.30%); paused and early remain flat because
+they carry almost no active Motion. Recipes remain inert immutable data,
+candidate runners remain isolated, and the complete Motion, feedback,
+completion, transform, and rollback contract passes unchanged.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.
