@@ -5287,10 +5287,10 @@ function host:_processAction(entry, trackActorChanges)
         kind = "action",
         token = token.name,
         origin = entry.origin,
-        source = {
-            token = deepCopy(token.source),
-            origin = deepCopy(entry.originSource),
-        },
+        tokenSourcePath = token.source and token.source.path or nil,
+        tokenSourceLine = token.source and token.source.line or nil,
+        originSourcePath = entry.originSource and entry.originSource.path or nil,
+        originSourceLine = entry.originSource and entry.originSource.line or nil,
         recipients = { recipient },
         statuses = { traceTransitionStatus(accepted, changed) },
         reconciled = false,
@@ -5392,10 +5392,10 @@ function host:_processEvent(entry, trackActorChanges)
         kind = "event",
         token = token.name,
         origin = entry.origin,
-        source = {
-            token = deepCopy(token.source),
-            origin = deepCopy(entry.originSource),
-        },
+        tokenSourcePath = token.source and token.source.path or nil,
+        tokenSourceLine = token.source and token.source.line or nil,
+        originSourcePath = entry.originSource and entry.originSource.path or nil,
+        originSourceLine = entry.originSource and entry.originSource.line or nil,
         recipients = recipients,
         statuses = statuses,
         reconciled = false,
@@ -6252,6 +6252,19 @@ function host:messageTrace()
     assert(self._mounted, "Host is not mounted")
     local output = deepCopy(self._messageTrace)
     for _, entry in ipairs(output) do
+        local tokenSource = entry.tokenSourcePath and {
+            path = entry.tokenSourcePath,
+            line = entry.tokenSourceLine,
+        } or nil
+        local originSource = entry.originSourcePath and {
+            path = entry.originSourcePath,
+            line = entry.originSourceLine,
+        } or nil
+        entry.tokenSourcePath = nil
+        entry.tokenSourceLine = nil
+        entry.originSourcePath = nil
+        entry.originSourceLine = nil
+        entry.source = { token = tokenSource, origin = originSource }
         local statuses = entry.statuses or {}
         local transitions = {}
         for index, recipient in ipairs(entry.recipients or {}) do

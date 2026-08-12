@@ -1933,6 +1933,14 @@ token during delivery. Accepted reducers remain independently detached.
 Complete late rebuilt delivery fell from 5.354 to 3.751 KB and late all-frame
 allocation fell from 516.264 to 515.542 KB/frame.
 
+The source-exact B4p.68 run is
+`build/frogui/battle-performance-20260812T084237Z-37339`. Retained trace
+provenance now stores the already-captured token/origin path and line as four
+private scalars; `messageTrace()` and F6 reconstruct the same detached nested
+source records on demand. Trace publication fell from 1.235 to 0.935 KB per
+late rebuilt frame and late all-frame allocation fell from 515.542 to 515.401
+KB/frame.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.
