@@ -4269,9 +4269,10 @@ function host:_resolveDeferred(node, context)
     return node
 end
 
--- Rejects detached effect leaves so every point has one coordinate owner.
--- EffectLayer child validation already prevents interactive descendants.
-local function validateEffectOwnership(node, insideLayer)
+-- Validates resolved effect ownership while building the exact receiver
+-- sequence in the same pre-layout walk. Both results remain candidate-local
+-- until one atomic Host publication.
+local function finalizeResolvedTree(node, insideLayer, nextOrder, receivers)
     if node.type == "PopupText" or node.type == "Projectile"
             or node.type == "Flipbook" then
         assert(insideLayer,
@@ -4280,14 +4281,6 @@ local function validateEffectOwnership(node, insideLayer)
         assert(not insideLayer, "Frog.EffectLayer cannot be nested")
         insideLayer = true
     end
-    for _, child in ipairs(node.children or {}) do
-        validateEffectOwnership(child, insideLayer)
-    end
-end
-
--- Builds the exact receiver sequence while assigning its committed traversal
--- order. Candidate publication makes the complete list visible atomically.
-local function assignEventOrder(node, nextOrder, receivers)
     for _, instance in ipairs(node._actorInstances or {}) do
         instance.eventOrder = nextOrder
         receivers[#receivers + 1] = instance
@@ -4299,7 +4292,8 @@ local function assignEventOrder(node, nextOrder, receivers)
         nextOrder = nextOrder + 1
     end
     for _, child in ipairs(node.children or {}) do
-        nextOrder = assignEventOrder(child, nextOrder, receivers)
+        nextOrder = finalizeResolvedTree(
+            child, insideLayer, nextOrder, receivers)
     end
     return nextOrder
 end
@@ -4686,11 +4680,10 @@ function host:_build(root)
         end
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         local ownershipStarted = self._diagnostics:start()
-        validateEffectOwnership(candidate, false)
+        local nextEventOrder = finalizeResolvedTree(
+            candidate, false, 1, context.eventReceivers)
         self._diagnostics:finish("effectOwnership", ownershipStarted)
         local orderingStarted = self._diagnostics:start()
-        local nextEventOrder = assignEventOrder(
-            candidate, 1, context.eventReceivers)
         local hiddenActors = {}
         for _, instance in pairs(context.actors) do
             hiddenActors[#hiddenActors + 1] = instance
