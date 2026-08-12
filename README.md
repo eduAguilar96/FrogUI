@@ -1671,6 +1671,14 @@ facts must be interpreted correctly: descriptor bytes are already inside the
 semantic total, while primitive materialization is disjoint and may be added to
 the semantic total.
 
+The diagnostics-only candidate comparison also reports an incremental-layout
+feasibility ceiling. It accepts only exact topology, stable values from
+FrogUI's closed layout-prop catalog, exact completed layout output, and branches
+outside Modal/Chrome, Scroll, RadialDial, and EffectLayer boundaries. It runs
+after the ordinary full layout and never skips or retains runtime work. Its
+`layout_reuse` rows are evidence for framework design, not a cache API or a
+claim that reuse has already happened.
+
 #### Current measured checkpoint
 
 B4p.12 closes the descriptor-normalization repair selected by B4p.11. The

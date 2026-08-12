@@ -82,18 +82,25 @@ local function copyCandidateComparisons(source)
             addedNodes = row.addedNodes,
             removedNodes = row.removedNodes,
             callbackUnknownObservations = row.callbackUnknownObservations,
+            layoutReuseStableInputNodes = row.layoutReuseStableInputNodes,
+            layoutReuseExactOutputNodes = row.layoutReuseExactOutputNodes,
+            layoutReuseBarrierNodes = row.layoutReuseBarrierNodes,
+            layoutReuseEligibleNodes = row.layoutReuseEligibleNodes,
+            layoutReuseBranchCount = row.layoutReuseBranchCount,
             stable = shallowCopy(row.stable),
             changed = shallowCopy(row.changed),
             unknown = shallowCopy(row.unknown),
             changedOwners = {},
             stableTopologyBranches = {},
             stableGeometryBranches = {},
+            layoutReuseBranches = {},
         }
         for category, owners in pairs(row.changedOwners or {}) do
             copy.changedOwners[category] = shallowCopy(owners)
         end
         for _, name in ipairs {
-                "stableTopologyBranches", "stableGeometryBranches" } do
+                "stableTopologyBranches", "stableGeometryBranches",
+                "layoutReuseBranches" } do
             for branchIndex, branch in ipairs(row[name] or {}) do
                 copy[name][branchIndex] = {
                     owner = branch.owner,

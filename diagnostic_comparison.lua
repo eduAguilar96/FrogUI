@@ -196,6 +196,27 @@ local function observeDiagnosticGeometry(previous, candidate)
     return "stable"
 end
 
+-- Compares only values owned by the two-pass layout result. Paint transforms
+-- are intentionally excluded: an unchanged layout may animate afterward.
+local function sameDiagnosticLayoutOutput(previous, candidate)
+    for _, name in ipairs {
+            "x", "y", "width", "height",
+            "contentX", "contentY", "contentWidth", "contentHeight",
+            "measuredWidth", "measuredHeight",
+            "_derivedWidth", "_derivedHeight",
+            "_resolvedFont", "_resolvedFontSize",
+            "_portal", "_portalLayout",
+        } do
+        if previous[name] ~= candidate[name] then return false end
+    end
+    for _, name in ipairs { "top", "right", "bottom", "left" } do
+        if (previous._padding or {})[name] ~= (candidate._padding or {})[name] then
+            return false
+        end
+    end
+    return true
+end
+
 local function sameDiagnosticSequence(previous, candidate, valueFor)
     if #previous ~= #candidate then return false end
     for index = 1, #previous do
@@ -338,6 +359,91 @@ local function stableDiagnosticBranches(candidateRoot, entries, category)
     return ranked
 end
 
+-- Estimates a deliberately conservative incremental-layout ceiling after the
+-- ordinary full candidate has already completed. Only the closed layout prop
+-- family may prove an input stable; callbacks and unrelated props are absent.
+-- This observer never makes a runtime choice.
+local LAYOUT_REUSE_BARRIER_TYPES = {
+    Scroll = true,
+    RadialDial = true,
+    EffectLayer = true,
+    Modal = true,
+    Chrome = true,
+}
+
+local function layoutReuseCensus(candidateRoot, entries)
+    local ranked, subtree = {}, {}
+    local stableInputNodes, exactOutputNodes, barrierNodes = 0, 0, 0
+
+    local function measure(node, belowBarrier)
+        local entry = entries[node.logicalIdentity]
+        local old = entry and entry.previous
+        local ownBarrier = belowBarrier
+            or LAYOUT_REUSE_BARRIER_TYPES[node.type] == true
+            or node._portal == true or node._portalLayout == true
+        if ownBarrier then barrierNodes = barrierNodes + 1 end
+        local exactInput = old ~= nil and entry.status
+            and entry.status.topology == "stable"
+            and entry.status.layout == "stable"
+        if exactInput then stableInputNodes = stableInputNodes + 1 end
+        local exactOutput = exactInput
+            and sameDiagnosticLayoutOutput(old.node, node)
+        if exactOutput then exactOutputNodes = exactOutputNodes + 1 end
+
+        local eligible = exactOutput and not ownBarrier
+        local nodes = 1
+        for _, child in ipairs(node.children or {}) do
+            local childEligible, childNodes = measure(child, ownBarrier)
+            eligible = eligible and childEligible
+            nodes = nodes + childNodes
+        end
+        if node._dragPreview then
+            local childEligible, childNodes = measure(
+                node._dragPreview, ownBarrier)
+            eligible = eligible and childEligible
+            nodes = nodes + childNodes
+        end
+        subtree[node.logicalIdentity] = { eligible = eligible, nodes = nodes }
+        return eligible, nodes
+    end
+    measure(candidateRoot, false)
+
+    local eligibleNodes, branchCount = 0, 0
+    local function collect(node, parentEligible)
+        local measured = subtree[node.logicalIdentity]
+        if measured.eligible and not parentEligible then
+            eligibleNodes = eligibleNodes + measured.nodes
+            branchCount = branchCount + 1
+            ranked[#ranked + 1] = {
+                owner = diagnosticOwner(node.owner),
+                logicalIdentity = node.logicalIdentity,
+                nodes = measured.nodes,
+            }
+        end
+        for _, child in ipairs(node.children or {}) do
+            collect(child, measured.eligible)
+        end
+        if node._dragPreview then
+            collect(node._dragPreview, measured.eligible)
+        end
+    end
+    collect(candidateRoot, false)
+    table.sort(ranked, function(left, right)
+        if left.nodes ~= right.nodes then return left.nodes > right.nodes end
+        if left.owner ~= right.owner then return left.owner < right.owner end
+        return left.logicalIdentity < right.logicalIdentity
+    end)
+    while #ranked > 5 do table.remove(ranked) end
+    return {
+        stableInputNodes = stableInputNodes,
+        exactOutputNodes = exactOutputNodes,
+        barrierNodes = barrierNodes,
+        eligibleNodes = eligibleNodes,
+        branchCount = branchCount,
+        branches = ranked,
+    }
+end
+
 -- Produces scalar post-hoc observations only. Equal results in this one build
 -- and viewport are upper bounds, not proof that any earlier pipeline phase was
 -- unnecessary or that a subtree can be retained safely.
@@ -375,6 +481,7 @@ function comparison.compare(previousRoot, candidateRoot)
             row.addedNodes = row.addedNodes + 1
         else
             row.matchedNodes = row.matchedNodes + 1
+            entry.previous = old
             local owner = diagnosticOwner(entry.node.owner)
             local status = {}
             status.physical = old.node.identity == entry.node.identity
@@ -427,6 +534,13 @@ function comparison.compare(previousRoot, candidateRoot)
         candidate, "topology")
     row.stableGeometryBranches = stableDiagnosticBranches(candidateRoot,
         candidate, "geometry")
+    local layoutReuse = layoutReuseCensus(candidateRoot, candidate)
+    row.layoutReuseStableInputNodes = layoutReuse.stableInputNodes
+    row.layoutReuseExactOutputNodes = layoutReuse.exactOutputNodes
+    row.layoutReuseBarrierNodes = layoutReuse.barrierNodes
+    row.layoutReuseEligibleNodes = layoutReuse.eligibleNodes
+    row.layoutReuseBranchCount = layoutReuse.branchCount
+    row.layoutReuseBranches = layoutReuse.branches
     return row
 end
 
