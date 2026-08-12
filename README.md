@@ -1516,6 +1516,11 @@ diagnostics-only observed recursion. Exact routing reads only the bounded
 pending Motion-instance set and then the selected subtrees; it performs no
 ancestor-discovery or full-tree routing pass. An ordinary run carries no
 observer tables or category maps.
+Static identity chains use their authoritative layout rectangles directly.
+Only nodes below a private transformed boundary retain mutable visual-bounds
+storage, and only a transformed clipping node retains transformed content
+bounds. Custom painters still receive detached rectangle values; this storage
+policy is invisible to component authors.
 Both one-shot methods require a mounted, operational, diagnostics-enabled Host
 at a quiet public boundary: never call them during update, draw, a component
 callback, or external input routing.

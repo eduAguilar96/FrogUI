@@ -1586,6 +1586,10 @@ local function resetAllocationProbe(probe)
     probe.pipelineDefaultIdentityShareNodes = 0
     probe.pipelineInverseMissingNodes = 0
     probe.pipelineDefaultInverseMissingNodes = 0
+    probe.pipelineWorldIdentityNodes = 0
+    probe.pipelineClipNodes = 0
+    probe.pipelineVisualBoundsRestEquivalentNodes = 0
+    probe.pipelineVisualContentBoundsRequiredNodes = 0
     probe.pipelineLayoutSessionCreated = 0
     probe.pipelineLayoutSessionAllocatedKB = 0
     probe.pipelineLayoutMeasurePhaseCalls = 0
@@ -1879,7 +1883,11 @@ function host:_readMatrixClassificationProbe()
         probe.pipelineDefaultParentShareNodes,
         probe.pipelineDefaultIdentityShareNodes,
         probe.pipelineInverseMissingNodes,
-        probe.pipelineDefaultInverseMissingNodes
+        probe.pipelineDefaultInverseMissingNodes,
+        probe.pipelineWorldIdentityNodes,
+        probe.pipelineClipNodes,
+        probe.pipelineVisualBoundsRestEquivalentNodes,
+        probe.pipelineVisualContentBoundsRequiredNodes
 end
 
 -- Returns disjoint candidate-layout phase totals plus exact retained/scratch

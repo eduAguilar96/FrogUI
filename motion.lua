@@ -914,6 +914,13 @@ local function matricesMatch(left, right)
         and left.tx == right.tx and left.ty == right.ty
 end
 
+-- Identifies primitives whose children can be visually clipped by this node.
+-- Only these nodes consume transformed content bounds during inspection.
+local function clipsChildren(node)
+    return node.type == "Scroll" or node.props.clip
+        or node.props.overflow == "clip"
+end
+
 local function noteDiagnosticTarget(observer, plane, node)
     if not observer.targets[node] then return false end
     local planeState = observer.planes[plane]
@@ -1050,6 +1057,28 @@ local function transformNodeGeometry(node, parent, parentInverse,
                 allocationProbe.pipelineDefaultInverseMissingNodes + 1
         end
     end
+    local staticIdentity = node._worldTransform == IDENTITY
+    local clipChildren = clipsChildren(node)
+    if allocationProbe then
+        local worldIdentity = matrixIsIdentity(node._worldTransform)
+        if worldIdentity then
+            allocationProbe.pipelineWorldIdentityNodes =
+                allocationProbe.pipelineWorldIdentityNodes + 1
+        end
+        if staticIdentity then
+            allocationProbe.pipelineVisualBoundsRestEquivalentNodes =
+                allocationProbe.pipelineVisualBoundsRestEquivalentNodes + 1
+        end
+        if clipChildren then
+            allocationProbe.pipelineClipNodes =
+                allocationProbe.pipelineClipNodes + 1
+            if not staticIdentity then
+                allocationProbe.pipelineVisualContentBoundsRequiredNodes =
+                    allocationProbe.pipelineVisualContentBoundsRequiredNodes
+                        + 1
+            end
+        end
+    end
     if allocationProbe then
         recordGeometryAllocation(allocationProbe,
             "pipelineInverseMatrixCreated",
@@ -1057,32 +1086,49 @@ local function transformNodeGeometry(node, parent, parentInverse,
             not existed and not staticPresentation
                 and node._inverseWorldTransform ~= nil)
     end
-    local x1, y1 = point(node._worldTransform, node.x, node.y)
-    local x2, y2 = point(node._worldTransform, node.x + node.width, node.y)
-    local x3, y3 = point(node._worldTransform, node.x, node.y + node.height)
-    local x4, y4 = point(node._worldTransform,
-        node.x + node.width, node.y + node.height)
     existed = node._visualBounds ~= nil
     before = allocationProbe and collectgarbage("count") or nil
-    node._visualBounds = writeBounds(node._visualBounds,
-        x1, y1, x2, y2, x3, y3, x4, y4)
+    if staticIdentity then
+        -- The authoritative flat layout fields already are the exact visual
+        -- bounds for a static identity chain. Keeping a duplicate table would
+        -- add no geometry and would be thrown away with this candidate.
+        node._visualBounds = nil
+    else
+        local x1, y1 = point(node._worldTransform, node.x, node.y)
+        local x2, y2 = point(node._worldTransform,
+            node.x + node.width, node.y)
+        local x3, y3 = point(node._worldTransform,
+            node.x, node.y + node.height)
+        local x4, y4 = point(node._worldTransform,
+            node.x + node.width, node.y + node.height)
+        node._visualBounds = writeBounds(node._visualBounds,
+            x1, y1, x2, y2, x3, y3, x4, y4)
+    end
     if allocationProbe then
         recordGeometryAllocation(allocationProbe,
             "pipelineVisualBoundsCreated",
             "pipelineVisualBoundsAllocatedKB", before,
             not existed and node._visualBounds ~= nil)
     end
-    local cx1, cy1 = point(node._worldTransform, node.contentX, node.contentY)
-    local cx2, cy2 = point(node._worldTransform,
-        node.contentX + node.contentWidth, node.contentY)
-    local cx3, cy3 = point(node._worldTransform,
-        node.contentX, node.contentY + node.contentHeight)
-    local cx4, cy4 = point(node._worldTransform,
-        node.contentX + node.contentWidth, node.contentY + node.contentHeight)
     existed = node._visualContentBounds ~= nil
     before = allocationProbe and collectgarbage("count") or nil
-    node._visualContentBounds = writeBounds(node._visualContentBounds,
-        cx1, cy1, cx2, cy2, cx3, cy3, cx4, cy4)
+    if clipChildren and not staticIdentity then
+        local cx1, cy1 = point(node._worldTransform,
+            node.contentX, node.contentY)
+        local cx2, cy2 = point(node._worldTransform,
+            node.contentX + node.contentWidth, node.contentY)
+        local cx3, cy3 = point(node._worldTransform,
+            node.contentX, node.contentY + node.contentHeight)
+        local cx4, cy4 = point(node._worldTransform,
+            node.contentX + node.contentWidth,
+            node.contentY + node.contentHeight)
+        node._visualContentBounds = writeBounds(node._visualContentBounds,
+            cx1, cy1, cx2, cy2, cx3, cy3, cx4, cy4)
+    else
+        -- Content bounds are consumed only by clipping nodes. Identity clips
+        -- read the authoritative content rectangle directly at the consumer.
+        node._visualContentBounds = nil
+    end
     if allocationProbe then
         recordGeometryAllocation(allocationProbe,
             "pipelineVisualContentBoundsCreated",

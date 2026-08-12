@@ -168,16 +168,18 @@ local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch)
     transform.rotation = presentation.rotation or 0
     transform.scale = presentation.scale or 1
     if retainedScratch then
-        transform.bounds = node._visualBounds
+        -- Static identity nodes use their authoritative layout rectangle
+        -- directly instead of retaining a duplicate transformed-bounds table.
+        transform.bounds = node._visualBounds or node
         transform.world = node._worldTransform
     else
-        local bounds = node._visualBounds
-        transform.bounds = bounds and {
+        local bounds = node._visualBounds or node
+        transform.bounds = {
             x = bounds.x,
             y = bounds.y,
             width = bounds.width,
             height = bounds.height,
-        } or nil
+        }
         local world = node._worldTransform
         transform.world = world and {
             a = world.a,
