@@ -1872,6 +1872,17 @@ transform fell from 8.080 to 3.906 KB/frame. Complete late allocation fell
 from 529.502 to 528.156 KB/frame. This shares one transform router rather than
 introducing a RadialDial-specific traversal.
 
+The attribution-only B4p.61 run is
+`build/frogui/battle-performance-20260812T075950Z-23330`. It separates the
+frame-subscriber boundary without changing scheduling. On a late rebuilt
+frame, FrogUI snapshot/wrapper plumbing costs about 1.001 KB, authored frame
+callbacks 5.523 KB, typed delivery 39.050 KB, and the actor-local candidate
+render 1,244.221 KB. The candidate owns 96.47% of the complete 1,289.794 KB
+frame boundary; `useFrame` registry copying is not a material cause. Quiet
+late frames likewise spend only 0.101 KB on the subscriber snapshot. The next
+bounded runtime target is typed message delivery, while the already-attributed
+fresh-candidate pipeline remains subject to the earlier ownership constraints.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.

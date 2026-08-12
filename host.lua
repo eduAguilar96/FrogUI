@@ -1537,6 +1537,10 @@ local PAINT_ALLOCATION_ROW_FIELDS = {
 local RUNTIME_ALLOCATION_ROW_FIELDS = {
     "updateCalls", "updateAllocatedKB",
     "framesCalls", "framesAllocatedKB",
+    "frameSnapshotCalls", "frameSnapshotAllocatedKB",
+    "frameCallbackCalls", "frameCallbackAllocatedKB",
+    "frameMessageDeliveryCalls", "frameMessageDeliveryAllocatedKB",
+    "frameCandidateRenderCalls", "frameCandidateRenderAllocatedKB",
     "runtimeCalls", "runtimeAllocatedKB",
     "interactionCalls", "interactionAllocatedKB",
     "interactionSessionCalls", "interactionSessionAllocatedKB",
@@ -1582,6 +1586,49 @@ end
 -- active only in the stopped-collector Battle tool and has no ordinary path.
 local function resetRuntimeAllocationRow(row)
     for _, field in ipairs(RUNTIME_ALLOCATION_ROW_FIELDS) do row[field] = 0 end
+end
+
+-- Clears the scalar bridge used while a frame batch is still unclassified.
+-- Its cohort is known only after callbacks have either published a candidate
+-- or remained quiet, so these values move into the chosen row afterward.
+local function resetPendingFrameAllocation(probe)
+    if not probe then return end
+    probe.pendingFrameSnapshotCalls = 0
+    probe.pendingFrameSnapshotAllocatedKB = 0
+    probe.pendingFrameCallbackCalls = 0
+    probe.pendingFrameCallbackAllocatedKB = 0
+    probe.pendingFrameMessageDeliveryCalls = 0
+    probe.pendingFrameMessageDeliveryAllocatedKB = 0
+    probe.pendingFrameCandidateRenderCalls = 0
+    probe.pendingFrameCandidateRenderAllocatedKB = 0
+end
+
+local function recordPendingFrameAllocation(probe, callsField,
+        allocatedField, before)
+    if not probe then return end
+    probe[callsField] = probe[callsField] + 1
+    probe[allocatedField] = probe[allocatedField]
+        + collectgarbage("count") - before
+end
+
+local function publishPendingFrameAllocation(probe, row)
+    if not probe or not row then return end
+    row.frameSnapshotCalls = row.frameSnapshotCalls
+        + probe.pendingFrameSnapshotCalls
+    row.frameSnapshotAllocatedKB = row.frameSnapshotAllocatedKB
+        + probe.pendingFrameSnapshotAllocatedKB
+    row.frameCallbackCalls = row.frameCallbackCalls
+        + probe.pendingFrameCallbackCalls
+    row.frameCallbackAllocatedKB = row.frameCallbackAllocatedKB
+        + probe.pendingFrameCallbackAllocatedKB
+    row.frameMessageDeliveryCalls = row.frameMessageDeliveryCalls
+        + probe.pendingFrameMessageDeliveryCalls
+    row.frameMessageDeliveryAllocatedKB = row.frameMessageDeliveryAllocatedKB
+        + probe.pendingFrameMessageDeliveryAllocatedKB
+    row.frameCandidateRenderCalls = row.frameCandidateRenderCalls
+        + probe.pendingFrameCandidateRenderCalls
+    row.frameCandidateRenderAllocatedKB = row.frameCandidateRenderAllocatedKB
+        + probe.pendingFrameCandidateRenderAllocatedKB
 end
 
 local function recordRuntimeAllocation(row, callsField, allocatedField, before)
@@ -1876,6 +1923,7 @@ local function resetAllocationProbe(probe)
     resetRuntimeAllocationRow(probe.runtimeQuiet)
     resetRuntimeAllocationRow(probe.runtimeRebuilt)
     probe.runtimeActiveRow = nil
+    resetPendingFrameAllocation(probe)
 end
 
 -- Private, globally exclusive allocation attribution for the Battle harness.
@@ -2324,6 +2372,10 @@ function host:_readRuntimeAllocationProbe(rebuilt)
     local row = rebuilt and probe.runtimeRebuilt or probe.runtimeQuiet
     return row.updateCalls, row.updateAllocatedKB,
         row.framesCalls, row.framesAllocatedKB,
+        row.frameSnapshotCalls, row.frameSnapshotAllocatedKB,
+        row.frameCallbackCalls, row.frameCallbackAllocatedKB,
+        row.frameMessageDeliveryCalls, row.frameMessageDeliveryAllocatedKB,
+        row.frameCandidateRenderCalls, row.frameCandidateRenderAllocatedKB,
         row.runtimeCalls, row.runtimeAllocatedKB,
         row.interactionCalls, row.interactionAllocatedKB,
         row.interactionSessionCalls, row.interactionSessionAllocatedKB,
@@ -5313,6 +5365,10 @@ function host:_runCallback(callback, origin, originSource, ...)
     self._callbackDepth = 1
     self._currentOrigin = origin or "callback"
     self._currentOriginSource = originSource
+    local frameProbe = origin == "Host:update frames"
+        and rawget(self, "_allocationProbe") or nil
+    frameProbe = frameProbe and frameProbe.active
+        and frameProbe.mode == "pipeline" and frameProbe or nil
     local args = { ... }
     local callbackStarted = self._diagnostics:start()
     local results = { pcall(function() return callback(unpack(args)) end) }
@@ -5324,8 +5380,14 @@ function host:_runCallback(callback, origin, originSource, ...)
         local settled = false
         while not settled do
             local deliveryStarted = self._diagnostics:start()
+            local frameDeliveryBefore = frameProbe
+                and collectgarbage("count") or nil
             local ok, dirty, traceIndex, dirtyActors = pcall(
                 self._drainMessages, self, budget)
+            recordPendingFrameAllocation(frameProbe,
+                "pendingFrameMessageDeliveryCalls",
+                "pendingFrameMessageDeliveryAllocatedKB",
+                frameDeliveryBefore)
             self._diagnostics:finish("messageDelivery", deliveryStarted)
             if not ok then
                 results = { false, dirty }
@@ -5333,12 +5395,18 @@ function host:_runCallback(callback, origin, originSource, ...)
             end
             if dirty then
                 local rendered, renderError
+                local frameRenderBefore = frameProbe
+                    and collectgarbage("count") or nil
                 if self._actorLocalEnabled then
                     rendered, renderError = pcall(
                         self._renderActorChanges, self, dirtyActors)
                 else
                     rendered, renderError = pcall(self.render, self)
                 end
+                recordPendingFrameAllocation(frameProbe,
+                    "pendingFrameCandidateRenderCalls",
+                    "pendingFrameCandidateRenderAllocatedKB",
+                    frameRenderBefore)
                 if not rendered then
                     results = { false, renderError }
                     break
@@ -5426,14 +5494,27 @@ end
 -- Their typed publications share one callback batch and therefore
 -- reconcile only after every frame subscriber has run.
 function host:_runFrames(dt)
+    local allocationProbe = rawget(self, "_allocationProbe")
+    local frameProbe = allocationProbe and allocationProbe.active
+        and allocationProbe.mode == "pipeline" and allocationProbe or nil
+    resetPendingFrameAllocation(frameProbe)
     if #self._frames == 0 then return end
+    local snapshotBefore = frameProbe and collectgarbage("count") or nil
     local frames = {}
     for index, frame in ipairs(self._frames) do frames[index] = frame end
+    recordPendingFrameAllocation(frameProbe,
+        "pendingFrameSnapshotCalls", "pendingFrameSnapshotAllocatedKB",
+        snapshotBefore)
     self:_runCallback(function()
         self._frameCallbacksActive = true
         local ok, failure = pcall(function()
             for _, frame in ipairs(frames) do
+                local callbackBefore = frameProbe
+                    and collectgarbage("count") or nil
                 local delivered, err = pcall(frame.callback, dt)
+                recordPendingFrameAllocation(frameProbe,
+                    "pendingFrameCallbackCalls",
+                    "pendingFrameCallbackAllocatedKB", callbackBefore)
                 if not delivered then
                     error(frame.owner .. " " .. frame.id
                         .. " failed: " .. tostring(err), 0)
@@ -5470,6 +5551,8 @@ function host:update(dt)
             and runtimeAllocationProbe.runtimeRebuilt
             or runtimeAllocationProbe.runtimeQuiet
         runtimeAllocationProbe.runtimeActiveRow = runtimeAllocationRow
+        publishPendingFrameAllocation(runtimeAllocationProbe,
+            runtimeAllocationRow)
         recordRuntimeAllocation(runtimeAllocationRow,
             "framesCalls", "framesAllocatedKB", allocationFramesBefore)
     end
