@@ -1688,23 +1688,26 @@ second receives draws whose immediately preceding update published a
 candidate. Parent counters cover Canvas preflight, frame setup, visible-tree
 traversal, inspector work, and finish; nested counters name first-draw storage
 for the node scratch root, base style/transform/colors, Text and image leaves,
-Icon outline treatment, clip callbacks, and PopupText shine. The nested cold
-sites are already inside preflight/tree and must not be added to the Painter
-parent. Normal Hosts perform one nil probe lookup at the start of a draw and
-never allocate these rows, call `collectgarbage`, or retain attribution data.
-The default Painter may carry only callback-free ephemeral scratch across a
-successful publication between the same logical identity and primitive type.
-Node-capturing clip/shine callbacks remain candidate-owned and never transfer.
-The focused contract proves warm draw, equivalent render, resize, rejected
-build, incompatible replacement, and custom-painter isolation.
+Icon outline treatment, PopupText shine color, and the one Host stencil
+program. The nested cold sites are already inside preflight/tree and must not
+be added to the Painter parent. Normal Hosts perform one nil probe lookup at
+the start of a draw and never allocate these rows, call `collectgarbage`, or
+retain attribution data. The default Painter may carry only callback-free
+ephemeral scratch across a successful publication between the same logical
+identity and primitive type. Default clipping uses one Host-lifetime callback
+over synchronous scalar rectangle scratch; it never captures a component
+node. The focused contract proves warm draw, equivalent render, resize,
+rejected build, incompatible replacement, custom-painter isolation, and exact
+Host cleanup.
 
 #### Current measured checkpoint
 
-B4p.50 retains B4p.46's conservative incremental-layout implementation and
-adds commit-safe continuity for the default Painter's callback-free ephemeral
-scratch. Clip and shine callbacks capture a resolved node, so they live in
-candidate-owned storage and always rebuild. Components declare no cache,
-revision, or paint dependency.
+B4p.51 retains B4p.46's conservative incremental-layout implementation and
+B4p.49's commit-safe continuity for callback-free default Painter scratch.
+Default bounds, content, and text-shine clipping now share one Host-owned
+synchronous stencil program. The callback closes over only scalar rectangle
+scratch and nesting depth, never a committed or candidate node. Components
+declare no cache, revision, or paint dependency.
 
 Every primitive has one readable `node.layout` result. The candidate keeps its
 fresh node shell, props, children, validation, reconciliation, transform,
@@ -1739,6 +1742,17 @@ identity controls agree exactly. Standard allocation remains B4p.49-flat at
 160.062 KB/frame early and 604.155 KB/frame late. This evidence rejects a
 mutable retained-node/subtree cache; the flat candidate tree and rollback
 boundary remain authoritative.
+
+The source-exact B4p.51 manifest is
+`build/frogui/battle-performance-20260812T063358Z-89357`. Relative to B4p.50,
+rebuilt Painter draw allocation fell from 46.272 to 37.027 KB early and from
+63.347 to 50.447 KB late. All-frame allocation fell from 160.062 to 159.361
+KB/frame early and from 604.155 to 599.355 KB/frame late. The three early and
+22 late publications reused the same Host stencil program; all clip-shape,
+shine-shape, and measured-window stencil-program creation counters are exactly
+zero. A separate cold-Host contract proves exactly one program is created on
+first default draw and released on unmount. No node callbacks remain on the
+candidate tree.
 
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in

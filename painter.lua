@@ -110,55 +110,64 @@ local function writeBrightened(out, color, amount)
     return out
 end
 
-local function beginClip(state, drawShape)
+-- Creates one Host-lifetime stencil callback over scalar rectangle scratch.
+-- It never retains a committed or candidate node between synchronous calls.
+local function clipStateFor(host, paintRow)
+    local state = host._paintClipState
+    if state then
+        state.depth = 0
+        return state
+    end
+    local before = paintRow and collectgarbage("count") or nil
+    state = { depth = 0 }
+    state.drawShape = function()
+        local g = graphics()
+        g.rectangle("fill", state.x, state.y, state.width, state.height)
+    end
+    host._paintClipState = state
+    recordAllocation(paintRow, "clipProgramCreated",
+        "clipProgramAllocatedKB", before)
+    return state
+end
+
+-- Copies one arranged rectangle into Host-owned scalar stencil scratch.
+local function prepareClip(state, node, kind, shineSplit)
+    local box = node.layout
+    if kind == "content" then
+        state.x, state.y = box.contentX, box.contentY
+        state.width, state.height = box.contentWidth, box.contentHeight
+    else
+        state.x, state.y = box.x, box.y
+        state.width = box.width
+        state.height = kind == "shine"
+            and box.height * shineSplit or box.height
+    end
+end
+
+local function beginClip(state, node, kind, shineSplit)
     local g = graphics()
     if not g or not state then return end
+    prepareClip(state, node, kind, shineSplit)
     local parentDepth = state.depth
     if parentDepth == 0 then
-        g.stencil(drawShape, "replace", 1, true)
+        g.stencil(state.drawShape, "replace", 1, true)
     else
-        g.stencil(drawShape, "increment", 1, true)
+        g.stencil(state.drawShape, "increment", 1, true)
     end
     state.depth = parentDepth + 1
     g.setStencilTest("equal", state.depth)
 end
 
-local function endClip(state, drawShape)
+local function endClip(state, node, kind, shineSplit)
     local g = graphics()
     if not g or not state then return end
     local currentDepth = state.depth
     assert(currentDepth > 0, "FrogUI clip stack underflow")
-    g.stencil(drawShape, "decrement", 1, true)
+    prepareClip(state, node, kind, shineSplit)
+    g.stencil(state.drawShape, "decrement", 1, true)
     state.depth = currentDepth - 1
     if state.depth == 0 then g.setStencilTest()
     else g.setStencilTest("equal", state.depth) end
-end
-
-local function nodeShape(node, content, paintRow)
-    local key = content and "contentShape" or "boundsShape"
-    local shapes = node._paintShapes
-    if not shapes or not shapes[key] then
-        local before = paintRow and collectgarbage("count") or nil
-        shapes = shapes or {}
-        node._paintShapes = shapes
-        -- The callback reads the committed node at invocation time, so Scroll
-        -- rearrangement and in-place Motion bounds remain current. Retaining
-        -- it on this candidate also gives stencil begin/end one stable
-        -- identity. Node-capturing shapes are intentionally separate from
-        -- transferable paint scratch.
-        shapes[key] = function()
-            local g = graphics()
-            if content then
-                g.rectangle("fill", node.layout.contentX, node.layout.contentY,
-                    node.layout.contentWidth, node.layout.contentHeight)
-            else
-                g.rectangle("fill", node.layout.x, node.layout.y, node.layout.width, node.layout.height)
-            end
-        end
-        recordAllocation(paintRow, "clipShapeCreated",
-            "clipShapeAllocatedKB", before)
-    end
-    return shapes[key]
 end
 
 local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch,
@@ -412,24 +421,6 @@ local function stampText(g, node, value, align, dx, dy)
         math.max(0, node.layout.width), align)
 end
 
-local function textShineShape(node, shineSplit, paintRow)
-    local shapes = node._paintShapes
-    if not shapes or not shapes.shineShape then
-        local before = paintRow and collectgarbage("count") or nil
-        shapes = shapes or {}
-        node._paintShapes = shapes
-        shapes.shineShape = function()
-            local g = graphics()
-            g.rectangle("fill", node.layout.x, node.layout.y,
-                node.layout.width, node.layout.height * shapes.shineSplit)
-        end
-        recordAllocation(paintRow, "shineShapeCreated",
-            "shineShapeAllocatedKB", before)
-    end
-    shapes.shineSplit = shineSplit
-    return shapes.shineShape
-end
-
 local function defaultText(host, node, style, clipState, paintRow)
     local g = graphics()
     if not g then return end
@@ -455,8 +446,7 @@ local function defaultText(host, node, style, clipState, paintRow)
     setColor(style.color)
     stampText(g, node, value, align, 0, 0)
     if style.shine > 0 and style.shineSplit > 0 then
-        local shineShape = textShineShape(node, style.shineSplit, paintRow)
-        beginClip(clipState, shineShape)
+        beginClip(clipState, node, "shine", style.shineSplit)
         local scratch = defaultScratch(node, paintRow)
         local coldBefore = not scratch.shineColor and paintRow
             and collectgarbage("count") or nil
@@ -468,7 +458,7 @@ local function defaultText(host, node, style, clipState, paintRow)
         end
         setColor(scratch.shineColor)
         stampText(g, node, value, align, 0, 0)
-        endClip(clipState, shineShape)
+        endClip(clipState, node, "shine", style.shineSplit)
     end
 end
 
@@ -597,9 +587,7 @@ local function defaultImage(host, node, asset, style, clipState, paintRow)
     end
     local geometry = imageGeometry(node, asset, style.fit, style.sourceRect)
     setColor(style.tint)
-    local shape = style.fit == "cover"
-        and nodeShape(node, false, paintRow) or nil
-    if style.fit == "cover" then beginClip(clipState, shape) end
+    if style.fit == "cover" then beginClip(clipState, node, "bounds") end
     local quad = sourceQuad(asset, style.sourceRect)
     local scaleX = style.mirror and -geometry.scaleX or geometry.scaleX
     if quad then
@@ -611,7 +599,7 @@ local function defaultImage(host, node, asset, style, clipState, paintRow)
             scaleX, geometry.scaleY,
             geometry.imageWidth / 2, geometry.imageHeight / 2)
     end
-    if style.fit == "cover" then endClip(clipState, shape) end
+    if style.fit == "cover" then endClip(clipState, node, "bounds") end
 end
 
 -- Resolves one horizontal sheet frame directly from explicit clock time.
@@ -674,12 +662,14 @@ local function defaultSpriteSheet(host, node, asset, geometry, style,
         previousMin, previousMag, previousAnisotropy = asset:getFilter()
         asset:setFilter(geometry.filter, geometry.filter)
     end
-    local shape = geometry.fit == "cover"
-        and nodeShape(node, false, paintRow) or nil
-    if geometry.fit == "cover" then beginClip(clipState, shape) end
+    if geometry.fit == "cover" then
+        beginClip(clipState, node, "bounds")
+    end
     local ok, reason = pcall(
         drawSpriteSheetFrame, g, asset, geometry, style)
-    if geometry.fit == "cover" then endClip(clipState, shape) end
+    if geometry.fit == "cover" then
+        endClip(clipState, node, "bounds")
+    end
     if previousMin then
         asset:setFilter(previousMin, previousMag, previousAnisotropy)
     end
@@ -730,9 +720,7 @@ local function defaultIcon(host, node, asset, style, clipState, paintRow)
     local quad = sourceQuad(asset, style.sourceRect)
     local scaleX = style.mirror and -geometry.scaleX or geometry.scaleX
 
-    local shape = style.fit == "cover"
-        and nodeShape(node, false, paintRow) or nil
-    if style.fit == "cover" then beginClip(clipState, shape) end
+    if style.fit == "cover" then beginClip(clipState, node, "bounds") end
     local previousShader = g.getShader and g.getShader() or nil
     g.setShader(alphaMaskShader())
     if style.outline and style.outline.width > 0 then
@@ -746,7 +734,7 @@ local function defaultIcon(host, node, asset, style, clipState, paintRow)
     setColor(style.tint)
     stampIcon(g, asset, quad, geometry, scaleX, 0, 0)
     g.setShader(previousShader)
-    if style.fit == "cover" then endClip(clipState, shape) end
+    if style.fit == "cover" then endClip(clipState, node, "bounds") end
 end
 
 local function modulo(value, size)
@@ -838,13 +826,12 @@ local function defaultTiledImage(host, node, asset, geometry, style, clipState,
     end
     local activeShader = g.getShader and g.getShader() or nil
     if activeShader then g.setShader() end
-    local shape = nodeShape(node, false, paintRow)
-    beginClip(clipState, shape)
+    beginClip(clipState, node, "bounds")
     if activeShader then g.setShader(activeShader) end
     setColor(style.tint)
     local ok, reason = pcall(drawTiles, g, asset, geometry)
     if activeShader then g.setShader() end
-    endClip(clipState, shape)
+    endClip(clipState, node, "bounds")
     if activeShader then g.setShader(activeShader) end
     if previousMin then
         asset:setFilter(previousMin, previousMag, previousAnisotropy)
@@ -897,13 +884,12 @@ end
 local function defaultCanvas(host, node, commands, clipState, paintRow)
     local g = graphics()
     if not g then return true end
-    local shape = nodeShape(node, false, paintRow)
-    beginClip(clipState, shape)
+    beginClip(clipState, node, "bounds")
     g.push("all")
     g.translate(node.layout.x, node.layout.y)
     local ok, reason = pcall(replayCanvasCommands, g, commands)
     g.pop()
-    endClip(clipState, shape)
+    endClip(clipState, node, "bounds")
     return ok, reason
 end
 
@@ -1108,11 +1094,13 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
             customCall(custom, "text", customDescriptor,
                 node.props.text or "", textStyle)
         else
-            local shape = node.props.maxLines and g
-                and nodeShape(node, false, paintRow) or nil
-            if node.props.maxLines and g then beginClip(clipState, shape) end
+            if node.props.maxLines and g then
+                beginClip(clipState, node, "bounds")
+            end
             defaultText(host, node, textStyle, clipState, paintRow)
-            if node.props.maxLines and g then endClip(clipState, shape) end
+            if node.props.maxLines and g then
+                endClip(clipState, node, "bounds")
+            end
         end
     elseif node.type == "TiledImage" then
         local imageStyle = imageStyleFor(
@@ -1192,9 +1180,9 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
 
     local clipped = node.type == "Scroll" or node.props.clip
         or node.props.overflow == "clip"
-    local contentShape = clipped and not custom and g
-        and nodeShape(node, true, paintRow) or nil
-    if clipped and not custom and g then beginClip(clipState, contentShape) end
+    if clipped and not custom and g then
+        beginClip(clipState, node, "content")
+    end
     if node.type == "ShaderImage" then
         if custom then
             node._shaderInspection = Shader.inspect(host, node)
@@ -1235,7 +1223,9 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
         drawChildren(host, node, custom, style, clipState, portalRoot,
             paintRow)
     end
-    if clipped and not custom and g then endClip(clipState, contentShape) end
+    if clipped and not custom and g then
+        endClip(clipState, node, "content")
+    end
     if node.type == "Scroll" and node.props.bar and node._scroll
             and node._scroll.extent > 0 and not custom and g then
         local scroll = node._scroll
@@ -1543,7 +1533,7 @@ function painter.draw(host, custom)
         g.translate(host._viewport.x, host._viewport.y)
         g.scale(host._viewport.scale)
     end
-    local clipState = not custom and { depth = 0 } or nil
+    local clipState = not custom and clipStateFor(host, paintRow) or nil
     recordAllocation(paintRow, "setupCalls", "setupAllocatedKB",
         setupBefore)
     local treeBefore = paintRow and collectgarbage("count") or nil
@@ -1579,7 +1569,7 @@ function painter.draw(host, custom)
                 session.y - preview.height / 2)
         end
         drawNode(host, preview, custom, nil, nil,
-            not custom and { depth = 0 } or nil, preview, paintRow)
+            clipState, preview, paintRow)
         if not custom and g then g.pop() end
     end
     recordAllocation(paintRow, "treeCalls", "treeAllocatedKB", treeBefore)

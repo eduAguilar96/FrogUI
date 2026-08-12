@@ -1531,6 +1531,7 @@ local PAINT_ALLOCATION_ROW_FIELDS = {
     "clipShapeCreated", "clipShapeAllocatedKB",
     "shineShapeCreated", "shineShapeAllocatedKB",
     "shineColorCreated", "shineColorAllocatedKB",
+    "clipProgramCreated", "clipProgramAllocatedKB",
 }
 
 -- Resets one preallocated painter row without constructing measurement data.
@@ -2255,7 +2256,8 @@ function host:_readPaintAllocationProbe(rebuilt)
         row.iconExtensionCalls, row.iconExtensionAllocatedKB,
         row.clipShapeCreated, row.clipShapeAllocatedKB,
         row.shineShapeCreated, row.shineShapeAllocatedKB,
-        row.shineColorCreated, row.shineColorAllocatedKB
+        row.shineColorCreated, row.shineColorAllocatedKB,
+        row.clipProgramCreated, row.clipProgramAllocatedKB
 end
 
 -- Returns publication-time paint-reuse evidence without expanding the older
@@ -2881,7 +2883,7 @@ local function matchingPaintChild(previous, candidate)
 end
 
 -- Transfers only callback-free ephemeral Painter scratch between compatible
--- committed candidates. Node-capturing shapes remain on the retired tree.
+-- committed candidates. Default clipping belongs to Host scalar scratch.
 local function transferPaintScratchNode(previous, candidate, probe)
     if probe then
         probe.pipelinePaintReuseCandidateNodes =
@@ -2902,10 +2904,6 @@ local function transferPaintScratchNode(previous, candidate, probe)
             probe.pipelinePaintScratchTransferred =
                 probe.pipelinePaintScratchTransferred + 1
         end
-    end
-    if previous._paintShapes and probe then
-        probe.pipelinePaintShapeSources =
-            probe.pipelinePaintShapeSources + 1
     end
     if candidate.children then
         for _, child in ipairs(candidate.children) do
@@ -5854,6 +5852,7 @@ function host:unmount()
     self._pendingTransformAttribution = nil
     self._tree = nil
     self._rootDescriptor = nil
+    self._paintClipState = nil
     self._actors = {}
     self._addresses = {}
     self._semanticTokens = {}
