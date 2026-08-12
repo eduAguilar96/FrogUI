@@ -3856,6 +3856,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 and collectgarbage("count") or nil
             local deferred = {
                 __frogDeferredView = true,
+                _containsDeferred = true,
                 descriptor = descriptor,
                 owner = owner,
                 path = path,
@@ -4085,12 +4086,17 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     end
     local childrenPath = descendantPath or path
     local identityProbe = context.identityAllocationProbe or pipelineProbe
+    local containsCanvas = node.type == "Canvas"
+    local containsDeferred = false
     for index, child in ipairs(descriptor.children) do
         local resolved = self:_resolve(child, owner,
             childPath(childrenPath, child, index, identityProbe),
             nil, context,
             logicalChildPath(logicalPath, child, index, identityProbe))
         if resolved then
+            containsCanvas = resolved._containsCanvas or containsCanvas
+            containsDeferred = resolved._containsDeferred
+                or resolved.__frogDeferredView or containsDeferred
             local appendBefore = structureProbe
                 and collectgarbage("count") or nil
             local pipelineAppendBefore = pipelineProbe
@@ -4178,25 +4184,13 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 identityProbe, "/preview"))
         context.previewDepth = context.previewDepth - 1
         assert(node._dragPreview, "DragSource preview returned nil")
-    end
-    return node
-end
-
--- Marks Canvas ancestry inside one newly resolved deferred-view output. It
--- deliberately does not attempt another deferred-view resolution pass: a
--- nested view may still be waiting for a later actor in the outer tree.
-local function markDeferredCanvasBranches(node)
-    if not node or node.__frogDeferredView then return false end
-    local containsCanvas = node.type == "Canvas"
-    for _, child in ipairs(node.children or {}) do
-        containsCanvas = markDeferredCanvasBranches(child) or containsCanvas
-    end
-    if node._dragPreview then
-        containsCanvas = markDeferredCanvasBranches(node._dragPreview)
-            or containsCanvas
+        containsCanvas = node._dragPreview._containsCanvas or containsCanvas
+        containsDeferred = node._dragPreview._containsDeferred
+            or node._dragPreview.__frogDeferredView or containsDeferred
     end
     node._containsCanvas = containsCanvas
-    return containsCanvas
+    node._containsDeferred = containsDeferred and true or nil
+    return node
 end
 
 function host:_resolveDeferred(node, context)
@@ -4210,9 +4204,13 @@ function host:_resolveDeferred(node, context)
         if profiler then profiler:finish("deferredResolution", started) end
         local resolved = self:_resolveView(node.descriptor, node.owner,
             node.path, node.descendantPath, context, node.logicalPath)
-        markDeferredCanvasBranches(resolved)
-        return resolved
+        return self:_resolveDeferred(resolved, context)
     end
+    if not node._containsDeferred then
+        if profiler then profiler:finish("deferredResolution", started) end
+        return node
+    end
+    node._containsDeferred = nil
     local structureProbe = context.structureAllocationProbe
     local arrayBefore = structureProbe and collectgarbage("count") or nil
     local children = node.children
@@ -4228,7 +4226,13 @@ function host:_resolveDeferred(node, context)
     local resolvedCount = 0
     local containsCanvas = node.type == "Canvas"
     for index = 1, childCount do
-        local resolved = self:_resolveDeferred(children[index], context)
+        local child = children[index]
+        local resolves = child.__frogDeferredView
+            or child._containsDeferred
+        local resolved = child
+        if resolves then
+            resolved = self:_resolveDeferred(child, context)
+        end
         started = profiler and profiler:start() or nil
         if resolved then
             local appendBefore = structureProbe
@@ -4236,6 +4240,9 @@ function host:_resolveDeferred(node, context)
             resolvedCount = resolvedCount + 1
             children[resolvedCount] = resolved
             containsCanvas = resolved._containsCanvas or containsCanvas
+            assert(not resolved._containsDeferred
+                    and not resolved.__frogDeferredView,
+                "deferred view branch retained unresolved presentation")
             if structureProbe then
                 local appendAfter = collectgarbage("count")
                 structureProbe.deferredChildCalls =
@@ -4248,7 +4255,11 @@ function host:_resolveDeferred(node, context)
         if profiler then profiler:finish("deferredResolution", started) end
     end
     if node._dragPreview then
-        node._dragPreview = self:_resolveDeferred(node._dragPreview, context)
+        if node._dragPreview._containsDeferred
+                or node._dragPreview.__frogDeferredView then
+            node._dragPreview = self:_resolveDeferred(
+                node._dragPreview, context)
+        end
         containsCanvas = node._dragPreview._containsCanvas or containsCanvas
     end
     started = profiler and profiler:start() or nil
