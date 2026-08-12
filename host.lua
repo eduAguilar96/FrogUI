@@ -2007,8 +2007,6 @@ end
 function host:_attachActorLocalPrototype()
     assert(not self._mounted,
         "Actor-local prototype must attach before Host mount")
-    assert(self._diagnostics.enabled,
-        "Actor-local prototype requires diagnostics = true")
     assert(rawget(self, "_renderReplayOracle") == nil,
         "Actor-local prototype cannot share a render replay census Host")
     assert(rawget(self, "_actorLocalPrototype") == nil,
