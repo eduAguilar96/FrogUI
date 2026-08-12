@@ -1861,6 +1861,17 @@ to 1.125/3.375 KB/frame; complete late allocation fell from 531.030 to
 529.502 KB/frame. Resize, rerender, failed candidates, input, and inspection
 remain on their existing exact paths.
 
+The source-exact B4p.60 run is
+`build/frogui/battle-performance-20260812T075103Z-20261`. Retained RadialDial
+instances now carry the same committed topology and transform-boundary record
+already proven by Motion, so orbit changes transform exactly the dial subtree.
+Synthetic diagnostic causes, Scroll, mixed causes, large-coverage requests,
+portals, and stale topology retain the full authoritative fallback. Late quiet
+RadialDial transform allocation fell from 0.987 to zero KB/frame; late rebuilt
+transform fell from 8.080 to 3.906 KB/frame. Complete late allocation fell
+from 529.502 to 528.156 KB/frame. This shares one transform router rather than
+introducing a RadialDial-specific traversal.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.

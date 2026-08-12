@@ -4193,11 +4193,13 @@ function host:_invalidateTransform(node, family, detail, recipes)
     if family ~= "Motion" and family ~= "RadialDial" then
         self._arrangedRefRevision = self._arrangedRefRevision + 1
     end
-    local motionInstance
+    local branchInstance
     if family == "Motion" then
-        motionInstance = node._motion
-        assert(motionInstance and motionInstance.node == node,
+        branchInstance = node._motion
+        assert(branchInstance and branchInstance.node == node,
             "FrogUI Motion invalidation requires its mounted Motion owner")
+    elseif family == "RadialDial" then
+        branchInstance = node._radialDial
     end
     Motion.invalidate(self._tree)
     local work = self._transformWork
@@ -4215,14 +4217,14 @@ function host:_invalidateTransform(node, family, detail, recipes)
         work.fullReason = "structural-token"
         clearTransformTargets(work)
     end
-    if family == "Motion" then
-        if not work.requiresFull and not work.nodes[motionInstance] then
+    if branchInstance then
+        if not work.requiresFull and not work.nodes[branchInstance] then
             if work.nodeCount >= TRANSFORM_TARGET_LIMIT then
                 work.requiresFull = true
                 work.fullReason = "target-limit"
                 clearTransformTargets(work)
             else
-                work.nodes[motionInstance] = true
+                work.nodes[branchInstance] = true
                 work.nodeCount = work.nodeCount + 1
             end
         end
@@ -4272,8 +4274,8 @@ local function mapCount(values)
 end
 
 -- Applies transformed geometry and consumes one exact committed cause batch.
--- Only the committed Motion-only context offers the branch plan; every other
--- context remains a full authoritative transform.
+-- Committed Motion and retained interaction layout may offer the same proven
+-- branch plan; unsafe, synthetic, Scroll, and mixed causes request full work.
 function host:_transformTree(root, phase, activeMotion, allocationProbe)
     root = root or self._tree
     local context = phase and TRANSFORM_CONTEXTS[phase] or nil
@@ -4286,7 +4288,10 @@ function host:_transformTree(root, phase, activeMotion, allocationProbe)
     local options = self._transformOptions
     options.generation = committed and self._generation
         or self._generation + 1
-    options.branch = context == "committed" and activeWork or nil
+    local interactionBranch = context == "interaction" and activeWork
+        and not activeWork.requiresFull and activeWork or nil
+    options.branch = context == "committed" and activeWork
+        or interactionBranch
     local profiling = self._diagnostics.enabled and phase ~= nil
     local batch = profiling and committed
         and self._pendingTransformAttribution or nil

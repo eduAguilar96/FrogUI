@@ -1550,8 +1550,8 @@ local function loadBoundary(instance, out)
     return out
 end
 
-local function stampFullNode(node, boundary, traversal, plane, preorder)
-    local instance = node._motion
+local function stampBranchInstance(instance, boundary, traversal, plane,
+        preorder)
     if not instance then return end
     instance._branchTreeToken = traversal.token
     instance._branchGeneration = traversal.generation
@@ -1560,8 +1560,16 @@ local function stampFullNode(node, boundary, traversal, plane, preorder)
     storeBoundary(instance, boundary)
 end
 
+local function stampFullNode(node, boundary, traversal, plane, preorder)
+    stampBranchInstance(node._motion, boundary, traversal, plane, preorder)
+    stampBranchInstance(node._radialDial, boundary, traversal, plane, preorder)
+end
+
 local function finishFullNode(node, preorderEnd)
     if node._motion then node._motion._branchPreorderEnd = preorderEnd end
+    if node._radialDial then
+        node._radialDial._branchPreorderEnd = preorderEnd
+    end
 end
 
 local function beginPlane(traversal)
@@ -1704,7 +1712,8 @@ local function prepareBranches(root, request)
     end
     for instance in pairs(request.nodes) do
         local node = instance.node
-        if not node or node._motion ~= instance then
+        if not node or node._motion ~= instance
+                and node._radialDial ~= instance then
             return fallback(roots, "detached", pendingTargets)
         end
         if instance._branchTreeToken ~= root._motionTreeToken then
@@ -1756,18 +1765,28 @@ end
 
 local function transformBranch(node, parent, parentInverse, token, generation,
         plane, cursor)
-    local instance = node._motion
-    if instance then
-        assert(instance.node == node
-                and instance._branchTreeToken == token
-                and instance._branchGeneration == generation
-                and instance._branchPlane == plane
-                and instance._branchPreorderStart == cursor,
+    local motionInstance = node._motion
+    local radialInstance = node._radialDial
+    if motionInstance then
+        assert(motionInstance.node == node
+            and motionInstance._branchTreeToken == token
+            and motionInstance._branchGeneration == generation
+            and motionInstance._branchPlane == plane
+            and motionInstance._branchPreorderStart == cursor,
             "FrogUI committed Motion topology changed before branch write")
+    end
+    if radialInstance then
+        assert(radialInstance.node == node
+            and radialInstance._branchTreeToken == token
+            and radialInstance._branchGeneration == generation
+            and radialInstance._branchPlane == plane
+            and radialInstance._branchPreorderStart == cursor,
+            "FrogUI committed RadialDial topology changed before branch write")
     end
     local boundary = node._portal and IDENTITY or parent
     local inverseBoundary = node._portal and IDENTITY or parentInverse
-    storeBoundary(instance, boundary)
+    if motionInstance then storeBoundary(motionInstance, boundary) end
+    if radialInstance then storeBoundary(radialInstance, boundary) end
     transformNodeGeometry(node, boundary, inverseBoundary)
     local visited = 1
     local nextCursor = cursor + 1
@@ -1780,9 +1799,13 @@ local function transformBranch(node, parent, parentInverse, token, generation,
             visited = visited + childVisited
         end
     end
-    if instance then
-        assert(instance._branchPreorderEnd == nextCursor - 1,
+    if motionInstance then
+        assert(motionInstance._branchPreorderEnd == nextCursor - 1,
             "FrogUI committed Motion subtree changed during branch write")
+    end
+    if radialInstance then
+        assert(radialInstance._branchPreorderEnd == nextCursor - 1,
+            "FrogUI committed RadialDial subtree changed during branch write")
     end
     return nextCursor, visited
 end
