@@ -1899,6 +1899,13 @@ so receiver ordering fell from 9.247 to zero KB/rebuilt frame and complete
 typed delivery fell to 28.984 KB. Complete late allocation fell from 528.215
 to 525.194 KB/frame. Per-recipient snapshots remain intentionally detached.
 
+B4p.64 rejected a two-generation primitive-shell/child-array arena before
+benchmarking. `Host:mount` and `Host:render` expose readable committed trees;
+recycling a retired shell mutated a node retained by a caller and failed the
+focused descriptor-props ownership contract. No arena remains. FrogUI keeps
+old returned trees stable instead of adding proxies, epoch handles, or a hidden
+public-tree lifetime rule.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.
