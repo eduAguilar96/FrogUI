@@ -1643,6 +1643,12 @@ local function resetAllocationProbe(probe)
     probe.pipelineFinalizationAllocatedKB = 0
     probe.pipelinePublicationCalls = 0
     probe.pipelinePublicationAllocatedKB = 0
+    probe.pipelinePaintReuseCalls = 0
+    probe.pipelinePaintReuseAllocatedKB = 0
+    probe.pipelinePaintReuseCandidateNodes = 0
+    probe.pipelinePaintReuseMatchedNodes = 0
+    probe.pipelinePaintScratchTransferred = 0
+    probe.pipelinePaintShapeSources = 0
     probe.pipelineGeometryCalls = 0
     probe.pipelinePresentationCreated = 0
     probe.pipelinePresentationAllocatedKB = 0
@@ -2197,6 +2203,20 @@ function host:_readPaintAllocationProbe(rebuilt)
         row.clipShapeCreated, row.clipShapeAllocatedKB,
         row.shineShapeCreated, row.shineShapeAllocatedKB,
         row.shineColorCreated, row.shineColorAllocatedKB
+end
+
+-- Returns publication-time paint-reuse evidence without expanding the older
+-- pipeline tuple consumed by existing diagnostics.
+function host:_readPaintReuseProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no paint-reuse allocation probe to read")
+    return probe.pipelinePaintReuseCalls,
+        probe.pipelinePaintReuseAllocatedKB,
+        probe.pipelinePaintReuseCandidateNodes,
+        probe.pipelinePaintReuseMatchedNodes,
+        probe.pipelinePaintScratchTransferred,
+        probe.pipelinePaintShapeSources
 end
 
 function host:_detachAllocationProbe()
@@ -2793,6 +2813,68 @@ local function recordPipelineAllocation(probe, callsField, kbField, before)
     local after = collectgarbage("count")
     probe[callsField] = probe[callsField] + 1
     probe[kbField] = probe[kbField] + after - before
+end
+
+-- Finds the retired sibling that occupied one candidate's logical address.
+-- Primitive type is part of paint compatibility even when a key is retained.
+local function matchingPaintChild(previous, candidate)
+    if not previous.children then return nil end
+    for _, child in ipairs(previous.children) do
+        if child.logicalIdentity == candidate.logicalIdentity
+                and child.type == candidate.type then
+            return child
+        end
+    end
+end
+
+-- Transfers only callback-free ephemeral Painter scratch between compatible
+-- committed candidates. Node-capturing shapes remain on the retired tree.
+local function transferPaintScratchNode(previous, candidate, probe)
+    if probe then
+        probe.pipelinePaintReuseCandidateNodes =
+            probe.pipelinePaintReuseCandidateNodes + 1
+    end
+    if not previous
+            or previous.logicalIdentity ~= candidate.logicalIdentity
+            or previous.type ~= candidate.type then
+        return
+    end
+    if probe then
+        probe.pipelinePaintReuseMatchedNodes =
+            probe.pipelinePaintReuseMatchedNodes + 1
+    end
+    if previous._paintScratch then
+        candidate._paintScratch = previous._paintScratch
+        if probe then
+            probe.pipelinePaintScratchTransferred =
+                probe.pipelinePaintScratchTransferred + 1
+        end
+    end
+    if previous._paintShapes and probe then
+        probe.pipelinePaintShapeSources =
+            probe.pipelinePaintShapeSources + 1
+    end
+    if candidate.children then
+        for _, child in ipairs(candidate.children) do
+            transferPaintScratchNode(
+                matchingPaintChild(previous, child), child, probe)
+        end
+    end
+    if candidate._dragPreview then
+        transferPaintScratchNode(
+            previous._dragPreview, candidate._dragPreview, probe)
+    end
+end
+
+-- Reuses paint scratch at the publication boundary, after the candidate has
+-- fully built and immediately before it replaces the retired committed tree.
+local function transferPaintScratch(previous, candidate, probe)
+    local before = probe and collectgarbage("count") or nil
+    transferPaintScratchNode(previous, candidate, probe)
+    if probe then
+        recordPipelineAllocation(probe, "pipelinePaintReuseCalls",
+            "pipelinePaintReuseAllocatedKB", before)
+    end
 end
 
 -- Reconciles one semantic render owner's positional hooks. Owners are keyed by
@@ -4378,6 +4460,7 @@ function host:render(root)
     local published = false
     local function commit()
         self._rootDescriptor = requested
+        transferPaintScratch(previous.tree, candidate, pipelineProbe)
         self._tree = candidate
         clearTransformWork(self)
         self._pendingTransformAttribution = nil
@@ -5351,6 +5434,10 @@ function host:resize(width, height)
     }
     local published = false
     local function commit()
+        local allocationProbe = rawget(self, "_allocationProbe")
+        local pipelineProbe = allocationProbe
+            and allocationProbe.mode == "pipeline" and allocationProbe or nil
+        transferPaintScratch(previous.tree, candidate, pipelineProbe)
         self._tree = candidate
         clearTransformWork(self)
         self._pendingTransformAttribution = nil

@@ -78,8 +78,8 @@ local BLACK = { 0, 0, 0, 1 }
 local ICON_OUTLINE = { 0, 0, 0, 0.85 }
 
 -- Writes one multiplied color into caller-owned scratch. The default Painter
--- keeps this scratch on each committed node; custom painters still receive
--- fresh per-draw descriptors and styles.
+-- keeps this scratch across compatible committed candidates; custom painters
+-- still receive fresh per-draw descriptors and styles.
 local function writeTint(out, color, tint)
     out = out or {}
     color = color or WHITE
@@ -135,21 +135,18 @@ local function endClip(state, drawShape)
 end
 
 local function nodeShape(node, content, paintRow)
-    local scratch = node._paintScratch
-    if not scratch then
-        local before = paintRow and collectgarbage("count") or nil
-        scratch = {}
-        node._paintScratch = scratch
-        recordAllocation(paintRow, "scratchCreated", "scratchAllocatedKB",
-            before)
-    end
     local key = content and "contentShape" or "boundsShape"
-    if not scratch[key] then
+    local shapes = node._paintShapes
+    if not shapes or not shapes[key] then
         local before = paintRow and collectgarbage("count") or nil
+        shapes = shapes or {}
+        node._paintShapes = shapes
         -- The callback reads the committed node at invocation time, so Scroll
         -- rearrangement and in-place Motion bounds remain current. Retaining
-        -- it on the node also gives stencil begin/end one stable identity.
-        scratch[key] = function()
+        -- it on this candidate also gives stencil begin/end one stable
+        -- identity. Node-capturing shapes are intentionally separate from
+        -- transferable paint scratch.
+        shapes[key] = function()
             local g = graphics()
             if content then
                 g.rectangle("fill", node.layout.contentX, node.layout.contentY,
@@ -161,7 +158,7 @@ local function nodeShape(node, content, paintRow)
         recordAllocation(paintRow, "clipShapeCreated",
             "clipShapeAllocatedKB", before)
     end
-    return scratch[key]
+    return shapes[key]
 end
 
 local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch,
@@ -280,7 +277,8 @@ local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch,
 end
 
 -- Default painting owns reusable ephemeral style storage on the committed
--- node. It carries no semantic state and disappears with that candidate.
+-- primitive. It carries no semantic state and may move only to the same
+-- primitive type at the same logical identity after a successful commit.
 local function defaultScratch(node, paintRow)
     local scratch = node._paintScratch
     if not scratch then
@@ -415,19 +413,21 @@ local function stampText(g, node, value, align, dx, dy)
 end
 
 local function textShineShape(node, shineSplit, paintRow)
-    local scratch = defaultScratch(node, paintRow)
-    scratch.shineSplit = shineSplit
-    if not scratch.shineShape then
+    local shapes = node._paintShapes
+    if not shapes or not shapes.shineShape then
         local before = paintRow and collectgarbage("count") or nil
-        scratch.shineShape = function()
+        shapes = shapes or {}
+        node._paintShapes = shapes
+        shapes.shineShape = function()
             local g = graphics()
             g.rectangle("fill", node.layout.x, node.layout.y,
-                node.layout.width, node.layout.height * scratch.shineSplit)
+                node.layout.width, node.layout.height * shapes.shineSplit)
         end
         recordAllocation(paintRow, "shineShapeCreated",
             "shineShapeAllocatedKB", before)
     end
-    return scratch.shineShape
+    shapes.shineSplit = shineSplit
+    return shapes.shineShape
 end
 
 local function defaultText(host, node, style, clipState, paintRow)

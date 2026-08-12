@@ -1692,18 +1692,19 @@ Icon outline treatment, clip callbacks, and PopupText shine. The nested cold
 sites are already inside preflight/tree and must not be added to the Painter
 parent. Normal Hosts perform one nil probe lookup at the start of a draw and
 never allocate these rows, call `collectgarbage`, or retain attribution data.
-The focused contract warms one candidate, proves its later draw reports zero
-cold storage, publishes a replacement, and proves its first draw reports the
-fresh storage families.
+The default Painter may carry only callback-free ephemeral scratch across a
+successful publication between the same logical identity and primitive type.
+Node-capturing clip/shine callbacks remain candidate-owned and never transfer.
+The focused contract proves warm draw, equivalent render, resize, rejected
+build, incompatible replacement, and custom-painter isolation.
 
 #### Current measured checkpoint
 
-B4p.47 retains B4p.46's conservative incremental-layout implementation and
-closes its remaining allocation attribution. The B4p.46 manifest at
-`build/frogui/battle-performance-20260812T042637Z-57779` records stable source
-identity across acceptance and diagnostics, acceptance status 1 (completed
-cross-presenter target miss), diagnostics status 0, and a published 3,816-row
-artifact. All allocation windows are uncapped.
+B4p.49 retains B4p.46's conservative incremental-layout implementation and
+adds commit-safe continuity for the default Painter's callback-free ephemeral
+scratch. Clip and shine callbacks capture a resolved node, so they live in
+candidate-owned storage and always rebuild. Components declare no cache,
+revision, or paint dependency.
 
 Every primitive has one readable `node.layout` result. The candidate keeps its
 fresh node shell, props, children, validation, reconciliation, transform,
@@ -1712,24 +1713,20 @@ Resize, theme/asset refresh, hot reload, portals, Scroll, RadialDial, and
 EffectLayer remain full-layout boundaries. Focused tests prove reflow, shifted
 siblings, changed text, barriers, rollback, and removal of temporary markers.
 
-| Allocation boundary | B4p.45 early | B4p.46 early | Saved | B4p.45 late | B4p.46 late | Saved |
+| Allocation boundary | B4p.48 early | B4p.49 early | Saved | B4p.48 late | B4p.49 late | Saved |
 |---|---:|---:|---:|---:|---:|---:|
-| rebuilt update | 2528.135 KB | 2320.766 KB | 8.20% | 1503.368 KB | 1360.368 KB | 9.51% |
-| all frames | 215.304 KB | 205.106 KB | 4.74% | 954.262 KB | 905.177 KB | 5.14% |
+| rebuilt Painter draw | 722.884 KB | 46.272 KB | 93.60% | 884.808 KB | 63.210 KB | 92.86% |
+| all frames | 205.103 KB | 159.895 KB | 22.04% | 905.152 KB | 604.048 KB | 33.27% |
 
-The probes commit 103 branches/1,697 nodes early and 1,090
-branches/10,582 nodes late, with zero incoming-rectangle misses. Timing is
-`1.839/4.979 ms` mean/p95 early and `3.303/9.827 ms` late, with zero FrogUI
-over-budget frames; timing is machine-variable and B4p.46 claims only the
-allocation recovery.
-
-The B4p.47 manifest at
-`build/frogui/battle-performance-20260812T052657Z-71422` proves that layout
-preparation owns the former unexplained `142.219/167.940 KB` per early/late
-rebuild. A one-backlink marker compaction reduced that named phase but moved the
-same hash-table growth into later node writes: complete Host allocation changed
-by less than `0.16 KB/rebuild`, so the runtime experiment was removed. The
-probe retains a `reuse_prepare` phase; application behavior remains B4p.46.
+The source-exact B4p.49 manifest is
+`build/frogui/battle-performance-20260812T060909Z-82604`. It records stable
+source identity, acceptance status 1 (completed cross-presenter target miss),
+diagnostics status 0, no untracked source, uncapped allocation windows, and a
+published 3,816-row artifact. Its publication probe transferred scratch for
+2,364 primitive instances early and 20,724 late while allocating exactly 0 KB.
+Timing is `1.843/4.967 ms` mean/p95 early and `3.346/10.078 ms` late, with zero
+FrogUI over-budget frames; timing is machine-variable and B4p.49 claims only
+the allocation recovery.
 
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
