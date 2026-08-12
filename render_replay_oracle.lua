@@ -3,6 +3,8 @@
 
 local Message = require("src.frogui.message")
 local Element = require("src.frogui.element")
+local Clock = require("src.frogui.clock")
+local Ref = require("src.frogui.ref")
 
 local Oracle = {}
 Oracle.__index = Oracle
@@ -22,6 +24,20 @@ end
 -- Returns whether a metatable-bearing FrogUI definition is immutable identity.
 local function tokenIdentity(value)
     return Element.isToken(value) or Message.isDefinitionToken(value)
+end
+
+-- Names only capabilities FrogUI itself can identify without invoking an
+-- authored metamethod. Everything else remains an explicit opaque shape.
+local function capabilityShape(value)
+    if Ref.isRef(value) then return "Ref" end
+    if rawget(value, "__frogClock") == true and Clock.isClock(value) then
+        return "Clock"
+    end
+    if rawget(value, "__frogAddress") == true
+            and Message.isAddress(value) then
+        return "Address"
+    end
+    return "OpaqueMetatable"
 end
 
 local function scalarIdentity(value)
@@ -156,6 +172,76 @@ local function same(baseline, value)
     }, 1)
 end
 
+local function rootLabel(key)
+    local kind = type(key)
+    if kind == "string" then return key end
+    if kind == "number" or kind == "boolean" then
+        return "[" .. kind .. ":" .. tostring(key) .. "]"
+    end
+    return "[unsupported-key]"
+end
+
+local function dependencyKey(shape, root)
+    return shape .. "\0" .. root
+end
+
+local function recordDependency(state, shape, root)
+    root = root or "(root)"
+    state.shapes[shape] = true
+    state.roots[dependencyKey(shape, root)] = true
+end
+
+-- Finds component-input dependency shapes without retaining their values.
+-- This walk is diagnostic-only, bounded, and never invokes callbacks or
+-- metamethods. Shared tables are visited once per component input graph.
+local function scanDependencyValue(value, state, depth, root)
+    state.values = state.values + 1
+    if state.values > MAX_VALUES then
+        recordDependency(state, "ValueBudget", root)
+        return
+    end
+    local kind = type(value)
+    if kind == "function" then
+        recordDependency(state, "Callback", root)
+        return
+    end
+    if kind == "userdata" or kind == "thread" then
+        recordDependency(state,
+            kind == "userdata" and "Userdata" or "Thread", root)
+        return
+    end
+    if kind ~= "table" or tokenIdentity(value) then return end
+    if getmetatable(value) ~= nil then
+        recordDependency(state, capabilityShape(value), root)
+        return
+    end
+    if depth > MAX_DEPTH then
+        recordDependency(state, "DepthBudget", root)
+        return
+    end
+    if state.seen[value] then return end
+    state.seen[value] = true
+    state.tables = state.tables + 1
+    if state.tables > MAX_TABLES then
+        recordDependency(state, "TableBudget", root)
+        return
+    end
+    for key, nested in pairs(value) do
+        local nestedRoot = depth == 1 and rootLabel(key) or root
+        scanDependencyValue(nested, state, depth + 1, nestedRoot)
+        if state.values > MAX_VALUES or state.tables > MAX_TABLES then break end
+    end
+end
+
+local function scanDependencies(props)
+    local state = {
+        shapes = {}, roots = {}, seen = {},
+        values = 0, tables = 0,
+    }
+    scanDependencyValue(props, state, 1, nil)
+    return state
+end
+
 local function emptyTotals()
     return {
         visits = 0,
@@ -209,6 +295,11 @@ function Oracle.new()
         _totals = emptyTotals(),
         _reasons = {},
         _missReasons = {},
+        _dependencyShapes = {},
+        _dependencyRoots = {},
+        _dependencyOwners = {},
+        _hookShapes = {},
+        _hookOwners = {},
         _owners = {},
         _ownerCount = 0,
     }, Oracle)
@@ -224,6 +315,11 @@ function Oracle:beginCandidate(viewport)
         totals = emptyTotals(),
         reasons = {},
         missReasons = {},
+        dependencyShapes = {},
+        dependencyRoots = {},
+        dependencyOwners = {},
+        hookShapes = {},
+        hookOwners = {},
         owners = {},
         ownerOrder = {},
         ownerCount = 0,
@@ -237,6 +333,7 @@ function Oracle:beforeComponent(stage, logicalPath, token, callback, props)
         "duplicate RenderReplayOracle owner " .. logicalPath)
     addVisit(stage, logicalPath, "visits")
     local input, inputReason = capture(props)
+    local dependencies = scanDependencies(props)
     local previous = self._records[logicalPath]
     local missReason
     local exactPreviousInput = false
@@ -263,6 +360,7 @@ function Oracle:beforeComponent(stage, logicalPath, token, callback, props)
         callback = callback,
         input = input,
         inputReason = inputReason,
+        dependencies = dependencies,
         previous = previous,
         exactPreviousInput = exactPreviousInput,
         missReason = missReason,
@@ -274,6 +372,30 @@ end
 function Oracle:afterComponent(stage, visit, owner, rendered)
     local logicalPath = visit.logicalPath
     addVisit(stage, logicalPath, "callbacks")
+    for shape in pairs(visit.dependencies.shapes) do
+        increment(stage.dependencyShapes, shape)
+        increment(stage.dependencyOwners,
+            dependencyKey(shape, visit.token.name))
+    end
+    for key in pairs(visit.dependencies.roots) do
+        increment(stage.dependencyRoots, key)
+    end
+    local hookKinds = {}
+    for _, hook in ipairs(owner.hooks or {}) do
+        hookKinds[hook.kind] = true
+    end
+    for kind in pairs(hookKinds) do
+        increment(stage.hookShapes, kind)
+        increment(stage.hookOwners,
+            dependencyKey(kind, visit.token.name))
+    end
+    if owner.usesViewport then
+        increment(stage.dependencyShapes, "Viewport")
+        increment(stage.dependencyRoots,
+            dependencyKey("Viewport", "Frog.useViewport"))
+        increment(stage.dependencyOwners,
+            dependencyKey("Viewport", visit.token.name))
+    end
     local reason
     if #(owner.hooks or {}) > 0 then
         reason = "hooks"
@@ -344,6 +466,11 @@ function Oracle:prepareCommit(stage)
     local totals = copyMap(self._totals)
     local reasons = copyMap(self._reasons)
     local missReasons = copyMap(self._missReasons)
+    local dependencyShapes = copyMap(self._dependencyShapes)
+    local dependencyRoots = copyMap(self._dependencyRoots)
+    local dependencyOwners = copyMap(self._dependencyOwners)
+    local hookShapes = copyMap(self._hookShapes)
+    local hookOwners = copyMap(self._hookOwners)
     local owners = {}
     for logicalPath, source in pairs(self._owners) do
         owners[logicalPath] = copyMap(source)
@@ -352,6 +479,11 @@ function Oracle:prepareCommit(stage)
     mergeTotals(totals, stage.totals)
     mergeTotals(reasons, stage.reasons)
     mergeTotals(missReasons, stage.missReasons)
+    mergeTotals(dependencyShapes, stage.dependencyShapes)
+    mergeTotals(dependencyRoots, stage.dependencyRoots)
+    mergeTotals(dependencyOwners, stage.dependencyOwners)
+    mergeTotals(hookShapes, stage.hookShapes)
+    mergeTotals(hookOwners, stage.hookOwners)
     for _, logicalPath in ipairs(stage.ownerOrder) do
         local source = stage.owners[logicalPath]
         local target = owners[logicalPath]
@@ -375,6 +507,11 @@ function Oracle:prepareCommit(stage)
         totals = totals,
         reasons = reasons,
         missReasons = missReasons,
+        dependencyShapes = dependencyShapes,
+        dependencyRoots = dependencyRoots,
+        dependencyOwners = dependencyOwners,
+        hookShapes = hookShapes,
+        hookOwners = hookOwners,
         owners = owners,
         ownerCount = ownerCount,
     }
@@ -387,6 +524,11 @@ function Oracle:commit(stage)
     self._totals = state.totals
     self._reasons = state.reasons
     self._missReasons = state.missReasons
+    self._dependencyShapes = state.dependencyShapes
+    self._dependencyRoots = state.dependencyRoots
+    self._dependencyOwners = state.dependencyOwners
+    self._hookShapes = state.hookShapes
+    self._hookOwners = state.hookOwners
     self._owners = state.owners
     self._ownerCount = state.ownerCount
 end
@@ -396,6 +538,11 @@ function Oracle:clearCounters()
     self._totals = emptyTotals()
     self._reasons = {}
     self._missReasons = {}
+    self._dependencyShapes = {}
+    self._dependencyRoots = {}
+    self._dependencyOwners = {}
+    self._hookShapes = {}
+    self._hookOwners = {}
     self._owners = {}
     self._ownerCount = 0
 end
@@ -439,6 +586,11 @@ function Oracle:report()
         semanticCallbacks = self._totals.semanticCallbacks,
         ineligibleReasons = copyMap(self._reasons),
         missReasons = copyMap(self._missReasons),
+        dependencyShapes = copyMap(self._dependencyShapes),
+        dependencyRoots = copyMap(self._dependencyRoots),
+        dependencyOwners = copyMap(self._dependencyOwners),
+        hookShapes = copyMap(self._hookShapes),
+        hookOwners = copyMap(self._hookOwners),
         topOwners = owners,
         liveRecords = liveRecords,
     }
