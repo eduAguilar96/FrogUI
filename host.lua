@@ -4182,6 +4182,23 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     return node
 end
 
+-- Marks Canvas ancestry inside one newly resolved deferred-view output. It
+-- deliberately does not attempt another deferred-view resolution pass: a
+-- nested view may still be waiting for a later actor in the outer tree.
+local function markDeferredCanvasBranches(node)
+    if not node or node.__frogDeferredView then return false end
+    local containsCanvas = node.type == "Canvas"
+    for _, child in ipairs(node.children or {}) do
+        containsCanvas = markDeferredCanvasBranches(child) or containsCanvas
+    end
+    if node._dragPreview then
+        containsCanvas = markDeferredCanvasBranches(node._dragPreview)
+            or containsCanvas
+    end
+    node._containsCanvas = containsCanvas
+    return containsCanvas
+end
+
 function host:_resolveDeferred(node, context)
     local profiler = context.diagnostics
     local started = profiler and profiler:start() or nil
@@ -4191,8 +4208,10 @@ function host:_resolveDeferred(node, context)
     end
     if node.__frogDeferredView then
         if profiler then profiler:finish("deferredResolution", started) end
-        return self:_resolveView(node.descriptor, node.owner, node.path,
-            node.descendantPath, context, node.logicalPath)
+        local resolved = self:_resolveView(node.descriptor, node.owner,
+            node.path, node.descendantPath, context, node.logicalPath)
+        markDeferredCanvasBranches(resolved)
+        return resolved
     end
     local structureProbe = context.structureAllocationProbe
     local arrayBefore = structureProbe and collectgarbage("count") or nil
@@ -4207,6 +4226,7 @@ function host:_resolveDeferred(node, context)
     end
     if profiler then profiler:finish("deferredResolution", started) end
     local resolvedCount = 0
+    local containsCanvas = node.type == "Canvas"
     for index = 1, childCount do
         local resolved = self:_resolveDeferred(children[index], context)
         started = profiler and profiler:start() or nil
@@ -4215,6 +4235,7 @@ function host:_resolveDeferred(node, context)
                 and collectgarbage("count") or nil
             resolvedCount = resolvedCount + 1
             children[resolvedCount] = resolved
+            containsCanvas = resolved._containsCanvas or containsCanvas
             if structureProbe then
                 local appendAfter = collectgarbage("count")
                 structureProbe.deferredChildCalls =
@@ -4226,8 +4247,13 @@ function host:_resolveDeferred(node, context)
         end
         if profiler then profiler:finish("deferredResolution", started) end
     end
+    if node._dragPreview then
+        node._dragPreview = self:_resolveDeferred(node._dragPreview, context)
+        containsCanvas = node._dragPreview._containsCanvas or containsCanvas
+    end
     started = profiler and profiler:start() or nil
     for index = resolvedCount + 1, childCount do children[index] = nil end
+    node._containsCanvas = containsCanvas
     if profiler then profiler:finish("deferredResolution", started) end
     return node
 end
@@ -4246,20 +4272,6 @@ local function validateEffectOwnership(node, insideLayer)
     for _, child in ipairs(node.children or {}) do
         validateEffectOwnership(child, insideLayer)
     end
-end
-
--- Marks the few branches that need Canvas preflight so ordinary trees do not
--- allocate paint styles merely to discover that no draw callback exists.
-local function annotateCanvasBranches(node)
-    local contains = node.type == "Canvas"
-    for _, child in ipairs(node.children or {}) do
-        contains = annotateCanvasBranches(child) or contains
-    end
-    if node._dragPreview then
-        contains = annotateCanvasBranches(node._dragPreview) or contains
-    end
-    node._containsCanvas = contains
-    return contains
 end
 
 -- Builds the exact receiver sequence while assigning its committed traversal
@@ -4710,7 +4722,6 @@ function host:_build(root)
                     + after - pipelineBefore
         end
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
-        annotateCanvasBranches(candidate)
         for handle, node in pairs(context.refAttachments) do
             context.refRectangles[handle] = {
                 x = node.layout.x,
