@@ -231,8 +231,7 @@ function diagnostics:recordTransform(context, row)
     addCategories(aggregate.fallbackReasons, row.fallbackReasons)
 end
 
--- Records one committed-ref publication. Ref comparison stays observational:
--- the Host still publishes the same complete rectangle set on every call.
+-- Records one arranged-ref refresh decision, including revision-proven skips.
 function diagnostics:recordRefs(context, row)
     if not self.enabled or not self.current then return end
     assert(context == "committed" or context == "interaction",
@@ -243,8 +242,9 @@ function diagnostics:recordRefs(context, row)
         self.current.refAttribution[context] = aggregate
     end
     addFields(aggregate, row, {
-        "calls", "treeVisits", "published", "cleared", "changedRectangles",
-        "visualTransformChanged", "interactionInvalidated",
+        "calls", "skips", "treeVisits", "published", "cleared",
+        "changedRectangles", "visualTransformChanged",
+        "interactionInvalidated",
     })
 end
 

@@ -2411,6 +2411,8 @@ function host.new(options)
     self._nextFrameId = 0
     self._refs = {}
     self._nextRefId = 0
+    self._arrangedRefRevision = 0
+    self._publishedRefRevision = 0
     self._messageQueue = {}
     self._messageTrace = {}
     self._messageSequence = 0
@@ -2575,8 +2577,9 @@ function host:_retainOwnerHooks(logicalPath, token, callback, context)
 end
 
 -- Publishes render-hook ownership, process subscriptions, and arranged refs as
--- one successful Host commit. Removed resources are staged until the current
--- callback batch finishes so every committed cleanup is attempted once.
+-- one successful Host commit. The shared revision covers both new arrangement
+-- and ref membership. Removed resources are staged until the current callback
+-- batch finishes so every committed cleanup is attempted once.
 function host:_publishRenderHooks(context)
     local previousRefs = self._refs
     self:_stageResourceDisposals(self._resources, context.resources)
@@ -2585,6 +2588,8 @@ function host:_publishRenderHooks(context)
     self._frames = context.frames
     self._refs = context.refs
     Ref.publish(previousRefs, self._refs, context.refRectangles)
+    self._arrangedRefRevision = self._arrangedRefRevision + 1
+    self._publishedRefRevision = self._arrangedRefRevision
     local oracle = rawget(self, "_renderReplayOracle")
     if oracle then oracle:commit(context.renderReplayCensus) end
     local actorLocal = self._actorLocalEnabled and self._actorLocal or nil
@@ -2592,23 +2597,44 @@ function host:_publishRenderHooks(context)
 end
 
 -- Republishes geometry after retained layout mutates the committed tree, such
--- as Scroll drag, snap, wheel, momentum, or focus reveal.
+-- as Scroll drag, snap, wheel, momentum, or focus reveal. Ordinary committed
+-- Motion changes only visual transforms, so an unchanged arranged-ref revision
+-- proves the complete traversal and rectangle copies are unnecessary.
 function host:_refreshCommittedRefs(context, transformRow)
-    local rectangles = {}
-    local profiling = self._diagnostics.enabled
-    local collection = profiling and { treeVisits = 0 } or nil
-    collectCommittedRefRectangles(self._tree, rectangles, collection)
-    local publication = Ref.publish(self._refs, self._refs, rectangles, profiling)
-    if not profiling then return end
     context = context or "interaction"
+    local profiling = self._diagnostics.enabled
     local families = transformRow and transformRow.families or {}
     local visualChanged = transformRow and transformRow.runs > 0
         and (families.Motion or 0) > 0
     local interactionInvalidated = transformRow and transformRow.runs > 0
         and ((families.Scroll or 0) + (families.RadialDial or 0)
             + (families.interaction or 0)) > 0
+    if context == "committed"
+            and self._publishedRefRevision == self._arrangedRefRevision then
+        if profiling then
+            self._diagnostics:recordRefs(context, {
+                calls = 1,
+                skips = 1,
+                treeVisits = 0,
+                published = 0,
+                cleared = 0,
+                changedRectangles = 0,
+                visualTransformChanged = visualChanged and 1 or 0,
+                interactionInvalidated = interactionInvalidated and 1 or 0,
+            })
+            self._diagnostics:increment(context .. "RefSkips")
+        end
+        return false
+    end
+    local rectangles = {}
+    local collection = profiling and { treeVisits = 0 } or nil
+    collectCommittedRefRectangles(self._tree, rectangles, collection)
+    local publication = Ref.publish(self._refs, self._refs, rectangles, profiling)
+    self._publishedRefRevision = self._arrangedRefRevision
+    if not profiling then return true end
     self._diagnostics:recordRefs(context, {
         calls = 1,
+        skips = 0,
         treeVisits = collection.treeVisits,
         published = publication.published,
         cleared = publication.cleared,
@@ -2621,6 +2647,7 @@ function host:_refreshCommittedRefs(context, transformRow)
         collection.treeVisits)
     self._diagnostics:increment(context .. "ChangedRefRectangles",
         publication.changed)
+    return true
 end
 
 -- Implements the public positional single-ref hook.
@@ -4056,6 +4083,9 @@ function host:_invalidateTransform(node, family, detail, recipes)
             .. tostring(detail), 0)
     end
     assert(node, "FrogUI transform invalidation requires its changed node")
+    if family ~= "Motion" then
+        self._arrangedRefRevision = self._arrangedRefRevision + 1
+    end
     local motionInstance
     if family == "Motion" then
         motionInstance = node._motion
@@ -5862,6 +5892,8 @@ function host:unmount()
     self._frames = {}
     self._refs = {}
     Ref.publish(committedRefs, self._refs, {})
+    self._arrangedRefRevision = 0
+    self._publishedRefRevision = 0
     self._motions = {}
     self._effects = {}
     Shader.clear(self)

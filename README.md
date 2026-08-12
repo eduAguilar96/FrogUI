@@ -272,6 +272,14 @@ rectangles before their observers run. A failed candidate render or resize
 never publishes its tree, Scroll geometry, or ref rectangles, so the previous
 committed geometry remains readable.
 
+The Host tracks one private scalar revision for arranged geometry plus ref
+membership and one for the last complete publication. Candidate commits and
+retained layout changes advance the first; successful ref publication
+synchronizes the second. Ordinary `Frog.Motion` changes only visual transforms,
+so matching revisions let the Host skip a redundant full-tree ref walk and
+rectangle copies. This is automatic framework bookkeeping, not a component
+revision or dependency API.
+
 For dynamic authored atoms, call one keyed hook instead of looping over
 `useRef`:
 
@@ -1522,21 +1530,23 @@ Each trace row also has two transform/ref observer tables:
   context, and frame. It preserves the row's named top five plus `other`
   without phase aggregation, reranking, or a second truncation, so owner/recipe
   evidence remains correlated with the locality and Battle activity row.
-- `refAttribution.committed|interaction` reports collection visits, handles
-  published/cleared, rectangles actually changed, and whether that publication
-  followed visual Motion or a retained interaction invalidation. The latter is
-  a cause flag, not proof that layout values differed; `changedRectangles` is
-  the exact arranged-geometry comparison. Visual Motion can
-  run while changing zero arranged ref rectangles; the two facts deliberately
-  remain separate.
+- `refAttribution.committed|interaction` reports refresh calls, revision-proven
+  skips, collection visits, handles published/cleared, rectangles actually
+  changed, and whether the decision followed visual Motion or a retained
+  interaction invalidation. The latter is a cause flag, not proof that layout
+  values differed; `changedRectangles` is the exact arranged-geometry
+  comparison. Visual Motion can run while the already-published arranged-ref
+  revision remains current; the two facts deliberately remain separate.
 
 A committed run without an exact invalidation family is a framework invariant
 failure. A skipped call always reports zero visits. Candidate layout is the one
 explicit exception because a new tree needs its first transform before it can
 be committed. Committed Motion-only invalidations may use the exact branch route
 described below. Candidate, message, interaction, mixed, stale, unsafe, and
-over-limit cases retain the full transform. Ref collection/publication remains
-unchanged; these fields do not implement a ref gate.
+over-limit cases retain the full transform. Ref publication remains complete
+after every candidate commit and retained arrangement. A committed update may
+skip only when the Host's arranged/ref-membership revision exactly matches the
+last complete publication.
 
 Transform geometry still has one implementation: a non-recursive node writer
 shared by full production recursion, exact branch recursion, and the
@@ -1753,6 +1763,17 @@ shine-shape, and measured-window stencil-program creation counters are exactly
 zero. A separate cold-Host contract proves exactly one program is created on
 first default draw and released on unmount. No node callbacks remain on the
 candidate tree.
+
+The source-exact B4p.52 manifest is
+`build/frogui/battle-performance-20260812T064541Z-94616`. The arranged-ref
+revision gate eliminated all 180 redundant committed collection/publication
+walks in both early and late diagnostic windows while preserving all 60 late
+RadialDial interaction publications: 56,701 tree visits, 2,520 handles, and no
+skips. All-frame allocation fell from 38.286/159.361/599.355 to
+23.764/144.716/584.861 KB/frame paused/early/late. Quiet-update allocation fell
+from 16.682/17.439/77.003 to 2.057/2.814/62.441 KB per cohort frame. Candidate,
+resize, failed-build, interaction, Motion, clean-frame, and cleanup contracts
+all retain exact ref behavior.
 
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
