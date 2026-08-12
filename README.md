@@ -215,6 +215,16 @@ The callable-table trick is ordinary Lua metatable behavior implemented in
 [`element.lua`](element.lua). FrogUI uses it only to make component trees read
 like tags without adding a template language or compiler.
 
+Calling a FrogUI tag detaches its top-level authored input into one framework-
+owned props table. The returned description and its resolved primitive share
+that exact table; FrogUI never copies it again and never mutates it. Treat
+descriptions, `description.props`, and the nodes returned by `Host:tree()` as
+read-only inspection values. To change UI, create a new description through a
+component render or send an actor action. Nested tables and capabilities keep
+their authored identity unless their specific API says it snapshots them.
+This ownership keeps ordinary component syntax inexpensive without a proxy,
+deep comparison, freeze walk, or hidden memo API.
+
 ## Committed geometry refs
 
 Effects sometimes need the exact arranged rectangle of a visible primitive.

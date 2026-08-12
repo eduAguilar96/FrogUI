@@ -1504,8 +1504,8 @@ local function resetAllocationProbe(probe)
     probe.descriptorAllocatedKB = 0
     probe.primitiveNodeCalls = 0
     probe.primitiveNodeAllocatedKB = 0
-    probe.primitivePropsCopyCalls = 0
-    probe.primitivePropsCopyAllocatedKB = 0
+    probe.primitivePropsAttachmentCalls = 0
+    probe.primitivePropsAttachmentAllocatedKB = 0
     probe.primitiveChildrenArrayCalls = 0
     probe.primitiveChildrenArrayAllocatedKB = 0
     probe.primitiveNodeShellCalls = 0
@@ -1821,8 +1821,8 @@ function host:_readPrimitiveMaterializationProbe()
     local probe = rawget(self, "_allocationProbe")
     assert(probe and probe.mode == "structure",
         "FrogUI Host has no primitive materialization probe to read")
-    return probe.primitivePropsCopyCalls,
-        probe.primitivePropsCopyAllocatedKB,
+    return probe.primitivePropsAttachmentCalls,
+        probe.primitivePropsAttachmentAllocatedKB,
         probe.primitiveChildrenArrayCalls,
         probe.primitiveChildrenArrayAllocatedKB,
         probe.primitiveNodeShellCalls,
@@ -3408,13 +3408,15 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
         and structureProbe or nil
     local structureBefore = structureProbe and collectgarbage("count") or nil
     local propsBefore = nodeProbe and collectgarbage("count") or nil
-    local nodeProps = shallowCopy(descriptor.props)
+    -- Element.construct already detached the caller's input. Descriptors and
+    -- resolved nodes share that framework-owned, read-only props value.
+    local nodeProps = descriptor.props
     if nodeProbe then
         local propsAfter = collectgarbage("count")
-        nodeProbe.primitivePropsCopyCalls =
-            nodeProbe.primitivePropsCopyCalls + 1
-        nodeProbe.primitivePropsCopyAllocatedKB =
-            nodeProbe.primitivePropsCopyAllocatedKB
+        nodeProbe.primitivePropsAttachmentCalls =
+            nodeProbe.primitivePropsAttachmentCalls + 1
+        nodeProbe.primitivePropsAttachmentAllocatedKB =
+            nodeProbe.primitivePropsAttachmentAllocatedKB
                 + propsAfter - propsBefore
     end
     local childrenBefore = nodeProbe and collectgarbage("count") or nil
