@@ -1214,8 +1214,13 @@ function layout.run(root, width, height, host, allocationProbe, previousRoot)
         recordAllocation(allocationProbe, "pipelineLayoutSessionCreated",
             "pipelineLayoutSessionAllocatedKB", before, 1)
     end
+    before = allocationProbe and collectgarbage("count") or nil
     if previousRoot then
         prepareLayoutReuse(root, previousRoot, allocationProbe)
+    end
+    if allocationProbe then
+        recordAllocation(allocationProbe, "pipelineLayoutReusePrepareCalls",
+            "pipelineLayoutReusePrepareAllocatedKB", before, 1)
     end
     before = allocationProbe and collectgarbage("count") or nil
     measure(root, width, height, host, session)

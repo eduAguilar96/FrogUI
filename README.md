@@ -1684,8 +1684,8 @@ or revisions.
 
 #### Current measured checkpoint
 
-B4p.46 closes the first conservative incremental-layout implementation. The
-valid manifest at
+B4p.47 retains B4p.46's conservative incremental-layout implementation and
+closes its remaining allocation attribution. The B4p.46 manifest at
 `build/frogui/battle-performance-20260812T042637Z-57779` records stable source
 identity across acceptance and diagnostics, acceptance status 1 (completed
 cross-presenter target miss), diagnostics status 0, and a published 3,816-row
@@ -1706,7 +1706,17 @@ siblings, changed text, barriers, rollback, and removal of temporary markers.
 The probes commit 103 branches/1,697 nodes early and 1,090
 branches/10,582 nodes late, with zero incoming-rectangle misses. Timing is
 `1.839/4.979 ms` mean/p95 early and `3.303/9.827 ms` late, with zero FrogUI
-over-budget frames; timing is machine-variable and this checkpoint claims only
-the allocation recovery. B4p remains open and B5 remains blocked. The full
-ownership decision and source hashes live in
+over-budget frames; timing is machine-variable and B4p.46 claims only the
+allocation recovery.
+
+The B4p.47 manifest at
+`build/frogui/battle-performance-20260812T052657Z-71422` proves that layout
+preparation owns the former unexplained `142.219/167.940 KB` per early/late
+rebuild. A one-backlink marker compaction reduced that named phase but moved the
+same hash-table growth into later node writes: complete Host allocation changed
+by less than `0.16 KB/rebuild`, so the runtime experiment was removed. The
+probe retains a `reuse_prepare` phase; application behavior remains B4p.46.
+
+B4p remains open and B5 remains blocked. The full ownership decision, rejected
+experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.

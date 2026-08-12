@@ -1651,6 +1651,8 @@ local function resetAllocationProbe(probe)
     probe.pipelineVisualContentBoundsRequiredNodes = 0
     probe.pipelineLayoutSessionCreated = 0
     probe.pipelineLayoutSessionAllocatedKB = 0
+    probe.pipelineLayoutReusePrepareCalls = 0
+    probe.pipelineLayoutReusePrepareAllocatedKB = 0
     probe.pipelineLayoutMeasurePhaseCalls = 0
     probe.pipelineLayoutMeasurePhaseAllocatedKB = 0
     probe.pipelineLayoutArrangePhaseCalls = 0
@@ -2029,6 +2031,8 @@ function host:_readLayoutAllocationProbe()
         "FrogUI Host has no layout allocation probe to read")
     return probe.pipelineLayoutSessionCreated,
         probe.pipelineLayoutSessionAllocatedKB,
+        probe.pipelineLayoutReusePrepareCalls,
+        probe.pipelineLayoutReusePrepareAllocatedKB,
         probe.pipelineLayoutMeasurePhaseCalls,
         probe.pipelineLayoutMeasurePhaseAllocatedKB,
         probe.pipelineLayoutArrangePhaseCalls,
