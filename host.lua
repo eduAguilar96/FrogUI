@@ -14,6 +14,7 @@ local Interaction = require("src.frogui.interaction")
 local Ref = require("src.frogui.ref")
 local Diagnostics = require("src.frogui.diagnostics")
 local DiagnosticComparison = require("src.frogui.diagnostic_comparison")
+local ActorLocal = require("src.frogui.actor_local")
 
 local host = {}
 host.__index = host
@@ -1993,47 +1994,47 @@ function host:_attachRenderReplayCensus()
         "Render replay census must attach before Host mount")
     assert(self._diagnostics.enabled,
         "Render replay census requires diagnostics = true")
-    assert(rawget(self, "_actorLocalPrototype") == nil,
-        "Render replay census cannot share an actor-local prototype Host")
+    assert(self._actorLocalEnabled,
+        "Render replay census needs ordinary actor-local scheduling enabled")
     assert(rawget(self, "_renderReplayOracle") == nil,
         "Render replay census is already attached")
     local RenderReplayOracle = require("src.frogui.render_replay_oracle")
+    self._actorLocalEnabled = false
+    self._actorLocal:reset()
     self._renderReplayOracle = RenderReplayOracle.new()
     return true
 end
 
--- Attaches the private generic actor-local update proof before mount. Ordinary
--- Hosts keep the existing complete semantic rebuild behavior.
-function host:_attachActorLocalPrototype()
+-- Selects complete semantic callbacks for a private benchmark control. Normal
+-- Hosts always use actor-local scheduling; this switch is not authoring API.
+function host:_useCompleteSemanticRenders()
     assert(not self._mounted,
-        "Actor-local prototype must attach before Host mount")
+        "Complete semantic renders must be selected before Host mount")
     assert(rawget(self, "_renderReplayOracle") == nil,
-        "Actor-local prototype cannot share a render replay census Host")
-    assert(rawget(self, "_actorLocalPrototype") == nil,
-        "Actor-local prototype is already attached")
-    local ActorLocalPrototype =
-        require("src.frogui.actor_local_prototype")
-    self._actorLocalPrototype = ActorLocalPrototype.new()
+        "Complete semantic control cannot share a render replay census Host")
+    assert(self._actorLocalEnabled,
+        "Complete semantic renders are already selected")
+    self._actorLocalEnabled = false
+    self._actorLocal:reset()
     return true
 end
 
--- Returns detached scalar prototype evidence without exposing descriptions.
-function host:_readActorLocalPrototype()
-    local prototype = assert(rawget(self, "_actorLocalPrototype"),
-        "FrogUI Host has no actor-local prototype")
-    return prototype:report()
-end
-
--- Detaches a prototype before mount or after a failed mount. Successful
--- unmount clears it automatically with the Host lifetime.
-function host:_detachActorLocalPrototype()
+-- Restores ordinary actor-local scheduling after an unmounted A/C control.
+function host:_restoreActorLocalRenders()
     assert(not self._mounted,
-        "Actor-local prototype must detach after Host unmount")
-    local prototype = assert(rawget(self, "_actorLocalPrototype"),
-        "FrogUI Host has no actor-local prototype")
-    prototype:reset()
-    self._actorLocalPrototype = nil
+        "Actor-local renders must be restored after Host unmount")
+    assert(rawget(self, "_renderReplayOracle") == nil,
+        "Actor-local renders cannot restore during a replay census")
+    assert(not self._actorLocalEnabled,
+        "Actor-local renders are already enabled")
+    self._actorLocalEnabled = true
+    self._actorLocal:reset()
     return true
+end
+
+-- Returns detached scalar scheduler evidence without exposing descriptions.
+function host:_readActorLocal()
+    return self._actorLocal:report()
 end
 
 -- Clears counters for one warm measurement window while retaining verification.
@@ -2060,6 +2061,8 @@ function host:_detachRenderReplayCensus()
         "FrogUI Host has no render replay census")
     oracle:reset()
     self._renderReplayOracle = nil
+    self._actorLocalEnabled = true
+    self._actorLocal:reset()
     return true
 end
 
@@ -2104,6 +2107,8 @@ function host.new(options)
     self._actors = {}
     self._addresses = {}
     self._semanticTokens = {}
+    self._actorLocal = ActorLocal.new()
+    self._actorLocalEnabled = true
     self._hookOwners = {}
     self._resources = {}
     self._frames = {}
@@ -2287,7 +2292,7 @@ function host:_publishRenderHooks(context)
     Ref.publish(previousRefs, self._refs, context.refRectangles)
     local oracle = rawget(self, "_renderReplayOracle")
     if oracle then oracle:commit(context.renderReplayCensus) end
-    local actorLocal = rawget(self, "_actorLocalPrototype")
+    local actorLocal = self._actorLocalEnabled and self._actorLocal or nil
     if actorLocal then actorLocal:commit(context.actorLocalCandidate) end
 end
 
@@ -2695,29 +2700,28 @@ function host:_addressSend(address)
     end
 end
 
--- Reuses one committed semantic description only inside the opt-in actor-local
--- candidate and only while no changed ancestor forces this owner to render.
+-- Reuses one committed semantic description during an actor-local candidate
+-- only while no changed ancestor forces this owner to render.
 function host:_reuseSemanticOutput(descriptor, logicalPath, token, callback,
         context, force)
     local candidate = context.actorLocalCandidate
     if not candidate or force or context.forceSemanticRender then
         return false
     end
-    local prototype = assert(rawget(self, "_actorLocalPrototype"))
-    local reused, rendered = prototype:reuse(candidate, logicalPath,
+    local scheduler = assert(self._actorLocal)
+    local reused, rendered = scheduler:reuse(candidate, logicalPath,
         token, callback, descriptor)
     if not reused then return false end
     self:_retainOwnerHooks(logicalPath, token, callback, context)
     return true, rendered
 end
 
--- Records one real semantic callback result in the current prototype
--- candidate. Ordinary Hosts take no branch and retain no description.
+-- Records one real semantic callback result in the current local candidate.
 function host:_recordSemanticOutput(descriptor, logicalPath, token, callback,
         rendered, context)
     local candidate = context.actorLocalCandidate
     if not candidate then return end
-    assert(rawget(self, "_actorLocalPrototype")):record(candidate,
+    self._actorLocal:record(candidate,
         logicalPath, token, callback, descriptor, rendered)
 end
 
@@ -2821,7 +2825,7 @@ function host:_registerActor(descriptor, owner, path, descendantPath, context,
             pipelineBefore)
     end
 
-    local actorLocal = rawget(self, "_actorLocalPrototype")
+    local actorLocal = self._actorLocalEnabled and self._actorLocal or nil
     local actorDirty = actorLocal and actorLocal:isDirty(
         context.actorLocalCandidate, logicalPath) or false
     local reused, rendered = false, nil
@@ -2988,7 +2992,7 @@ function host:_resolveView(descriptor, owner, path, descendantPath, context,
             "pipelineBookkeepingCalls", "pipelineBookkeepingAllocatedKB",
             pipelineBefore)
     end
-    local actorLocal = rawget(self, "_actorLocalPrototype")
+    local actorLocal = self._actorLocalEnabled and self._actorLocal or nil
     local previousInstance = self._addresses[address]
     local viewDirty = false
     if actorLocal then
@@ -3936,7 +3940,7 @@ function host:_build(root)
         context.renderReplayCensus = renderReplayOracle:beginCandidate(
             self._viewport:snapshot())
     end
-    local actorLocal = rawget(self, "_actorLocalPrototype")
+    local actorLocal = self._actorLocalEnabled and self._actorLocal or nil
     if actorLocal then
         context.actorLocalCandidate = actorLocal:beginCandidate(
             rawget(self, "_actorLocalDirtyActors"))
@@ -4681,8 +4685,7 @@ end
 
 function host:_drainMessages(budget)
     local dirty = false
-    local trackActorChanges =
-        rawget(self, "_actorLocalPrototype") ~= nil
+    local trackActorChanges = self._actorLocalEnabled
     local dirtyActors = trackActorChanges and {} or nil
     local profiling = self._diagnostics.enabled
     budget = budget or { processed = 0 }
@@ -4724,11 +4727,11 @@ function host:_drainMessages(budget)
     return dirty, lastTraceIndex, dirtyActors
 end
 
--- Runs one opt-in actor-local semantic candidate while guaranteeing the dirty
+-- Runs one actor-local semantic candidate while guaranteeing the dirty
 -- batch cannot leak into a later explicit render after failure.
 function host:_renderActorChanges(dirtyActors)
-    assert(rawget(self, "_actorLocalPrototype"),
-        "actor-local render requires its attached prototype")
+    assert(self._actorLocalEnabled,
+        "actor-local render requires ordinary local scheduling")
     assert(next(dirtyActors or {}) ~= nil,
         "actor-local render requires at least one changed actor")
     assert(rawget(self, "_actorLocalDirtyActors") == nil,
@@ -4776,7 +4779,7 @@ function host:_runCallback(callback, origin, originSource, ...)
             end
             if dirty then
                 local rendered, renderError
-                if rawget(self, "_actorLocalPrototype") then
+                if self._actorLocalEnabled then
                     rendered, renderError = pcall(
                         self._renderActorChanges, self, dirtyActors)
                 else
@@ -5455,12 +5458,9 @@ function host:unmount()
     if renderReplayOracle then
         renderReplayOracle:reset()
         self._renderReplayOracle = nil
+        self._actorLocalEnabled = true
     end
-    local actorLocal = rawget(self, "_actorLocalPrototype")
-    if actorLocal then
-        actorLocal:reset()
-        self._actorLocalPrototype = nil
-    end
+    self._actorLocal:reset()
     self._actorLocalDirtyActors = nil
     self._mounted = false
     if activeHost == self then activeHost = nil end

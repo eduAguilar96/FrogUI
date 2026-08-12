@@ -199,8 +199,13 @@ projections, companion style files, or geometry files.
   retains only compact delivery metadata—not payload archives or full
   before/after actor states.
 - Actor actions, events, route props, and retained-process revisions reconcile
-  the tree. Motion/effect clocks, painting, and process advance stay per-frame
-  work and do not manufacture a render loop.
+  the tree. A typed actor change reruns that actor and its semantic subtree;
+  quiet owners retain their descriptions while FrogUI still rebuilds and lays
+  out a fresh primitive tree. Therefore visible callback state belongs to an
+  actor or explicit root render prop. Never mutate a captured Lua local and
+  rely on an unrelated actor's reconciliation to make it visible.
+- Motion/effect clocks, painting, and process advance stay per-frame work and
+  do not manufacture a render loop.
 
 ## 7. Committed refs name exact geometry
 

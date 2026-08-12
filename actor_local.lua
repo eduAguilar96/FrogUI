@@ -1,9 +1,9 @@
--- ActorLocalPrototype is an opt-in development proof for explicit actor-local
--- semantic updates. It retains returned descriptions only across typed actor
--- changes; ordinary FrogUI Hosts never allocate or consult this cache.
+-- ActorLocal is FrogUI's Host-owned semantic scheduler. It retains committed
+-- component/actor descriptions across typed actor changes so unchanged owners
+-- skip their callbacks while every primitive and layout pass still rebuilds.
 
-local Prototype = {}
-Prototype.__index = Prototype
+local ActorLocal = {}
+ActorLocal.__index = ActorLocal
 
 local function copySet(source)
     if source == nil then return nil, 0 end
@@ -23,8 +23,8 @@ local function copyReport(source)
     return output
 end
 
--- Creates one empty Host-lifetime cache and bounded scalar report.
-function Prototype.new()
+-- Creates one empty Host-lifetime semantic output cache.
+function ActorLocal.new()
     return setmetatable({
         _outputs = {},
         _totals = {
@@ -35,12 +35,12 @@ function Prototype.new()
             reusedOwners = 0,
         },
         _last = {},
-    }, Prototype)
+    }, ActorLocal)
 end
 
 -- Starts a full candidate when dirtyActors is nil and an actor-local candidate
--- otherwise. The dirty set is copied so later message work cannot mutate it.
-function Prototype:beginCandidate(dirtyActors)
+-- otherwise. The dirty set is copied so later messages cannot mutate it.
+function ActorLocal:beginCandidate(dirtyActors)
     local copied, dirtyCount = copySet(dirtyActors)
     return {
         full = copied == nil,
@@ -53,13 +53,12 @@ function Prototype:beginCandidate(dirtyActors)
 end
 
 -- Returns whether one mounted actor was named by the current message batch.
-function Prototype:isDirty(stage, logicalPath)
+function ActorLocal:isDirty(stage, logicalPath)
     return stage.full or stage.dirtyActors[logicalPath] == true
 end
 
--- Reuses one exact committed owner description. Token, render callback, and
--- authored input descriptor identities must still name the same boundary.
-function Prototype:reuse(stage, logicalPath, token, callback, descriptor)
+-- Reuses one exact committed owner description when its identity is stable.
+function ActorLocal:reuse(stage, logicalPath, token, callback, descriptor)
     if stage.full then return false end
     local record = self._outputs[logicalPath]
     if not record or record.token ~= token or record.callback ~= callback
@@ -71,9 +70,9 @@ function Prototype:reuse(stage, logicalPath, token, callback, descriptor)
     return true, record.rendered
 end
 
--- Records one callback result in candidate-local storage. Nil output remains a
--- valid record because the containing record table owns the distinction.
-function Prototype:record(stage, logicalPath, token, callback, descriptor,
+-- Records one callback result in candidate-local storage. Nil remains valid
+-- because the containing record owns the distinction from a missing owner.
+function ActorLocal:record(stage, logicalPath, token, callback, descriptor,
         rendered)
     stage.outputs[logicalPath] = {
         token = token,
@@ -84,8 +83,8 @@ function Prototype:record(stage, logicalPath, token, callback, descriptor,
     stage.renderedOwners = stage.renderedOwners + 1
 end
 
--- Publishes a complete owner-description set only with its Host candidate.
-function Prototype:commit(stage)
+-- Publishes a complete semantic-output set only with its Host candidate.
+function ActorLocal:commit(stage)
     self._outputs = stage.outputs
     local totals = self._totals
     totals.candidates = totals.candidates + 1
@@ -106,14 +105,14 @@ function Prototype:commit(stage)
 end
 
 -- Counts retained scalar-keyed records without exposing their descriptions.
-function Prototype:liveOwnerCount()
+function ActorLocal:liveOwnerCount()
     local count = 0
     for _ in pairs(self._outputs) do count = count + 1 end
     return count
 end
 
 -- Returns detached scalar evidence for focused development checks.
-function Prototype:report()
+function ActorLocal:report()
     return {
         totals = copyReport(self._totals),
         last = copyReport(self._last),
@@ -121,8 +120,8 @@ function Prototype:report()
     }
 end
 
--- Clears all retained descriptions at the end of the Host lifetime.
-function Prototype:reset()
+-- Clears all retained descriptions and counters between mount lifetimes.
+function ActorLocal:reset()
     self._outputs = {}
     self._last = {}
     self._totals = {
@@ -134,4 +133,4 @@ function Prototype:reset()
     }
 end
 
-return Prototype
+return ActorLocal

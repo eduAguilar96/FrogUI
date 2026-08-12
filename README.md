@@ -715,6 +715,21 @@ reconciliation. F6 keeps a bounded diagnostic trace of token, origin, ordered
 recipients, acceptance, and reconciliation only. It deliberately retains no
 message payloads or full before/after actor states.
 
+FrogUI schedules that reconciliation at the actors whose typed state changed.
+The changed actor and its semantic descendants rerun; quiet component, actor,
+and view owners retain their last committed descriptions. FrogUI still
+materializes, validates, measures, and arranges one fresh primitive tree, so a
+changed child's size can reflow an untouched sibling correctly. Mount, direct
+`Host:render`, resize, theme refresh, and hot reload always take a complete
+semantic render. There is no memo API, equality callback, dependency list, or
+authored dirty flag.
+
+This makes ownership observable: a callback must not mutate a captured Lua
+local and expect some unrelated actor's message to rerun the enclosing
+component. Put visible mutable state in the actor that renders it, publish a
+typed event to another owner, or pass a new root prop through explicit
+`Host:render`. Stateless helpers remain ordinary `Frog.component` functions.
+
 An actor may declare `unmount(props, state)` when the actor itself owns an
 external capability that must be released if its exact mount leaves the
 committed tree. Cleanup runs once after a successful removal or Host teardown,
@@ -1367,8 +1382,8 @@ shows current/p95 update and paint cost plus p95 attribution by phase:
 | `msg` | Typed action/event validation and reducer delivery |
 | `action` / `event` | The corresponding typed-message validation, routing, and processing inside `msg` |
 | `transition` | Actor reducer/transition work inside action or event processing |
-| `reconcile` | The complete dirty semantic rebuild and publication |
-| `expand` | The complete semantic-description expansion before layout |
+| `reconcile` | Dirty actor semantic scheduling, complete primitive expansion/layout, and publication |
+| `expand` | Retained quiet-owner descriptions plus changed-owner callbacks expanded into one fresh primitive tree |
 | `semantic` | Component/actor/view callback bodies only; hook setup/finalization is excluded |
 | `prepare` / `bookkeeping` | Owner-local props/state copies versus actor/view/hook/path administration; neither wraps descendant resolution |
 | `primitive validation/materialization/post` | Primitive prop validation, resolved-node/ref construction, then child-dependent validation |
