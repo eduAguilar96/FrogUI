@@ -1818,6 +1818,17 @@ they carry almost no active Motion. Recipes remain inert immutable data,
 candidate runners remain isolated, and the complete Motion, feedback,
 completion, transform, and rollback contract passes unchanged.
 
+The source-exact B4p.56 manifest is
+`build/frogui/battle-performance-20260812T072309Z-8977`. Compatible candidate
+clones retain committed-only warm scratch while candidate composition uses
+isolated temporary values. Each committed Motion owner reuses runner-order
+entries, completion storage, an alternate value buffer, and its node's
+presentation record. Late quiet/rebuilt Motion fell from 10.767/16.062 to
+0.397/0.401 KB/frame. Ordering, value seeding, completion scratch, and
+presentation publication are zero-allocation in quiet frames; complete late
+FrogUI allocation fell another 14.245 KB/frame, from 560.051 to 545.806.
+The remaining 0.356 KB/frame instance registry is deliberately deferred.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.

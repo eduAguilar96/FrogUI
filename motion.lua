@@ -466,9 +466,12 @@ local function cloneRunner(runner)
         startedAt = runner.startedAt,
         previous = runner.previous,
         base = copyValues(runner.base),
-        sampled = copyValues(),
-        sampleScratch = {},
-        feedbackBudget = { remaining = 1024 },
+        -- Candidate reconciliation never samples through these shared runtime
+        -- buffers. A successful compatible commit therefore keeps their warm
+        -- shape; a failed candidate cannot mutate the committed owner.
+        sampled = runner.sampled,
+        sampleScratch = runner.sampleScratch,
+        feedbackBudget = runner.feedbackBudget,
         order = runner.order,
         clockKind = runner.clockKind,
         bindingKey = runner.bindingKey,
@@ -488,6 +491,7 @@ local function cloneInstance(old, allocationProbe)
         reducedMotion = old.reducedMotion,
         node = old.node,
         lifetime = old.lifetime,
+        _runtimeScratch = old._runtimeScratch,
     }
     recordReconciliationAllocation(allocationProbe,
         "pipelineMotionCloneShellCalls",
@@ -790,6 +794,9 @@ function motion.reconcile(old, node, props, logicalIdentity, order, host,
             values = copyValues(),
             settled = copyValues(),
             recipes = {}, active = {}, motionTargets = {}, lifetime = {},
+            _runtimeScratch = {
+                ordered = {}, completed = {}, values = copyValues(),
+            },
         }
         recordReconciliationAllocation(allocationProbe,
             "pipelineMotionCloneInitialCalls",
@@ -958,6 +965,22 @@ local function applyRunner(values, runner, elapsed)
     end
 end
 
+-- Candidate-only composition intentionally does not touch the warm buffers
+-- shared with its compatible committed runner. The candidate owns these
+-- temporary tables and may be discarded atomically after any render failure.
+local function applyRunnerToCandidate(values, runner, elapsed)
+    local sampled = sampleInto(runner.analysis, elapsed, runner.base,
+        copyValues(), {}, 1)
+    for property, mode in pairs(runner.analysis.written) do
+        if mode == "add" then
+            values[property] = values[property]
+                + sampled[property] - runner.base[property]
+        else
+            setValue(values, property, sampled[property])
+        end
+    end
+end
+
 composeActive = function(instance)
     local ordered = {}
     for name, runner in pairs(instance.active) do
@@ -967,7 +990,8 @@ composeActive = function(instance)
     local values = copyValues(instance.settled)
     for _, entry in ipairs(ordered) do
         local runner = entry.runner
-        applyRunner(values, runner, runner.clock:now() - runner.startedAt)
+        applyRunnerToCandidate(values, runner,
+            runner.clock:now() - runner.startedAt)
     end
     return values
 end
@@ -977,10 +1001,22 @@ end
 -- path with no runner/value allocations.
 local function updateActive(instance, host, completions, attribution,
         runtimeRow)
+    local scratch = instance._runtimeScratch
     local runnerOrderBefore = runtimeRow and collectgarbage("count") or nil
-    local ordered = {}
+    local ordered = scratch.ordered
+    local orderedCount = 0
     for name, runner in pairs(instance.active) do
-        ordered[#ordered + 1] = { name = name, runner = runner }
+        orderedCount = orderedCount + 1
+        local entry = ordered[orderedCount]
+        if not entry then
+            entry = {}
+            ordered[orderedCount] = entry
+        end
+        entry.name = name
+        entry.runner = runner
+    end
+    for index = #ordered, orderedCount + 1, -1 do
+        ordered[index] = nil
     end
     table.sort(ordered, runnerOrder)
     local geometryRecipes
@@ -1001,13 +1037,14 @@ local function updateActive(instance, host, completions, attribution,
         "motionRunnerOrderCalls", "motionRunnerOrderAllocatedKB",
         runnerOrderBefore)
     local valueSeedBefore = runtimeRow and collectgarbage("count") or nil
-    local values = copyValues(instance.settled)
+    local values = copyValuesInto(scratch.values, instance.settled)
     recordRuntimeAllocation(runtimeRow,
         "motionValueSeedCalls", "motionValueSeedAllocatedKB",
         valueSeedBefore)
     local completedScratchBefore = runtimeRow
         and collectgarbage("count") or nil
-    local completed = {}
+    local completed = scratch.completed
+    for index = #completed, 1, -1 do completed[index] = nil end
     recordRuntimeAllocation(runtimeRow,
         "motionCompletedScratchCalls", "motionCompletedScratchAllocatedKB",
         completedScratchBefore)
@@ -1034,7 +1071,8 @@ local function updateActive(instance, host, completions, attribution,
         local runner = entry.runner
         for property, mode in pairs(runner.analysis.written) do
             if mode ~= "add" then
-                setValue(instance.settled, property, runner.sampled[property])
+                setBufferedValue(instance.settled, property,
+                    runner.sampled[property])
             end
         end
         instance.active[entry.name] = nil
@@ -1058,9 +1096,11 @@ local function updateActive(instance, host, completions, attribution,
     local presentationBefore = runtimeRow and collectgarbage("count") or nil
     local visualChanged = not sameValues(instance.values, values)
     local geometryChanged = not sameGeometry(instance.values, values)
+    scratch.values = instance.values
     instance.values = values
     if instance.node and visualChanged then
-        instance.node.presentation = copyValues(instance.values)
+        instance.node.presentation = copyValuesInto(
+            instance.node.presentation or {}, instance.values)
         if geometryChanged then
             host:_invalidateTransform(instance.node, "Motion",
                 "frame-sample", geometryRecipes)
