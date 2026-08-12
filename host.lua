@@ -1540,6 +1540,15 @@ local RUNTIME_ALLOCATION_ROW_FIELDS = {
     "frameSnapshotCalls", "frameSnapshotAllocatedKB",
     "frameCallbackCalls", "frameCallbackAllocatedKB",
     "frameMessageDeliveryCalls", "frameMessageDeliveryAllocatedKB",
+    "frameMessageValidationCalls", "frameMessageValidationAllocatedKB",
+    "frameMessageReceiverOrderCalls", "frameMessageReceiverOrderAllocatedKB",
+    "frameMessageRecipientSnapshotCalls",
+        "frameMessageRecipientSnapshotAllocatedKB",
+    "frameMessageActorReactionCalls", "frameMessageActorReactionAllocatedKB",
+    "frameMessageMotionReactionCalls",
+        "frameMessageMotionReactionAllocatedKB",
+    "frameMessageTransformCalls", "frameMessageTransformAllocatedKB",
+    "frameMessageTraceCalls", "frameMessageTraceAllocatedKB",
     "frameCandidateRenderCalls", "frameCandidateRenderAllocatedKB",
     "runtimeCalls", "runtimeAllocatedKB",
     "interactionCalls", "interactionAllocatedKB",
@@ -1599,6 +1608,20 @@ local function resetPendingFrameAllocation(probe)
     probe.pendingFrameCallbackAllocatedKB = 0
     probe.pendingFrameMessageDeliveryCalls = 0
     probe.pendingFrameMessageDeliveryAllocatedKB = 0
+    probe.pendingFrameMessageValidationCalls = 0
+    probe.pendingFrameMessageValidationAllocatedKB = 0
+    probe.pendingFrameMessageReceiverOrderCalls = 0
+    probe.pendingFrameMessageReceiverOrderAllocatedKB = 0
+    probe.pendingFrameMessageRecipientSnapshotCalls = 0
+    probe.pendingFrameMessageRecipientSnapshotAllocatedKB = 0
+    probe.pendingFrameMessageActorReactionCalls = 0
+    probe.pendingFrameMessageActorReactionAllocatedKB = 0
+    probe.pendingFrameMessageMotionReactionCalls = 0
+    probe.pendingFrameMessageMotionReactionAllocatedKB = 0
+    probe.pendingFrameMessageTransformCalls = 0
+    probe.pendingFrameMessageTransformAllocatedKB = 0
+    probe.pendingFrameMessageTraceCalls = 0
+    probe.pendingFrameMessageTraceAllocatedKB = 0
     probe.pendingFrameCandidateRenderCalls = 0
     probe.pendingFrameCandidateRenderAllocatedKB = 0
 end
@@ -1625,6 +1648,39 @@ local function publishPendingFrameAllocation(probe, row)
         + probe.pendingFrameMessageDeliveryCalls
     row.frameMessageDeliveryAllocatedKB = row.frameMessageDeliveryAllocatedKB
         + probe.pendingFrameMessageDeliveryAllocatedKB
+    row.frameMessageValidationCalls = row.frameMessageValidationCalls
+        + probe.pendingFrameMessageValidationCalls
+    row.frameMessageValidationAllocatedKB = row.frameMessageValidationAllocatedKB
+        + probe.pendingFrameMessageValidationAllocatedKB
+    row.frameMessageReceiverOrderCalls = row.frameMessageReceiverOrderCalls
+        + probe.pendingFrameMessageReceiverOrderCalls
+    row.frameMessageReceiverOrderAllocatedKB =
+        row.frameMessageReceiverOrderAllocatedKB
+            + probe.pendingFrameMessageReceiverOrderAllocatedKB
+    row.frameMessageRecipientSnapshotCalls =
+        row.frameMessageRecipientSnapshotCalls
+            + probe.pendingFrameMessageRecipientSnapshotCalls
+    row.frameMessageRecipientSnapshotAllocatedKB =
+        row.frameMessageRecipientSnapshotAllocatedKB
+            + probe.pendingFrameMessageRecipientSnapshotAllocatedKB
+    row.frameMessageActorReactionCalls = row.frameMessageActorReactionCalls
+        + probe.pendingFrameMessageActorReactionCalls
+    row.frameMessageActorReactionAllocatedKB =
+        row.frameMessageActorReactionAllocatedKB
+            + probe.pendingFrameMessageActorReactionAllocatedKB
+    row.frameMessageMotionReactionCalls = row.frameMessageMotionReactionCalls
+        + probe.pendingFrameMessageMotionReactionCalls
+    row.frameMessageMotionReactionAllocatedKB =
+        row.frameMessageMotionReactionAllocatedKB
+            + probe.pendingFrameMessageMotionReactionAllocatedKB
+    row.frameMessageTransformCalls = row.frameMessageTransformCalls
+        + probe.pendingFrameMessageTransformCalls
+    row.frameMessageTransformAllocatedKB = row.frameMessageTransformAllocatedKB
+        + probe.pendingFrameMessageTransformAllocatedKB
+    row.frameMessageTraceCalls = row.frameMessageTraceCalls
+        + probe.pendingFrameMessageTraceCalls
+    row.frameMessageTraceAllocatedKB = row.frameMessageTraceAllocatedKB
+        + probe.pendingFrameMessageTraceAllocatedKB
     row.frameCandidateRenderCalls = row.frameCandidateRenderCalls
         + probe.pendingFrameCandidateRenderCalls
     row.frameCandidateRenderAllocatedKB = row.frameCandidateRenderAllocatedKB
@@ -2375,6 +2431,17 @@ function host:_readRuntimeAllocationProbe(rebuilt)
         row.frameSnapshotCalls, row.frameSnapshotAllocatedKB,
         row.frameCallbackCalls, row.frameCallbackAllocatedKB,
         row.frameMessageDeliveryCalls, row.frameMessageDeliveryAllocatedKB,
+        row.frameMessageValidationCalls, row.frameMessageValidationAllocatedKB,
+        row.frameMessageReceiverOrderCalls,
+        row.frameMessageReceiverOrderAllocatedKB,
+        row.frameMessageRecipientSnapshotCalls,
+        row.frameMessageRecipientSnapshotAllocatedKB,
+        row.frameMessageActorReactionCalls,
+        row.frameMessageActorReactionAllocatedKB,
+        row.frameMessageMotionReactionCalls,
+        row.frameMessageMotionReactionAllocatedKB,
+        row.frameMessageTransformCalls, row.frameMessageTransformAllocatedKB,
+        row.frameMessageTraceCalls, row.frameMessageTraceAllocatedKB,
         row.frameCandidateRenderCalls, row.frameCandidateRenderAllocatedKB,
         row.runtimeCalls, row.runtimeAllocatedKB,
         row.interactionCalls, row.interactionAllocatedKB,
@@ -2586,6 +2653,7 @@ function host.new(options)
     self._callbackDepth = 0
     self._rawClock = Clock.new()
     self._motions = {}
+    self._eventReceivers = {}
     self._effects = {}
     self._scrolls = {}
     self._radials = {}
@@ -3014,6 +3082,7 @@ function host:mount(root)
     self._effects = context.effects
     self._scrolls = context.scrolls
     self._radials = context.radials
+    self._eventReceivers = context.eventReceivers
     self._modals = context.modals
     self._modal = context.modal
     self._chrome = context.chrome
@@ -4173,17 +4242,21 @@ local function annotateCanvasBranches(node)
     return contains
 end
 
-local function assignEventOrder(node, nextOrder)
+-- Builds the exact receiver sequence while assigning its committed traversal
+-- order. Candidate publication makes the complete list visible atomically.
+local function assignEventOrder(node, nextOrder, receivers)
     for _, instance in ipairs(node._actorInstances or {}) do
         instance.eventOrder = nextOrder
+        receivers[#receivers + 1] = instance
         nextOrder = nextOrder + 1
     end
     if node._motion then
         node._motion.eventOrder = nextOrder
+        receivers[#receivers + 1] = node._motion
         nextOrder = nextOrder + 1
     end
     for _, child in ipairs(node.children or {}) do
-        nextOrder = assignEventOrder(child, nextOrder)
+        nextOrder = assignEventOrder(child, nextOrder, receivers)
     end
     return nextOrder
 end
@@ -4509,6 +4582,7 @@ function host:_build(root)
         effects = {},
         scrolls = {},
         radials = {},
+        eventReceivers = {},
         previewDepth = 0,
         nextReceiverOrder = 1,
         nextEffectOrder = 1,
@@ -4572,7 +4646,8 @@ function host:_build(root)
         validateEffectOwnership(candidate, false)
         self._diagnostics:finish("effectOwnership", ownershipStarted)
         local orderingStarted = self._diagnostics:start()
-        local nextEventOrder = assignEventOrder(candidate, 1)
+        local nextEventOrder = assignEventOrder(
+            candidate, 1, context.eventReceivers)
         local hiddenActors = {}
         for _, instance in pairs(context.actors) do
             hiddenActors[#hiddenActors + 1] = instance
@@ -4582,6 +4657,7 @@ function host:_build(root)
         for _, instance in ipairs(hiddenActors) do
             if not instance.eventOrder then
                 instance.eventOrder = nextEventOrder
+                context.eventReceivers[#context.eventReceivers + 1] = instance
                 nextEventOrder = nextEventOrder + 1
             end
         end
@@ -4732,6 +4808,7 @@ function host:render(root)
         self._effects = context.effects
         self._scrolls = context.scrolls
         self._radials = context.radials
+        self._eventReceivers = context.eventReceivers
         self._modals = context.modals
         self._modal = context.modal
         self._chrome = context.chrome
@@ -5088,20 +5165,6 @@ function host:_commitActorUnmounts()
     return firstError
 end
 
-local function orderedEventReceivers(actors, motions)
-    local output = {}
-    for _, instance in pairs(actors) do
-        output[#output + 1] = { kind = "actor", instance = instance }
-    end
-    for _, instance in pairs(motions) do
-        output[#output + 1] = { kind = "motion", instance = instance }
-    end
-    table.sort(output, function(left, right)
-        return left.instance.eventOrder < right.instance.eventOrder
-    end)
-    return output
-end
-
 function host:_resolveTarget(target)
     if Message.isAddress(target) then
         local instance = self._addresses[target]
@@ -5227,28 +5290,51 @@ function host:_processAction(entry, trackActorChanges)
 end
 
 function host:_processEvent(entry, trackActorChanges)
+    local allocationProbe = rawget(self, "_allocationProbe")
+    local frameProbe = allocationProbe and allocationProbe.active
+        and allocationProbe.mode == "pipeline" and allocationProbe or nil
+    local validationBefore = frameProbe and collectgarbage("count") or nil
     local record, token = Message.validate(entry.record, "event")
+    recordPendingFrameAllocation(frameProbe,
+        "pendingFrameMessageValidationCalls",
+        "pendingFrameMessageValidationAllocatedKB", validationBefore)
     local recipients = {}
     local transitions = {}
     local changed = false
     local changedActors = trackActorChanges and {} or nil
-    for _, receiver in ipairs(orderedEventReceivers(self._actors, self._motions)) do
-        local instance = receiver.instance
+    local receiverOrderBefore = frameProbe and collectgarbage("count") or nil
+    local receivers = self._eventReceivers
+    recordPendingFrameAllocation(frameProbe,
+        "pendingFrameMessageReceiverOrderCalls",
+        "pendingFrameMessageReceiverOrderAllocatedKB", receiverOrderBefore)
+    for _, instance in ipairs(receivers) do
         for _, reaction in ipairs(instance.reactions) do
             if reaction.event == token then
-                if receiver.kind == "actor" then
+                if instance.token and instance.token.kind == "actor" then
                     local recipient = actorLabel(instance)
                     recipients[#recipients + 1] = recipient
                     local accepted, didChange = false, false
                     -- Each actor reducer owns one detached delivery record.
                     -- An impure reducer cannot corrupt the canonical broadcast
                     -- inspected by a later ordered recipient.
+                    local snapshotBefore = frameProbe
+                        and collectgarbage("count") or nil
                     local delivery = Message.snapshot(record, "event")
+                    recordPendingFrameAllocation(frameProbe,
+                        "pendingFrameMessageRecipientSnapshotCalls",
+                        "pendingFrameMessageRecipientSnapshotAllocatedKB",
+                        snapshotBefore)
+                    local reactionBefore = frameProbe
+                        and collectgarbage("count") or nil
                     if Message.matches(reaction.match, delivery, instance.props) then
                         accepted, didChange = self:_applyTransition(
                             instance, reaction.transition, delivery,
                             entry.origin or "event:" .. token.name)
                     end
+                    recordPendingFrameAllocation(frameProbe,
+                        "pendingFrameMessageActorReactionCalls",
+                        "pendingFrameMessageActorReactionAllocatedKB",
+                        reactionBefore)
                     transitions[#transitions + 1] = {
                         recipient = recipient,
                         accepted = accepted,
@@ -5261,9 +5347,15 @@ function host:_processEvent(entry, trackActorChanges)
                 else
                     local recipient = "juice:" .. instance.identity
                     recipients[#recipients + 1] = recipient
+                    local reactionBefore = frameProbe
+                        and collectgarbage("count") or nil
                     local accepted = Message.matches(
                         reaction.match, record, instance.props)
                     if accepted then Motion.play(instance, reaction.do_, self) end
+                    recordPendingFrameAllocation(frameProbe,
+                        "pendingFrameMessageMotionReactionCalls",
+                        "pendingFrameMessageMotionReactionAllocatedKB",
+                        reactionBefore)
                     transitions[#transitions + 1] = {
                         recipient = recipient,
                         accepted = accepted,
@@ -5273,7 +5365,12 @@ function host:_processEvent(entry, trackActorChanges)
             end
         end
     end
+    local transformBefore = frameProbe and collectgarbage("count") or nil
     self:_transformTree(nil, "messageTransform")
+    recordPendingFrameAllocation(frameProbe,
+        "pendingFrameMessageTransformCalls",
+        "pendingFrameMessageTransformAllocatedKB", transformBefore)
+    local traceBefore = frameProbe and collectgarbage("count") or nil
     local traceIndex = self:_appendTrace({
         kind = "event",
         token = token.name,
@@ -5286,6 +5383,9 @@ function host:_processEvent(entry, trackActorChanges)
         transitions = transitions,
         reconciled = false,
     })
+    recordPendingFrameAllocation(frameProbe,
+        "pendingFrameMessageTraceCalls",
+        "pendingFrameMessageTraceAllocatedKB", traceBefore)
     return changed, traceIndex, changedActors
 end
 
@@ -5824,6 +5924,7 @@ function host:resize(width, height)
         self._effects = context.effects
         self._scrolls = context.scrolls
         self._radials = context.radials
+        self._eventReceivers = context.eventReceivers
         self._modals = context.modals
         self._modal = context.modal
         self._chrome = context.chrome
@@ -6174,6 +6275,7 @@ function host:unmount()
     self._arrangedRefRevision = 0
     self._publishedRefRevision = 0
     self._motions = {}
+    self._eventReceivers = {}
     self._effects = {}
     Shader.clear(self)
     self._scrolls = {}

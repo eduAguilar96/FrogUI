@@ -1883,6 +1883,22 @@ late frames likewise spend only 0.101 KB on the subscriber snapshot. The next
 bounded runtime target is typed message delivery, while the already-attributed
 fresh-candidate pipeline remains subject to the earlier ownership constraints.
 
+The source-exact B4p.62 attribution run is
+`build/frogui/battle-performance-20260812T080720Z-25958`. Of 38.231 KB typed
+delivery allocation per late rebuilt frame, detached per-recipient event
+snapshots own 22.312 KB, repeated receiver registry construction/sorting owns
+9.247, trace publication 1.235, validation 0.567, actor reactions 0.035, and
+the parent remainder 4.835. Transform and Motion reaction paths allocate zero
+in this sample.
+
+The source-exact B4p.63 run is
+`build/frogui/battle-performance-20260812T081413Z-28536`. Each complete
+candidate now publishes one ordered actor/Motion receiver list atomically on
+mount, render, and resize. Event delivery reads that committed order directly,
+so receiver ordering fell from 9.247 to zero KB/rebuilt frame and complete
+typed delivery fell to 28.984 KB. Complete late allocation fell from 528.215
+to 525.194 KB/frame. Per-recipient snapshots remain intentionally detached.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.
