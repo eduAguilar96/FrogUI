@@ -4272,7 +4272,8 @@ end
 -- Validates resolved effect ownership while building the exact receiver
 -- sequence in the same pre-layout walk. Both results remain candidate-local
 -- until one atomic Host publication.
-local function finalizeResolvedTree(node, insideLayer, nextOrder, receivers)
+local function finalizeResolvedTree(node, insideLayer, portalAncestor,
+        nextOrder, context)
     if node.type == "PopupText" or node.type == "Projectile"
             or node.type == "Flipbook" then
         assert(insideLayer,
@@ -4281,19 +4282,32 @@ local function finalizeResolvedTree(node, insideLayer, nextOrder, receivers)
         assert(not insideLayer, "Frog.EffectLayer cannot be nested")
         insideLayer = true
     end
+    local isPortal = node.type == "Modal" or node.type == "Chrome"
+    if isPortal and portalAncestor then
+        error("FrogUI root portals cannot be nested ("
+            .. portalAncestor.type .. " contains " .. node.type .. ")")
+    end
+    if node.type == "Modal" then
+        context.modals[#context.modals + 1] = node
+    elseif node.type == "Chrome" then
+        assert(context.chrome == nil,
+            "FrogUI permits only one Frog.Chrome portal")
+        context.chrome = node
+    end
+    local nextPortalAncestor = isPortal and node or portalAncestor
     for _, instance in ipairs(node._actorInstances or {}) do
         instance.eventOrder = nextOrder
-        receivers[#receivers + 1] = instance
+        context.eventReceivers[#context.eventReceivers + 1] = instance
         nextOrder = nextOrder + 1
     end
     if node._motion then
         node._motion.eventOrder = nextOrder
-        receivers[#receivers + 1] = node._motion
+        context.eventReceivers[#context.eventReceivers + 1] = node._motion
         nextOrder = nextOrder + 1
     end
     for _, child in ipairs(node.children or {}) do
         nextOrder = finalizeResolvedTree(
-            child, insideLayer, nextOrder, receivers)
+            child, insideLayer, nextPortalAncestor, nextOrder, context)
     end
     return nextOrder
 end
@@ -4620,6 +4634,8 @@ function host:_build(root)
         scrolls = {},
         radials = {},
         eventReceivers = {},
+        modals = {},
+        chrome = nil,
         previewDepth = 0,
         nextReceiverOrder = 1,
         nextEffectOrder = 1,
@@ -4681,7 +4697,7 @@ function host:_build(root)
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         local ownershipStarted = self._diagnostics:start()
         local nextEventOrder = finalizeResolvedTree(
-            candidate, false, 1, context.eventReceivers)
+            candidate, false, nil, 1, context)
         self._diagnostics:finish("effectOwnership", ownershipStarted)
         local orderingStarted = self._diagnostics:start()
         local hiddenActors = {}
@@ -4756,7 +4772,6 @@ function host:_build(root)
         end
         pipelineBefore = pipelineProbe and collectgarbage("count") or nil
         Effect.updateBounds(context.effects, self)
-        context.modals, context.chrome = Interaction.planesFromTree(candidate)
         context.modal = context.modals[#context.modals]
         if pipelineProbe then
             local after = collectgarbage("count")
