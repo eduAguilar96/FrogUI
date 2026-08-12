@@ -4962,9 +4962,9 @@ end
 -- Packs the two public transition booleans into one retained array value.
 -- messageTrace expands it back into readable records only when tooling asks.
 local function traceTransitionStatus(accepted, changed)
+    if not accepted then return nil end
     if changed then return 2 end
-    if accepted then return 1 end
-    return 0
+    return 1
 end
 
 function host:_enqueue(entry)
@@ -5326,6 +5326,7 @@ function host:_processEvent(entry, trackActorChanges)
                 if instance.token and instance.token.kind == "actor" then
                     local recipient = actorLabel(instance)
                     recipients[#recipients + 1] = recipient
+                    local recipientIndex = #recipients
                     local accepted, didChange = false, false
                     -- Declarative matching is framework-owned and read-only,
                     -- so a rejected actor needs no private payload. Every
@@ -5358,7 +5359,7 @@ function host:_processEvent(entry, trackActorChanges)
                             "pendingFrameMessageActorReactionAllocatedKB",
                             reactionBefore)
                     end
-                    statuses[#statuses + 1] =
+                    statuses[recipientIndex] =
                         traceTransitionStatus(accepted, didChange)
                     if didChange and changedActors then
                         changedActors[instance.identity] = true
@@ -5367,6 +5368,7 @@ function host:_processEvent(entry, trackActorChanges)
                 else
                     local recipient = "juice:" .. instance.identity
                     recipients[#recipients + 1] = recipient
+                    local recipientIndex = #recipients
                     local reactionBefore = frameProbe
                         and collectgarbage("count") or nil
                     local accepted = Message.matches(
@@ -5376,7 +5378,7 @@ function host:_processEvent(entry, trackActorChanges)
                         "pendingFrameMessageMotionReactionCalls",
                         "pendingFrameMessageMotionReactionAllocatedKB",
                         reactionBefore)
-                    statuses[#statuses + 1] =
+                    statuses[recipientIndex] =
                         traceTransitionStatus(accepted, accepted)
                 end
             end

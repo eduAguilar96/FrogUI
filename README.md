@@ -1941,6 +1941,13 @@ source records on demand. Trace publication fell from 1.235 to 0.935 KB per
 late rebuilt frame and late all-frame allocation fell from 515.542 to 515.401
 KB/frame.
 
+The source-exact B4p.69 run is
+`build/frogui/battle-performance-20260812T084605Z-38427`. Rejected reactions
+remain ordered public trace recipients, but their default false/false status is
+no longer stored explicitly in the private parallel status table. Complete
+late rebuilt message delivery fell from 3.451 to 3.099 KB/frame; public F6 and
+`messageTrace()` records are unchanged.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.
