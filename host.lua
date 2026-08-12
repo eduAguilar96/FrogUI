@@ -1534,11 +1534,39 @@ local PAINT_ALLOCATION_ROW_FIELDS = {
     "clipProgramCreated", "clipProgramAllocatedKB",
 }
 
+local RUNTIME_ALLOCATION_ROW_FIELDS = {
+    "updateCalls", "updateAllocatedKB",
+    "framesCalls", "framesAllocatedKB",
+    "runtimeCalls", "runtimeAllocatedKB",
+    "interactionCalls", "interactionAllocatedKB",
+    "motionCalls", "motionAllocatedKB",
+    "refsCalls", "refsAllocatedKB",
+    "effectRefreshCalls", "effectRefreshAllocatedKB",
+    "effectUpdateCalls", "effectUpdateAllocatedKB",
+    "effectBoundsCalls", "effectBoundsAllocatedKB",
+    "feedbackCalls", "feedbackAllocatedKB",
+    "completionCalls", "completionAllocatedKB",
+    "finishCalls", "finishAllocatedKB",
+}
+
 -- Resets one preallocated painter row without constructing measurement data.
 -- The first attachment creates the two cohort rows before the stopped-GC
 -- window; later resets only overwrite existing scalar keys.
 local function resetPaintAllocationRow(row)
     for _, field in ipairs(PAINT_ALLOCATION_ROW_FIELDS) do row[field] = 0 end
+end
+
+-- Resets one preallocated Host:update attribution row. This private probe is
+-- active only in the stopped-collector Battle tool and has no ordinary path.
+local function resetRuntimeAllocationRow(row)
+    for _, field in ipairs(RUNTIME_ALLOCATION_ROW_FIELDS) do row[field] = 0 end
+end
+
+local function recordRuntimeAllocation(row, callsField, allocatedField, before)
+    if not row then return end
+    row[callsField] = row[callsField] + 1
+    row[allocatedField] = row[allocatedField]
+        + collectgarbage("count") - before
 end
 
 local function resetAllocationProbe(probe)
@@ -1821,6 +1849,10 @@ local function resetAllocationProbe(probe)
     resetPaintAllocationRow(probe.paintQuiet)
     resetPaintAllocationRow(probe.paintRebuilt)
     probe.paintActiveRow = probe.paintQuiet
+    probe.runtimeQuiet = probe.runtimeQuiet or {}
+    probe.runtimeRebuilt = probe.runtimeRebuilt or {}
+    resetRuntimeAllocationRow(probe.runtimeQuiet)
+    resetRuntimeAllocationRow(probe.runtimeRebuilt)
 end
 
 -- Private, globally exclusive allocation attribution for the Battle harness.
@@ -2258,6 +2290,27 @@ function host:_readPaintAllocationProbe(rebuilt)
         row.shineShapeCreated, row.shineShapeAllocatedKB,
         row.shineColorCreated, row.shineColorAllocatedKB,
         row.clipProgramCreated, row.clipProgramAllocatedKB
+end
+
+-- Returns one Host:update cohort row as scalars after the stopped-collector
+-- window. Runtime phases are disjoint children of the update/runtime parents.
+function host:_readRuntimeAllocationProbe(rebuilt)
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no runtime allocation probe to read")
+    local row = rebuilt and probe.runtimeRebuilt or probe.runtimeQuiet
+    return row.updateCalls, row.updateAllocatedKB,
+        row.framesCalls, row.framesAllocatedKB,
+        row.runtimeCalls, row.runtimeAllocatedKB,
+        row.interactionCalls, row.interactionAllocatedKB,
+        row.motionCalls, row.motionAllocatedKB,
+        row.refsCalls, row.refsAllocatedKB,
+        row.effectRefreshCalls, row.effectRefreshAllocatedKB,
+        row.effectUpdateCalls, row.effectUpdateAllocatedKB,
+        row.effectBoundsCalls, row.effectBoundsAllocatedKB,
+        row.feedbackCalls, row.feedbackAllocatedKB,
+        row.completionCalls, row.completionAllocatedKB,
+        row.finishCalls, row.finishAllocatedKB
 end
 
 -- Returns publication-time paint-reuse evidence without expanding the older
@@ -5339,20 +5392,44 @@ function host:update(dt)
     assertPresentationAllowed(self, "advance")
     assertInputBoundary(self)
     assert(type(dt) == "number" and dt >= 0, "Host:update dt must be non-negative")
+    local allocationProbe = rawget(self, "_allocationProbe")
+    local runtimeAllocationProbe = allocationProbe
+        and allocationProbe.active and allocationProbe.mode == "pipeline"
+        and allocationProbe or nil
+    local allocationGeneration = runtimeAllocationProbe and self._generation or nil
+    local allocationUpdateBefore = runtimeAllocationProbe
+        and collectgarbage("count") or nil
     self._diagnostics:beginFrame()
     self._diagnosticUpdateActive = true
     local updateStarted = self._diagnostics:start()
+    local allocationFramesBefore = runtimeAllocationProbe
+        and collectgarbage("count") or nil
     self:_runFrames(dt)
+    local runtimeAllocationRow
+    if runtimeAllocationProbe then
+        runtimeAllocationRow = self._generation ~= allocationGeneration
+            and runtimeAllocationProbe.runtimeRebuilt
+            or runtimeAllocationProbe.runtimeQuiet
+        recordRuntimeAllocation(runtimeAllocationRow,
+            "framesCalls", "framesAllocatedKB", allocationFramesBefore)
+    end
     local feedbackMark = #self._feedbackQueue
     local motionCompletions, effectCompletions
     local runtimeStarted = self._diagnostics:start()
     local profiling = self._diagnostics.enabled
     local runtimeHeapStarted = profiling and self._diagnostics:heapStart() or nil
     local runtimeHeapCursor = runtimeHeapStarted
+    local allocationRuntimeBefore = runtimeAllocationRow
+        and collectgarbage("count") or nil
     local ok, err = pcall(function()
         local interactionStarted = self._diagnostics:start()
+        local allocationInteractionBefore = runtimeAllocationRow
+            and collectgarbage("count") or nil
         self._rawClock:advance(dt)
         Interaction.update(self, dt)
+        recordRuntimeAllocation(runtimeAllocationRow,
+            "interactionCalls", "interactionAllocatedKB",
+            allocationInteractionBefore)
         self._diagnostics:finish("interaction", interactionStarted)
         if profiling then
             runtimeHeapCursor = self._diagnostics:heapMark(
@@ -5361,6 +5438,8 @@ function host:update(dt)
         local motionStarted = self._diagnostics:start()
         local motionUpdateStarted = profiling
             and self._diagnostics:start() or nil
+        local allocationMotionBefore = runtimeAllocationRow
+            and collectgarbage("count") or nil
         local motionAttribution
         _, motionCompletions, motionAttribution =
             Motion.updateAll(self._motions, self)
@@ -5369,13 +5448,19 @@ function host:update(dt)
         end
         local _, transformAttribution = self:_transformTree(nil,
             "committedTransform", motionAttribution)
+        recordRuntimeAllocation(runtimeAllocationRow,
+            "motionCalls", "motionAllocatedKB", allocationMotionBefore)
         self._diagnostics:finish("motion", motionStarted)
         if profiling then
             runtimeHeapCursor = self._diagnostics:heapMark(
                 "motion", runtimeHeapCursor)
         end
         local refsStarted = self._diagnostics:start()
+        local allocationRefsBefore = runtimeAllocationRow
+            and collectgarbage("count") or nil
         self:_refreshCommittedRefs("committed", transformAttribution)
+        recordRuntimeAllocation(runtimeAllocationRow,
+            "refsCalls", "refsAllocatedKB", allocationRefsBefore)
         self._diagnostics:finish("refs", refsStarted)
         if profiling then
             runtimeHeapCursor = self._diagnostics:heapMark(
@@ -5383,18 +5468,33 @@ function host:update(dt)
         end
         local effectsStarted = self._diagnostics:start()
         local refreshStarted = profiling and self._diagnostics:start() or nil
+        local allocationEffectRefreshBefore = runtimeAllocationRow
+            and collectgarbage("count") or nil
         Effect.refreshAll(self._effects, self)
+        recordRuntimeAllocation(runtimeAllocationRow,
+            "effectRefreshCalls", "effectRefreshAllocatedKB",
+            allocationEffectRefreshBefore)
         if profiling then
             self._diagnostics:finish("effectRefresh", refreshStarted)
         end
         local effectUpdateStarted = profiling
             and self._diagnostics:start() or nil
+        local allocationEffectUpdateBefore = runtimeAllocationRow
+            and collectgarbage("count") or nil
         effectCompletions = Effect.updateAll(self._effects)
+        recordRuntimeAllocation(runtimeAllocationRow,
+            "effectUpdateCalls", "effectUpdateAllocatedKB",
+            allocationEffectUpdateBefore)
         if profiling then
             self._diagnostics:finish("effectUpdate", effectUpdateStarted)
         end
         local boundsStarted = profiling and self._diagnostics:start() or nil
+        local allocationEffectBoundsBefore = runtimeAllocationRow
+            and collectgarbage("count") or nil
         Effect.updateBounds(self._effects, self)
+        recordRuntimeAllocation(runtimeAllocationRow,
+            "effectBoundsCalls", "effectBoundsAllocatedKB",
+            allocationEffectBoundsBefore)
         if profiling then
             self._diagnostics:finish("effectBounds", boundsStarted)
         end
@@ -5408,6 +5508,8 @@ function host:update(dt)
         self._diagnostics:heapRecord(
             "runtime", runtimeHeapStarted, runtimeHeapCursor)
     end
+    recordRuntimeAllocation(runtimeAllocationRow,
+        "runtimeCalls", "runtimeAllocatedKB", allocationRuntimeBefore)
     self._diagnostics:finish("runtime", runtimeStarted)
     if not ok then
         self._diagnosticUpdateActive = nil
@@ -5415,12 +5517,18 @@ function host:update(dt)
         faultHost(self, "Host:update", err)
         error(err, 0)
     end
+    local allocationFeedbackBefore = runtimeAllocationRow
+        and collectgarbage("count") or nil
     local feedbackOk, feedbackError = pcall(self._commitFeedback, self)
+    recordRuntimeAllocation(runtimeAllocationRow,
+        "feedbackCalls", "feedbackAllocatedKB", allocationFeedbackBefore)
     if not feedbackOk then
         self._diagnosticUpdateActive = nil
         faultHost(self, "Host:update feedback", feedbackError)
         error(feedbackError, 0)
     end
+    local allocationCompletionBefore = runtimeAllocationRow
+        and collectgarbage("count") or nil
     for _, completion in ipairs(motionCompletions or {}) do
         if self._mounted
                 and Motion.completionIsMounted(self._motions, completion) then
@@ -5437,8 +5545,17 @@ function host:update(dt)
                 completion.source)
         end
     end
+    recordRuntimeAllocation(runtimeAllocationRow,
+        "completionCalls", "completionAllocatedKB",
+        allocationCompletionBefore)
+    local allocationFinishBefore = runtimeAllocationRow
+        and collectgarbage("count") or nil
     self._diagnostics:finishUpdate(updateStarted)
     self._diagnosticUpdateActive = nil
+    recordRuntimeAllocation(runtimeAllocationRow,
+        "finishCalls", "finishAllocatedKB", allocationFinishBefore)
+    recordRuntimeAllocation(runtimeAllocationRow,
+        "updateCalls", "updateAllocatedKB", allocationUpdateBefore)
 end
 
 function host:draw(customPainter)

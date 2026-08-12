@@ -1710,6 +1710,14 @@ node. The focused contract proves warm draw, equivalent render, resize,
 rejected build, incompatible replacement, custom-painter isolation, and exact
 Host cleanup.
 
+The pipeline window also partitions `Host:update` into frame-subscriber
+delivery, the retained runtime, feedback, completion delivery, and diagnostic
+finish. The retained-runtime parent is split again into interaction,
+Motion/committed transform, refs, and the three Effect phases. Quiet and
+rebuilt updates use separate preallocated scalar rows. These rows are causal
+allocation evidence only: ordinary Hosts retain no runtime observer table and
+components receive no profiler or lifecycle API.
+
 #### Current measured checkpoint
 
 B4p.51 retains B4p.46's conservative incremental-layout implementation and
@@ -1774,6 +1782,18 @@ skips. All-frame allocation fell from 38.286/159.361/599.355 to
 from 16.682/17.439/77.003 to 2.057/2.814/62.441 KB per cohort frame. Candidate,
 resize, failed-build, interaction, Motion, clean-frame, and cleanup contracts
 all retain exact ref behavior.
+
+The attribution-only B4p.53 manifest is
+`build/frogui/battle-performance-20260812T070138Z-873`. Its stopped-collector
+runtime partition explains the complete late quiet update: 62.503 KB/frame
+measured, 62.503 KB/frame inside `Host:update`, and zero update-parent
+remainder. Frame delivery owns 1.897 KB, the retained runtime owns 60.543 KB,
+and feedback owns 0.063 KB. Inside the runtime, Motion plus committed
+transform owns 41.283 KB, RadialDial interaction owns 18.542 KB, refs own only
+0.063 KB, Effect update owns 0.203 KB, and the runtime wrapper remainder is
+0.453 KB. Rebuilt late frames show the same two runtime leaders at
+39.297/27.884 KB. This is transient presentation-process scratch, not
+simulation state, component rendering, refs, or layout publication.
 
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
