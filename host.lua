@@ -1666,6 +1666,15 @@ local function resetAllocationProbe(probe)
     probe.pipelineLayoutPlanesMeasureNodes = 0
     probe.pipelineLayoutPlanesMeasureReuseHits = 0
     probe.pipelineLayoutArrangeNodes = 0
+    probe.pipelineLayoutReuseCandidateNodes = 0
+    probe.pipelineLayoutReuseStableInputNodes = 0
+    probe.pipelineLayoutReuseBranchesMarked = 0
+    probe.pipelineLayoutReuseNodesMarked = 0
+    probe.pipelineLayoutReuseMeasureHits = 0
+    probe.pipelineLayoutReuseConstraintMisses = 0
+    probe.pipelineLayoutReuseArrangementMisses = 0
+    probe.pipelineLayoutReuseBranchesCommitted = 0
+    probe.pipelineLayoutReuseNodesCommitted = 0
     probe.pipelineLayoutFlowNodes = 0
     probe.pipelineLayoutWrappedRowNodes = 0
     probe.pipelineLayoutOverlayNodes = 0
@@ -2107,6 +2116,23 @@ function host:_readLayoutAllocationProbe()
         probe.pipelineLayoutRadialScratchAllocatedKB,
         probe.pipelineLayoutEffectRectCreated,
         probe.pipelineLayoutEffectRectAllocatedKB
+end
+
+-- Returns scalar evidence for the ordinary incremental-layout route without
+-- expanding the older allocation tuple consumed by the Battle harness.
+function host:_readLayoutReuseProbe()
+    local probe = rawget(self, "_allocationProbe")
+    assert(probe and probe.mode == "pipeline",
+        "FrogUI Host has no layout allocation probe to read")
+    return probe.pipelineLayoutReuseCandidateNodes,
+        probe.pipelineLayoutReuseStableInputNodes,
+        probe.pipelineLayoutReuseBranchesMarked,
+        probe.pipelineLayoutReuseNodesMarked,
+        probe.pipelineLayoutReuseMeasureHits,
+        probe.pipelineLayoutReuseConstraintMisses,
+        probe.pipelineLayoutReuseArrangementMisses,
+        probe.pipelineLayoutReuseBranchesCommitted,
+        probe.pipelineLayoutReuseNodesCommitted
 end
 
 function host:_detachAllocationProbe()
@@ -4169,7 +4195,8 @@ function host:_build(root)
         local layoutStarted = self._diagnostics:start()
         candidate = Layout.run(candidate,
             self._viewport.width, self._viewport.height, self,
-            pipelineProbe)
+            pipelineProbe,
+            not self._layoutReuseBlocked and self._tree or nil)
         self._diagnostics:finish("layout", layoutStarted)
         if pipelineProbe then
             local after = collectgarbage("count")
@@ -4405,7 +4432,10 @@ function host:_refreshTheme(theme, assets, root)
     self._fontCache = {}
     self._assetCache = {}
     Shader.clear(self)
+    local previousLayoutReuseBlocked = self._layoutReuseBlocked
+    self._layoutReuseBlocked = true
     local ok, result = pcall(self.render, self, root)
+    self._layoutReuseBlocked = previousLayoutReuseBlocked
     if not ok then
         -- A rejected candidate never published and may safely retain the last
         -- good theme. A terminal commit fault retains its published tree, so
@@ -5235,7 +5265,10 @@ function host:resize(width, height)
     local previousPhysicalWidth = self._viewport.physicalWidth
     local previousPhysicalHeight = self._viewport.physicalHeight
     self._viewport:resize(width, height)
+    local previousLayoutReuseBlocked = self._layoutReuseBlocked
+    self._layoutReuseBlocked = true
     local ok, candidate, context = pcall(self._build, self, self._rootDescriptor)
+    self._layoutReuseBlocked = previousLayoutReuseBlocked
     if not ok then
         self._viewport:resize(previousPhysicalWidth, previousPhysicalHeight)
         self._diagnostics:finish("reconcile", reconcileStarted)

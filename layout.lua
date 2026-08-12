@@ -7,6 +7,24 @@ local layout = {}
 -- this private record because no layout path mutates normalized padding.
 local ZERO_PADDING = { left = 0, right = 0, top = 0, bottom = 0 }
 
+-- This is the complete prop surface read by FrogUI's two-pass layout. Keeping
+-- it beside the algorithm makes incremental invalidation reviewable: adding a
+-- new layout input without classifying it here is a framework bug.
+local LAYOUT_PROPS = {
+    "width", "height", "grow", "offset", "padding", "gap", "align",
+    "justify", "wrap", "text", "role", "fontScale", "maxLines",
+    "fitDown", "source", "sourceRect", "frameCount", "trackRadius",
+    "axis", "at",
+}
+
+local LAYOUT_REUSE_BARRIERS = {
+    Modal = true,
+    Chrome = true,
+    Scroll = true,
+    RadialDial = true,
+    EffectLayer = true,
+}
+
 -- Creates one readable layout result only when a candidate actually needs to
 -- measure or arrange this primitive. A later incremental hit may instead
 -- attach the previous immutable result without allocating here.
@@ -16,6 +34,143 @@ local function nodeLayout(node)
     result = {}
     node.layout = result
     return result
+end
+
+-- Compares the small plain-data shapes accepted by layout props without
+-- invoking metamethods or allocating a snapshot. A shared table is rejected:
+-- an external alias could have changed both generations and hidden the change.
+local function sameLayoutValue(left, right, depth)
+    local kind = type(left)
+    if kind ~= type(right) then return false end
+    if kind ~= "table" then return left == right end
+    if rawequal(left, right) or getmetatable(left) ~= nil
+            or getmetatable(right) ~= nil or depth >= 6 then
+        return false
+    end
+    local count = 0
+    for key, value in pairs(left) do
+        count = count + 1
+        if count > 32 or not sameLayoutValue(value, rawget(right, key), depth + 1) then
+            return false
+        end
+    end
+    count = 0
+    for key in pairs(right) do
+        count = count + 1
+        if count > 32 or rawget(left, key) == nil then return false end
+    end
+    return true
+end
+
+local function sameLayoutProps(previous, candidate)
+    for _, name in ipairs(LAYOUT_PROPS) do
+        if not sameLayoutValue(previous.props[name], candidate.props[name], 0) then
+            return false
+        end
+    end
+    return true
+end
+
+local function sameChildTopology(previous, candidate)
+    if #previous.children ~= #candidate.children then return false end
+    for index, child in ipairs(candidate.children) do
+        local old = previous.children[index]
+        if old.logicalIdentity ~= child.logicalIdentity
+                or old.type ~= child.type then return false end
+    end
+    local oldPreview, preview = previous._dragPreview, candidate._dragPreview
+    if (oldPreview == nil) ~= (preview == nil) then return false end
+    return not preview or oldPreview.logicalIdentity == preview.logicalIdentity
+        and oldPreview.type == preview.type
+end
+
+local function matchingChild(previous, candidate)
+    if not previous then return nil end
+    for _, old in ipairs(previous.children or {}) do
+        if old.logicalIdentity == candidate.logicalIdentity then return old end
+    end
+end
+
+-- Marks only maximal stable branches. Descendants retain no backlinks and the
+-- markers are cleared before the candidate can commit.
+local function prepareLayoutReuse(candidateRoot, previousRoot, probe)
+    local function inspect(candidate, previous, belowBarrier)
+        if previous and (previous.logicalIdentity ~= candidate.logicalIdentity
+                or previous.type ~= candidate.type) then previous = nil end
+        local barrier = belowBarrier
+            or LAYOUT_REUSE_BARRIERS[candidate.type] == true
+            or candidate._portal == true or candidate._portalLayout == true
+        local ownStable = previous ~= nil
+            and sameChildTopology(previous, candidate)
+            and sameLayoutProps(previous, candidate)
+        if probe then
+            probe.pipelineLayoutReuseCandidateNodes =
+                probe.pipelineLayoutReuseCandidateNodes + 1
+            if ownStable then
+                probe.pipelineLayoutReuseStableInputNodes =
+                    probe.pipelineLayoutReuseStableInputNodes + 1
+            end
+        end
+        local eligible, nodes = ownStable and not barrier, 1
+        for _, child in ipairs(candidate.children or {}) do
+            local childEligible, childNodes = inspect(child,
+                matchingChild(previous, child), barrier)
+            eligible = eligible and childEligible
+            nodes = nodes + childNodes
+        end
+        if candidate._dragPreview then
+            local oldPreview = previous and previous._dragPreview
+            if oldPreview and oldPreview.logicalIdentity
+                    ~= candidate._dragPreview.logicalIdentity then
+                oldPreview = nil
+            end
+            local childEligible, childNodes = inspect(
+                candidate._dragPreview, oldPreview, barrier)
+            eligible = eligible and childEligible
+            nodes = nodes + childNodes
+        end
+        candidate._layoutReusableFrom = eligible and previous or nil
+        candidate._layoutReusableNodes = nodes
+        return eligible, nodes
+    end
+
+    local function mark(candidate, parentEligible)
+        local previous = candidate._layoutReusableFrom
+        local eligible = previous ~= nil
+        if eligible and not parentEligible then
+            candidate._layoutReuseFrom = previous
+            candidate._layoutReuseNodeCount = candidate._layoutReusableNodes
+            if probe then
+                probe.pipelineLayoutReuseBranchesMarked =
+                    probe.pipelineLayoutReuseBranchesMarked + 1
+                probe.pipelineLayoutReuseNodesMarked =
+                    probe.pipelineLayoutReuseNodesMarked
+                        + candidate._layoutReusableNodes
+            end
+        end
+        candidate._layoutReusableFrom = nil
+        candidate._layoutReusableNodes = nil
+        for _, child in ipairs(candidate.children or {}) do
+            mark(child, eligible)
+        end
+        if candidate._dragPreview then mark(candidate._dragPreview, eligible) end
+    end
+
+    inspect(candidateRoot, previousRoot, false)
+    mark(candidateRoot, false)
+end
+
+local function attachLayoutBranch(candidate, previous)
+    candidate.layout = assert(previous.layout,
+        "incremental layout source has no committed result")
+    candidate._layoutReuseFrom = nil
+    candidate._layoutMeasureReuseFrom = nil
+    for index, child in ipairs(candidate.children or {}) do
+        attachLayoutBranch(child, previous.children[index])
+    end
+    if candidate._dragPreview then
+        attachLayoutBranch(candidate._dragPreview, previous._dragPreview)
+    end
 end
 
 local function recordAllocation(probe, callsField, kbField, before, created)
@@ -332,6 +487,34 @@ local function measure(node, maxWidth, maxHeight, host, session)
     end
     maxWidth = math.max(0, maxWidth or math.huge)
     maxHeight = math.max(0, maxHeight or math.huge)
+    local reuseFrom = node._layoutReuseFrom
+    if reuseFrom then
+        local old = assert(reuseFrom.layout,
+            "incremental layout source has no committed result")
+        if old.inputMaxWidth == maxWidth
+                and old.inputMaxHeight == maxHeight
+                and old.inputPortalLayout == (node._portalLayout == true) then
+            node.layout = old
+            node._layoutShared = true
+            node._layoutMeasureReuseFrom = old
+            if allocationProbe then
+                allocationProbe.pipelineLayoutReuseMeasureHits =
+                    allocationProbe.pipelineLayoutReuseMeasureHits + 1
+            end
+            return old.measuredWidth, old.measuredHeight
+        end
+        node._layoutReuseFrom = nil
+        node._layoutReuseNodeCount = nil
+        node._layoutMeasureReuseFrom = nil
+        if node._layoutShared then
+            node.layout = nil
+            node._layoutShared = nil
+        end
+        if allocationProbe then
+            allocationProbe.pipelineLayoutReuseConstraintMisses =
+                allocationProbe.pipelineLayoutReuseConstraintMisses + 1
+        end
+    end
     local box = node.layout
     if session and box and box.measureSession == session
             and node.layout.measureMaxWidth == maxWidth
@@ -779,10 +962,61 @@ end
 
 function layout.arrange(node, x, y, width, height, host, session)
     local allocationProbe = sessionProbe(session)
-    local box = nodeLayout(node)
     if allocationProbe then
         allocationProbe.pipelineLayoutArrangeNodes =
             allocationProbe.pipelineLayoutArrangeNodes + 1
+    end
+    local offset = node.props.offset
+    if offset then
+        x = x + (offset.x or 0)
+        y = y + (offset.y or 0)
+    end
+    width, height = math.max(0, width), math.max(0, height)
+    local reuseFrom = node._layoutReuseFrom
+    if reuseFrom then
+        local old = assert(reuseFrom.layout,
+            "incremental layout source has no committed result")
+        if old.x == x and old.y == y
+                and old.width == width and old.height == height then
+            local reusedNodes = node._layoutReuseNodeCount or 1
+            attachLayoutBranch(node, reuseFrom)
+            node._layoutReuseNodeCount = nil
+            node._layoutShared = nil
+            node._layoutReused = true
+            if allocationProbe then
+                allocationProbe.pipelineLayoutReuseBranchesCommitted =
+                    allocationProbe.pipelineLayoutReuseBranchesCommitted + 1
+                allocationProbe.pipelineLayoutReuseNodesCommitted =
+                    allocationProbe.pipelineLayoutReuseNodesCommitted
+                        + reusedNodes
+            end
+            return
+        end
+        node._layoutReuseFrom = nil
+        node._layoutReuseNodeCount = nil
+        if node._layoutShared then
+            node.layout = nil
+            node._layoutShared = nil
+        end
+        if allocationProbe then
+            allocationProbe.pipelineLayoutReuseArrangementMisses =
+                allocationProbe.pipelineLayoutReuseArrangementMisses + 1
+        end
+    end
+    local box = nodeLayout(node)
+    local measuredFrom = node._layoutMeasureReuseFrom
+    if measuredFrom then
+        box.padding = measuredFrom.padding
+        box.derivedWidth = measuredFrom.derivedWidth
+        box.derivedHeight = measuredFrom.derivedHeight
+        box.measuredWidth = measuredFrom.measuredWidth
+        box.measuredHeight = measuredFrom.measuredHeight
+        box.resolvedFont = measuredFrom.resolvedFont
+        box.resolvedFontSize = measuredFrom.resolvedFontSize
+        box.inputMaxWidth = measuredFrom.inputMaxWidth
+        box.inputMaxHeight = measuredFrom.inputMaxHeight
+        box.inputPortalLayout = measuredFrom.inputPortalLayout
+        node._layoutMeasureReuseFrom = nil
     end
     -- Measuring a descendant under its final allocation can change state that
     -- contributed to this ancestor's natural size. Retire the node's own
@@ -790,6 +1024,11 @@ function layout.arrange(node, x, y, width, height, host, session)
     -- until their own arrange begins. This avoids a dependency graph while
     -- making every exact reuse local to the still-valid traversal prefix.
     local publishBefore = allocationProbe and collectgarbage("count") or nil
+    if box.measureSession ~= nil then
+        box.inputMaxWidth = box.measureMaxWidth
+        box.inputMaxHeight = box.measureMaxHeight
+        box.inputPortalLayout = box.measurePortalLayout
+    end
     box.measureSession = nil
     box.measureMaxWidth = nil
     box.measureMaxHeight = nil
@@ -799,14 +1038,9 @@ function layout.arrange(node, x, y, width, height, host, session)
             "pipelineLayoutMeasureStampClearCalls",
             "pipelineLayoutMeasureStampClearAllocatedKB", publishBefore, 1)
     end
-    local offset = node.props.offset
-    if offset then
-        x = x + (offset.x or 0)
-        y = y + (offset.y or 0)
-    end
     publishBefore = allocationProbe and collectgarbage("count") or nil
     box.x, box.y = x, y
-    box.width, box.height = math.max(0, width), math.max(0, height)
+    box.width, box.height = width, height
     if allocationProbe then
         recordAllocation(allocationProbe,
             "pipelineLayoutArrangedBoxPublishCalls",
@@ -953,6 +1187,10 @@ local function prepareDetached(node, maxWidth, maxHeight, host, session)
 end
 
 local function preparePlanes(node, width, height, host, session)
+    if node._layoutReused then
+        node._layoutReused = nil
+        return
+    end
     if node.type == "Modal" or node.type == "Chrome" then
         arrangePortal(node, width, height, host, session)
     end
@@ -964,7 +1202,7 @@ local function preparePlanes(node, width, height, host, session)
     end
 end
 
-function layout.run(root, width, height, host, allocationProbe)
+function layout.run(root, width, height, host, allocationProbe, previousRoot)
     -- One opaque token scopes last-entry reuse to this fresh candidate, exact
     -- normalized constraints, and portal mode. Public retained arrangement
     -- supplies no token, so Scroll/RadialDial updates always perform ordinary
@@ -975,6 +1213,9 @@ function layout.run(root, width, height, host, allocationProbe)
     if allocationProbe then
         recordAllocation(allocationProbe, "pipelineLayoutSessionCreated",
             "pipelineLayoutSessionAllocatedKB", before, 1)
+    end
+    if previousRoot then
+        prepareLayoutReuse(root, previousRoot, allocationProbe)
     end
     before = allocationProbe and collectgarbage("count") or nil
     measure(root, width, height, host, session)

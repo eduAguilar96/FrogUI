@@ -1671,61 +1671,42 @@ facts must be interpreted correctly: descriptor bytes are already inside the
 semantic total, while primitive materialization is disjoint and may be added to
 the semantic total.
 
-The diagnostics-only candidate comparison also reports an incremental-layout
-feasibility ceiling. It accepts only exact topology, stable values from
-FrogUI's closed layout-prop catalog, exact completed layout output, and branches
-outside Modal/Chrome, Scroll, RadialDial, and EffectLayer boundaries. It runs
-after the ordinary full layout and never skips or retains runtime work. Its
-`layout_reuse` rows are evidence for framework design, not a cache API or a
-claim that reuse has already happened.
+The pipeline allocation probe reports FrogUI's internal incremental-layout
+path. It accepts only exact topology, stable values from the closed layout-prop
+catalog, identical measurement constraints, an exact incoming arranged
+rectangle, and branches outside Modal/Chrome, Scroll, RadialDial, EffectLayer,
+and portal boundaries. Stable branches may share the immediately previous
+immutable `node.layout` records; every mismatch performs ordinary layout.
+`layout_incremental` rows report candidates, marked maximal branches, measure
+hits, conservative misses, and committed branches/nodes. This is framework
+evidence, not a component memoization API. Components declare no dependencies
+or revisions.
 
 #### Current measured checkpoint
 
-B4p.12 closes the descriptor-normalization repair selected by B4p.11. The
+B4p.46 closes the first conservative incremental-layout implementation. The
 valid manifest at
-`build/frogui/battle-performance-20260810T202158Z-95501` records source commit
-`3c11fe626ca2704db0ad339608458601f8eb5d02`, stable dirty source/diff/untracked
-identity, acceptance status 1 (completed target miss), diagnostics status 0,
-and a published 2,733-row artifact. Standard, source, identity, and structure
-windows retain the exact `60/0`, `57/3`, and `38/22` quiet/rebuilt cadence; all
-windows are uncapped.
+`build/frogui/battle-performance-20260812T042637Z-57779` records stable source
+identity across acceptance and diagnostics, acceptance status 1 (completed
+cross-presenter target miss), diagnostics status 0, and a published 3,816-row
+artifact. All allocation windows are uncapped.
 
-`Element.construct` now separates named props and ordered children directly.
-Ordinary dense child arrays need no index scratch table; sparse or extremely
-high indexes use the existing bounded sorted behavior. Text shorthand is
-normalized without a temporary input/value table, and sibling-key tracking
-allocates only when multiple keyed children require it. Focused coverage locks
-scalar/table Text forms, nil/false elision, a child at index 1,000,000, typed
-numeric/string key distinction, invalid key/input errors, `Frog.each`, source,
-and every existing tree/layout behavior.
+Every primitive has one readable `node.layout` result. The candidate keeps its
+fresh node shell, props, children, validation, reconciliation, transform,
+input, refs, and commit boundary; only proven-stable layout records are shared.
+Resize, theme/asset refresh, hot reload, portals, Scroll, RadialDial, and
+EffectLayer remain full-layout boundaries. Focused tests prove reflow, shifted
+siblings, changed text, barriers, rollback, and removal of temporary markers.
 
-The causal comparison is:
+| Allocation boundary | B4p.45 early | B4p.46 early | Saved | B4p.45 late | B4p.46 late | Saved |
+|---|---:|---:|---:|---:|---:|---:|
+| rebuilt update | 2528.135 KB | 2320.766 KB | 8.20% | 1503.368 KB | 1360.368 KB | 9.51% |
+| all frames | 215.304 KB | 205.106 KB | 4.74% | 954.262 KB | 905.177 KB | 5.14% |
 
-| rebuilt window | descriptor B4p.11 → 12 | predicted recovery | update B4p.11 → 12 | actual recovery | difference |
-|---|---:|---:|---:|---:|---:|
-| early | 719.781 → 511.392 KB | 208.389 KB | 4715.313 → 4506.939 KB | 208.374 KB | -0.015 KB |
-| late | 856.996 → 609.706 KB | 247.290 KB | 5185.917 → 4938.837 KB | 247.080 KB | -0.210 KB |
-
-The repair removes `28.95%/28.86%` of descriptor allocation. Its recovered
-update bytes match the measured descriptor reduction within `0.21 KB/rebuild`.
-Other semantic work remains `474.466/655.921 KB`, primitive materialization
-remains exactly `489.604/584.569 KB`, and the unattributed remainder stays
-`3.03/3.09 MB`. Source stays zero and identity remains
-`233.500/41.155 KB/rebuild`, so no work moved into another measured boundary.
-
-Profiler-free allocation falls from `324.745` to `314.331 KB/frame` early and
-from `2318.369` to `2227.826 KB/frame` late. Current early timing passes every
-target except mean ratio; late absolute p95 now passes, while its ratios,
-over-budget fraction, and allocation targets remain open. Timing is still a
-machine-specific sample; the byte-for-byte causal boundary is the repair's
-acceptance evidence.
-
-B4p.12 closes as one generic FrogUI core repair. The next checkpoint should
-partition the still-dominant `3.09 MB` Host remainder across semantic
-preparation/bookkeeping, validation/reconciliation, and the layout/commit
-pipeline before choosing another representation change. Primitive props/node
-copying is retained as a named sub-candidate, not assumed to be the largest
-remaining problem. Memoization, validation skips, a virtual DOM, a dirty graph,
-and Battle-specific caches remain unsupported. B4p remains open and B5 remains
-blocked. Full evidence and invariants live in
+The probes commit 103 branches/1,697 nodes early and 1,090
+branches/10,582 nodes late, with zero incoming-rectangle misses. Timing is
+`1.839/4.979 ms` mean/p95 early and `3.303/9.827 ms` late, with zero FrogUI
+over-budget frames; timing is machine-variable and this checkpoint claims only
+the allocation recovery. B4p remains open and B5 remains blocked. The full
+ownership decision and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.

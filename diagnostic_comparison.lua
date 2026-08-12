@@ -173,15 +173,22 @@ end
 local DIAGNOSTIC_GEOMETRY_FIELDS = {
     "x", "y", "width", "height", "contentX", "contentY",
     "contentWidth", "contentHeight", "measuredWidth", "measuredHeight",
-    "_resolvedFontSize", "_portal", "_portalLayout",
+    "derivedWidth", "derivedHeight", "resolvedFont", "resolvedFontSize",
 }
 
 local function observeDiagnosticGeometry(previous, candidate)
+    local previousLayout = previous.layout or {}
+    local candidateLayout = candidate.layout or {}
     for _, name in ipairs(DIAGNOSTIC_GEOMETRY_FIELDS) do
-        if previous[name] ~= candidate[name] then return "changed" end
+        if previousLayout[name] ~= candidateLayout[name] then return "changed" end
+    end
+    if previous._portal ~= candidate._portal
+            or previous._portalLayout ~= candidate._portalLayout then
+        return "changed"
     end
     for _, name in ipairs { "top", "right", "bottom", "left" } do
-        if (previous._padding or {})[name] ~= (candidate._padding or {})[name] then
+        if (previousLayout.padding or {})[name]
+                ~= (candidateLayout.padding or {})[name] then
             return "changed"
         end
     end
@@ -199,18 +206,24 @@ end
 -- Compares only values owned by the two-pass layout result. Paint transforms
 -- are intentionally excluded: an unchanged layout may animate afterward.
 local function sameDiagnosticLayoutOutput(previous, candidate)
+    local previousLayout = previous.layout or {}
+    local candidateLayout = candidate.layout or {}
     for _, name in ipairs {
             "x", "y", "width", "height",
             "contentX", "contentY", "contentWidth", "contentHeight",
             "measuredWidth", "measuredHeight",
-            "_derivedWidth", "_derivedHeight",
-            "_resolvedFont", "_resolvedFontSize",
-            "_portal", "_portalLayout",
+            "derivedWidth", "derivedHeight",
+            "resolvedFont", "resolvedFontSize",
         } do
-        if previous[name] ~= candidate[name] then return false end
+        if previousLayout[name] ~= candidateLayout[name] then return false end
+    end
+    if previous._portal ~= candidate._portal
+            or previous._portalLayout ~= candidate._portalLayout then
+        return false
     end
     for _, name in ipairs { "top", "right", "bottom", "left" } do
-        if (previous._padding or {})[name] ~= (candidate._padding or {})[name] then
+        if (previousLayout.padding or {})[name]
+                ~= (candidateLayout.padding or {})[name] then
             return false
         end
     end
