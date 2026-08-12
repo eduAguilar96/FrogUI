@@ -22,6 +22,10 @@ host.__index = host
 local activeHost = nil
 local renderingHost = nil
 
+-- Childless committed primitives share this read-only collection. Containers
+-- with authored children still receive a private candidate-owned array.
+local EMPTY_CHILDREN = {}
+
 local PRIMITIVES = {
     Box = true, Row = true, Column = true, Overlay = true,
     EffectLayer = true, PopupText = true, Projectile = true, Flipbook = true,
@@ -1506,7 +1510,7 @@ local function resetAllocationProbe(probe)
     probe.primitiveNodeAllocatedKB = 0
     probe.primitivePropsAttachmentCalls = 0
     probe.primitivePropsAttachmentAllocatedKB = 0
-    probe.primitiveChildrenArrayCalls = 0
+    probe.primitiveChildrenArrayCreated = 0
     probe.primitiveChildrenArrayAllocatedKB = 0
     probe.primitiveNodeShellCalls = 0
     probe.primitiveNodeShellAllocatedKB = 0
@@ -1823,7 +1827,7 @@ function host:_readPrimitiveMaterializationProbe()
         "FrogUI Host has no primitive materialization probe to read")
     return probe.primitivePropsAttachmentCalls,
         probe.primitivePropsAttachmentAllocatedKB,
-        probe.primitiveChildrenArrayCalls,
+        probe.primitiveChildrenArrayCreated,
         probe.primitiveChildrenArrayAllocatedKB,
         probe.primitiveNodeShellCalls,
         probe.primitiveNodeShellAllocatedKB,
@@ -3420,11 +3424,14 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 + propsAfter - propsBefore
     end
     local childrenBefore = nodeProbe and collectgarbage("count") or nil
-    local nodeChildren = {}
+    local ownsChildren = #descriptor.children > 0
+    local nodeChildren = ownsChildren and {} or EMPTY_CHILDREN
     if nodeProbe then
         local childrenAfter = collectgarbage("count")
-        nodeProbe.primitiveChildrenArrayCalls =
-            nodeProbe.primitiveChildrenArrayCalls + 1
+        if ownsChildren then
+            nodeProbe.primitiveChildrenArrayCreated =
+                nodeProbe.primitiveChildrenArrayCreated + 1
+        end
         nodeProbe.primitiveChildrenArrayAllocatedKB =
             nodeProbe.primitiveChildrenArrayAllocatedKB
                 + childrenAfter - childrenBefore

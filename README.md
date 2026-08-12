@@ -222,8 +222,10 @@ descriptions, `description.props`, and the nodes returned by `Host:tree()` as
 read-only inspection values. To change UI, create a new description through a
 component render or send an actor action. Nested tables and capabilities keep
 their authored identity unless their specific API says it snapshots them.
-This ownership keeps ordinary component syntax inexpensive without a proxy,
-deep comparison, freeze walk, or hidden memo API.
+Childless resolved primitives also share one read-only empty children
+collection; containers with authored children retain private arrays. This
+ownership keeps ordinary component syntax inexpensive without a proxy, deep
+comparison, freeze walk, or hidden memo API.
 
 ## Committed geometry refs
 
