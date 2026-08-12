@@ -1364,10 +1364,15 @@ F6 shows each primitive contract in the exact tree.
 The Battle sequence ends with a real `BattlePlayback` lifecycle story after
 the static field/chrome story. It starts paused; Space plays or pauses the
 ordered event trace, R rebuilds round zero with the same captured seed, and F7
-rearranges the existing owner. The trace is deliberately bounded and displays
-only committed event addresses. `src/presentation/battle/playback.lua` is a
-stateful process, so edits to it require restarting the gallery; Battle's
-ordinary visible component files remain hot-reloadable.
+rearranges the existing owners. One Playback publishes exact changed row and
+flow addresses to stable actors in the ordinary `battle/screen.lua` and
+`battle/board.lua`; it does not publish a complete visible snapshot to a
+screen-level actor. The trace is a separate bounded diagnostic actor and
+displays only committed event addresses. `src/presentation/battle/playback.lua`
+is a stateful process, so edits to it require restarting the gallery; Battle's
+ordinary visible component files remain hot-reloadable. The explicitly named
+`static_screen.lua` and `static_board.lua` exist only for fixture/equivalence
+checks and static component stories.
 
 ### Reading the F4 profiler
 
