@@ -37,8 +37,9 @@ local function nodeLayout(node)
 end
 
 -- Compares the small plain-data shapes accepted by layout props without
--- invoking metamethods or allocating a snapshot. A shared table is rejected:
--- an external alias could have changed both generations and hidden the change.
+-- invoking metamethods or allocating a snapshot. Nested shared tables remain
+-- unsafe because they may be caller aliases. Exact primitive props identity is
+-- handled separately: it belongs to one retained, framework-owned description.
 local function sameLayoutValue(left, right, depth)
     local kind = type(left)
     if kind ~= type(right) then return false end
@@ -100,12 +101,18 @@ local function prepareLayoutReuse(candidateRoot, previousRoot, probe)
         local barrier = belowBarrier
             or LAYOUT_REUSE_BARRIERS[candidate.type] == true
             or candidate._portal == true or candidate._portalLayout == true
+        local sharedProps = previous ~= nil
+            and rawequal(previous.props, candidate.props)
         local ownStable = previous ~= nil
             and sameChildTopology(previous, candidate)
-            and sameLayoutProps(previous, candidate)
+            and (sharedProps or sameLayoutProps(previous, candidate))
         if probe then
             probe.pipelineLayoutReuseCandidateNodes =
                 probe.pipelineLayoutReuseCandidateNodes + 1
+            if sharedProps then
+                probe.pipelineLayoutReuseSharedPropsHits =
+                    probe.pipelineLayoutReuseSharedPropsHits + 1
+            end
             if ownStable then
                 probe.pipelineLayoutReuseStableInputNodes =
                     probe.pipelineLayoutReuseStableInputNodes + 1
