@@ -4959,6 +4959,14 @@ function host:_appendTrace(entry)
     return #self._messageTrace
 end
 
+-- Packs the two public transition booleans into one retained array value.
+-- messageTrace expands it back into readable records only when tooling asks.
+local function traceTransitionStatus(accepted, changed)
+    if changed then return 2 end
+    if accepted then return 1 end
+    return 0
+end
+
 function host:_enqueue(entry)
     assert(self._mounted and activeHost == self, "FrogUI has no mounted Host")
     assertOperational(self, "enqueue a message")
@@ -5277,11 +5285,7 @@ function host:_processAction(entry, trackActorChanges)
             origin = deepCopy(entry.originSource),
         },
         recipients = { recipient },
-        transitions = { {
-            recipient = recipient,
-            accepted = accepted,
-            changed = changed,
-        } },
+        statuses = { traceTransitionStatus(accepted, changed) },
         reconciled = false,
     })
     local changedIdentity = trackActorChanges and changed
@@ -5299,7 +5303,7 @@ function host:_processEvent(entry, trackActorChanges)
         "pendingFrameMessageValidationCalls",
         "pendingFrameMessageValidationAllocatedKB", validationBefore)
     local recipients = {}
-    local transitions = {}
+    local statuses = {}
     local changed = false
     local changedActors = trackActorChanges and {} or nil
     local receiverOrderBefore = frameProbe and collectgarbage("count") or nil
@@ -5345,11 +5349,8 @@ function host:_processEvent(entry, trackActorChanges)
                             "pendingFrameMessageActorReactionAllocatedKB",
                             reactionBefore)
                     end
-                    transitions[#transitions + 1] = {
-                        recipient = recipient,
-                        accepted = accepted,
-                        changed = didChange,
-                    }
+                    statuses[#statuses + 1] =
+                        traceTransitionStatus(accepted, didChange)
                     if didChange and changedActors then
                         changedActors[instance.identity] = true
                     end
@@ -5366,11 +5367,8 @@ function host:_processEvent(entry, trackActorChanges)
                         "pendingFrameMessageMotionReactionCalls",
                         "pendingFrameMessageMotionReactionAllocatedKB",
                         reactionBefore)
-                    transitions[#transitions + 1] = {
-                        recipient = recipient,
-                        accepted = accepted,
-                        changed = accepted,
-                    }
+                    statuses[#statuses + 1] =
+                        traceTransitionStatus(accepted, accepted)
                 end
             end
         end
@@ -5390,7 +5388,7 @@ function host:_processEvent(entry, trackActorChanges)
             origin = deepCopy(entry.originSource),
         },
         recipients = recipients,
-        transitions = transitions,
+        statuses = statuses,
         reconciled = false,
     })
     recordPendingFrameAllocation(frameProbe,
@@ -6243,7 +6241,22 @@ end
 
 function host:messageTrace()
     assert(self._mounted, "Host is not mounted")
-    return deepCopy(self._messageTrace)
+    local output = deepCopy(self._messageTrace)
+    for _, entry in ipairs(output) do
+        local statuses = entry.statuses or {}
+        local transitions = {}
+        for index, recipient in ipairs(entry.recipients or {}) do
+            local status = statuses[index] or 0
+            transitions[index] = {
+                recipient = recipient,
+                accepted = status >= 1,
+                changed = status == 2,
+            }
+        end
+        entry.statuses = nil
+        entry.transitions = transitions
+    end
+    return output
 end
 
 function host:unmount()

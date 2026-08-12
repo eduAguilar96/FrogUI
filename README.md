@@ -1916,6 +1916,14 @@ KB/rebuilt frame and complete typed delivery fell from 28.984 to 9.012.
 Complete late allocation fell from 525.194 to 517.686 KB/frame. Every accepted
 reducer remains isolated by its own detached record.
 
+The source-exact B4p.66 run is
+`build/frogui/battle-performance-20260812T083343Z-34476`. The bounded Host
+message trace now retains one recipient list plus compact transition statuses;
+`messageTrace()` and F6 expand the same detached readable records on demand.
+Complete late rebuilt delivery fell from 9.012 to 5.354 KB and late all-frame
+allocation fell from 517.686 to 516.264 KB/frame. No diagnostic field or
+recipient was removed.
+
 B4p remains open and B5 remains blocked. The full ownership decision, rejected
 experiment, and source hashes live in
 `design/reference/frog-ui-battle-migration.md`.
