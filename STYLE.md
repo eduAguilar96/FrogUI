@@ -251,9 +251,16 @@ projections, companion style files, or geometry files.
 - Use `Frog.useResource` only when one semantic owner must retain a disposable
   external process. Ordinary menus, cards, layout, hover state, and visual
   recipes remain components, actors, primitives, or Motion.
-- Keep `useResource` and `useFrame` calls unconditional, one per line, and in a
-  stable order. Change the owner's semantic key when its process identity must
-  change; do not add dependency arrays or manual caches.
+- Keep `useResource`, `useEvent`, and `useFrame` calls unconditional, one per
+  line, and in a stable order. Change the owner's semantic key when its process
+  identity must change; do not add dependency arrays or manual caches.
+- Use `Frog.useEvent` only when a typed fact must reach that retained process.
+  Ordinary UI state still belongs to an actor reaction. The listener calls one
+  exact process operation and publishes its resulting revision/facts; it does
+  not return render state, poll another actor, or route through App.
+- Key a root-owned Inspection actor by the current authoritative route key.
+  This makes source teardown structural: navigation remounts the session while
+  persistent Settings/HUD ownership remains unchanged.
 - A resource factory returns `value, cleanup`. Cleanup belongs beside creation,
   is safe to call exactly once, sends no FrogUI messages, and does not change
   presentation. Unpublished-candidate failure, committed removal, compatible

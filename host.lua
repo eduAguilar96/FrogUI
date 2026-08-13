@@ -2681,6 +2681,7 @@ function host.new(options)
     self._frames = {}
     self._nextResourceId = 0
     self._nextFrameId = 0
+    self._nextEventListenerId = 0
     self._refs = {}
     self._nextRefId = 0
     self._arrangedRefRevision = 0
@@ -2842,6 +2843,11 @@ function host:_retainOwnerHooks(logicalPath, token, callback, context)
             context.resources[#context.resources + 1] = hook.instance
         elseif hook.kind == "useFrame" then
             context.frames[#context.frames + 1] = hook.frame
+        elseif hook.kind == "useEvent" then
+            -- Event listeners are attached to the owner's resolved root below,
+            -- where tree order can be established with actors and Motion.
+            context.eventListeners[#context.eventListeners + 1] =
+                hook.listener
         else
             error("actor-local owner has unknown Hook "
                 .. tostring(hook.kind), 0)
@@ -3065,6 +3071,44 @@ function host.useFrame(callback)
     }
 end
 
+-- Subscribes one semantic owner to a typed event for exactly its mounted
+-- lifetime. The current render replaces the callback without duplicating the
+-- subscription; route replacement removes it with the owner.
+function host.useEvent(event, callback)
+    assert(renderingHost,
+        "Frog.useEvent(event, callback) may only run while a component, actor, or view renders")
+    assert(type(event) == "table" and event.__frogMessageToken
+            and event.messageKind == "event",
+        "Frog.useEvent(event, callback) expects a Frog.event token")
+    assert(type(callback) == "function",
+        "Frog.useEvent(event, callback) expects a callback function")
+    local source = hookSource()
+    local session, previous = renderingHost:_consumeHook("useEvent", source)
+    local id = previous and previous.id
+    if not id then
+        renderingHost._nextEventListenerId =
+            renderingHost._nextEventListenerId + 1
+        id = "event-listener-"
+            .. tostring(renderingHost._nextEventListenerId)
+    end
+    local listener = {
+        hookKind = "useEvent",
+        id = id,
+        event = event,
+        callback = callback,
+        source = source,
+        owner = session.label,
+    }
+    session.context.eventListeners[
+        #session.context.eventListeners + 1] = listener
+    session.hooks[session.index] = {
+        kind = "useEvent",
+        source = source,
+        id = id,
+        listener = listener,
+    }
+end
+
 -- Attaches development-only process metadata to the visible root returned by
 -- one semantic owner. Nested semantic wrappers accumulate readable entries.
 local function annotateProcesses(node, ownerRecord, label, logicalPath)
@@ -3082,6 +3126,15 @@ local function annotateProcesses(node, ownerRecord, label, logicalPath)
                 kind = hook.kind,
                 id = hook.id,
             }
+        elseif hook.kind == "useEvent" then
+            hooks[#hooks + 1] = {
+                kind = hook.kind,
+                id = hook.id,
+                event = hook.listener.event.name,
+            }
+            node._hookEventListeners = node._hookEventListeners or {}
+            node._hookEventListeners[#node._hookEventListeners + 1] =
+                hook.listener
         end
     end
     if #hooks == 0 then return end
@@ -3107,6 +3160,7 @@ function host:mount(root)
     local refSequence = self._nextRefId
     local resourceSequence = self._nextResourceId
     local frameSequence = self._nextFrameId
+    local eventListenerSequence = self._nextEventListenerId
     local ok, candidate, context = pcall(self._build, self, root)
     if not ok then
         self:_trimFeedback(feedbackMark)
@@ -3114,6 +3168,7 @@ function host:mount(root)
         self._nextRefId = refSequence
         self._nextResourceId = resourceSequence
         self._nextFrameId = frameSequence
+        self._nextEventListenerId = eventListenerSequence
         if rawget(self, "_allocationProbe") then
             self:_detachAllocationProbe()
         end
@@ -4335,6 +4390,12 @@ local function finalizeResolvedTree(node, insideLayer, portalAncestor,
         context.eventReceivers[#context.eventReceivers + 1] = instance
         nextOrder = nextOrder + 1
     end
+    for _, listener in ipairs(node._hookEventListeners or {}) do
+        listener.eventOrder = nextOrder
+        context.eventReceivers[#context.eventReceivers + 1] = listener
+        context.orderedEventListeners[listener] = true
+        nextOrder = nextOrder + 1
+    end
     if node._motion then
         node._motion.eventOrder = nextOrder
         context.eventReceivers[#context.eventReceivers + 1] = node._motion
@@ -4669,6 +4730,8 @@ function host:_build(root)
         scrolls = {},
         radials = {},
         eventReceivers = {},
+        eventListeners = {},
+        orderedEventListeners = {},
         modals = {},
         chrome = nil,
         previewDepth = 0,
@@ -4745,6 +4808,14 @@ function host:_build(root)
             if not instance.eventOrder then
                 instance.eventOrder = nextEventOrder
                 context.eventReceivers[#context.eventReceivers + 1] = instance
+                nextEventOrder = nextEventOrder + 1
+            end
+        end
+        for _, listener in ipairs(context.eventListeners) do
+            if not context.orderedEventListeners[listener] then
+                listener.eventOrder = nextEventOrder
+                context.eventReceivers[#context.eventReceivers + 1] = listener
+                context.orderedEventListeners[listener] = true
                 nextEventOrder = nextEventOrder + 1
             end
         end
@@ -5411,65 +5482,87 @@ function host:_processEvent(entry, trackActorChanges)
         "pendingFrameMessageReceiverOrderCalls",
         "pendingFrameMessageReceiverOrderAllocatedKB", receiverOrderBefore)
     for _, instance in ipairs(receivers) do
-        for _, reaction in ipairs(instance.reactions) do
-            if reaction.event == token then
-                if instance.token and instance.token.kind == "actor" then
-                    local recipient = actorLabel(instance)
-                    recipients[#recipients + 1] = recipient
-                    local recipientIndex = #recipients
-                    local accepted, didChange = false, false
-                    -- Declarative matching is framework-owned and read-only,
-                    -- so a rejected actor needs no private payload. Every
-                    -- reducer that runs still owns one detached record; an
-                    -- impure reducer cannot corrupt the canonical broadcast
-                    -- inspected by a later ordered recipient.
-                    local matchBefore = frameProbe
-                        and collectgarbage("count") or nil
-                    local matches = Message.matches(
-                        reaction.match, record, instance.props)
-                    recordPendingFrameAllocation(frameProbe,
-                        "pendingFrameMessageActorReactionCalls",
-                        "pendingFrameMessageActorReactionAllocatedKB",
-                        matchBefore)
-                    if matches then
-                        local snapshotBefore = frameProbe
+        if instance.hookKind == "useEvent" then
+            if instance.event == token then
+                local recipient = "listener:" .. instance.owner
+                    .. ":" .. instance.id
+                recipients[#recipients + 1] = recipient
+                local snapshotBefore = frameProbe
+                    and collectgarbage("count") or nil
+                local delivery = Message.snapshot(record, "event")
+                recordPendingFrameAllocation(frameProbe,
+                    "pendingFrameMessageRecipientSnapshotCalls",
+                    "pendingFrameMessageRecipientSnapshotAllocatedKB",
+                    snapshotBefore)
+                local delivered, failure = pcall(
+                    instance.callback, delivery)
+                if not delivered then
+                    error(instance.owner .. " " .. instance.id
+                        .. " failed: " .. tostring(failure), 0)
+                end
+                statuses[#recipients] = traceTransitionStatus(true, false)
+            end
+        else
+            for _, reaction in ipairs(instance.reactions) do
+                if reaction.event == token then
+                    if instance.token and instance.token.kind == "actor" then
+                        local recipient = actorLabel(instance)
+                        recipients[#recipients + 1] = recipient
+                        local recipientIndex = #recipients
+                        local accepted, didChange = false, false
+                        -- Declarative matching is framework-owned and
+                        -- read-only, so a rejected actor needs no private
+                        -- payload. Each reducer still gets a detached record.
+                        local matchBefore = frameProbe
                             and collectgarbage("count") or nil
-                        local delivery = Message.snapshot(record, "event")
-                        recordPendingFrameAllocation(frameProbe,
-                            "pendingFrameMessageRecipientSnapshotCalls",
-                            "pendingFrameMessageRecipientSnapshotAllocatedKB",
-                            snapshotBefore)
-                        local reactionBefore = frameProbe
-                            and collectgarbage("count") or nil
-                        accepted, didChange = self:_applyTransition(
-                            instance, reaction.transition, delivery,
-                            entry.origin or "event:" .. token.name)
+                        local matches = Message.matches(
+                            reaction.match, record, instance.props)
                         recordPendingFrameAllocation(frameProbe,
                             "pendingFrameMessageActorReactionCalls",
                             "pendingFrameMessageActorReactionAllocatedKB",
+                            matchBefore)
+                        if matches then
+                            local snapshotBefore = frameProbe
+                                and collectgarbage("count") or nil
+                            local delivery = Message.snapshot(record, "event")
+                            recordPendingFrameAllocation(frameProbe,
+                                "pendingFrameMessageRecipientSnapshotCalls",
+                                "pendingFrameMessageRecipientSnapshotAllocatedKB",
+                                snapshotBefore)
+                            local reactionBefore = frameProbe
+                                and collectgarbage("count") or nil
+                            accepted, didChange = self:_applyTransition(
+                                instance, reaction.transition, delivery,
+                                entry.origin or "event:" .. token.name)
+                            recordPendingFrameAllocation(frameProbe,
+                                "pendingFrameMessageActorReactionCalls",
+                                "pendingFrameMessageActorReactionAllocatedKB",
+                                reactionBefore)
+                        end
+                        statuses[recipientIndex] =
+                            traceTransitionStatus(accepted, didChange)
+                        if didChange and changedActors then
+                            changedActors[instance.identity] = true
+                        end
+                        changed = changed or didChange
+                    else
+                        local recipient = "juice:" .. instance.identity
+                        recipients[#recipients + 1] = recipient
+                        local recipientIndex = #recipients
+                        local reactionBefore = frameProbe
+                            and collectgarbage("count") or nil
+                        local accepted = Message.matches(
+                            reaction.match, record, instance.props)
+                        if accepted then
+                            Motion.play(instance, reaction.do_, self)
+                        end
+                        recordPendingFrameAllocation(frameProbe,
+                            "pendingFrameMessageMotionReactionCalls",
+                            "pendingFrameMessageMotionReactionAllocatedKB",
                             reactionBefore)
+                        statuses[recipientIndex] =
+                            traceTransitionStatus(accepted, accepted)
                     end
-                    statuses[recipientIndex] =
-                        traceTransitionStatus(accepted, didChange)
-                    if didChange and changedActors then
-                        changedActors[instance.identity] = true
-                    end
-                    changed = changed or didChange
-                else
-                    local recipient = "juice:" .. instance.identity
-                    recipients[#recipients + 1] = recipient
-                    local recipientIndex = #recipients
-                    local reactionBefore = frameProbe
-                        and collectgarbage("count") or nil
-                    local accepted = Message.matches(
-                        reaction.match, record, instance.props)
-                    if accepted then Motion.play(instance, reaction.do_, self) end
-                    recordPendingFrameAllocation(frameProbe,
-                        "pendingFrameMessageMotionReactionCalls",
-                        "pendingFrameMessageMotionReactionAllocatedKB",
-                        reactionBefore)
-                    statuses[recipientIndex] =
-                        traceTransitionStatus(accepted, accepted)
                 end
             end
         end

@@ -922,4 +922,18 @@ Frog.useResource = Host.useResource
 ---@param callback fun(dt: number)
 Frog.useFrame = Host.useFrame
 
+--- Subscribes the current semantic owner to one typed event for its mounted
+--- lifetime. The callback receives a detached delivery after validation and
+--- in visible tree order. It may call an exact presentation/domain process
+--- and publish typed follow-up messages; it does not rerender merely by
+--- returning a value. Rerenders replace the closure, while owner removal,
+--- route replacement, and Host unmount remove the subscription atomically.
+---
+--- Hooks are positional and unconditional. Use an actor reaction when the
+--- event changes ordinary UI state; reserve `useEvent` for a retained process
+--- such as BattlePlayback that cannot live in actor state.
+---@param event table Token created by Frog.event(name, validate?).
+---@param callback fun(event:table)
+Frog.useEvent = Host.useEvent
+
 return Frog

@@ -303,7 +303,7 @@ source reorder fail loudly rather than binding the wrong identity. A compatible
 hot-reloaded render callback may move source lines while preserving count and
 kind; structural hook edits require restarting the gallery.
 
-## Mounted resources and frame callbacks
+## Mounted resources, event listeners, and frame callbacks
 
 Ordinary components should remain pure render trees. Use a mounted process only
 when one semantic owner must hold an external value and advance it over time,
@@ -319,6 +319,13 @@ Frog.useFrame(function(dt)
     local revision = playback:update(dt)
     if revision then
         send(RevisionPublished { revision = revision })
+    end
+end)
+
+Frog.useEvent(Events.Spellbook.closed, function(event)
+    if event.battle_key == props.session then
+        playback:closePreparation()
+        publishUpdate(playback, props.session, 0)
     end
 end)
 
@@ -361,9 +368,17 @@ actions, events, route props, and process revisions rebuild the readable tree.
 Motion, effects, clocks, painting, and a retained process's internal advance do
 not rebuild it merely because another frame elapsed.
 
-Both hooks are positional and unconditional. Keep them on separate lines and
+`useEvent(event, callback)` is the narrow bridge from a typed UI fact to a
+mounted process. Delivery is validated, detached, breadth-first, and ordered at
+the listener owner's tree position. Ordinary rerenders replace the closure;
+route replacement removes the subscription with its owner. Returning a value
+does not rerender. The callback calls the exact process operation and publishes
+the resulting typed revision/facts. Use an actor reaction instead when the fact
+only changes ordinary UI state.
+
+All three hooks are positional and unconditional. Keep them on separate lines and
 never put them behind a branch or loop. Hold F6 on the owner's visible root to
-see its stable resource id, frame id, and mounted state. The generic gallery
+see its stable resource, listener, and frame ids plus mounted state. The generic gallery
 story demonstrates pause, resize retention, scalar revision publication, and
 explicit resource reset without importing game code.
 
@@ -797,6 +812,7 @@ The current public vocabulary is:
 | `Frog.useRef` | Retain one exact arranged primitive rectangle |
 | `Frog.useKeyedRefs` | Retain exact primitive refs by authored scalar key |
 | `Frog.useResource` | Own one disposable value for a semantic mount |
+| `Frog.useEvent` | Deliver one typed event to a mounted process owner |
 | `Frog.useFrame` | Advance that process once per Host update |
 | `Frog.EffectLayer` | Paint ordered effects without accepting input |
 | `Frog.PopupText` | Run one keyed finite text effect |
@@ -815,6 +831,13 @@ The actor/message guide and production examples start at
 [`design/reference/frog-ui.md` section 3](../../design/reference/frog-ui.md#3-state-belongs-to-the-component).
 
 ## Persistent application chrome
+
+`src/presentation/application.lua` is the readable application composition:
+one routed child, `ConnectedHud`, a route-keyed Inspection actor, and persistent
+Settings. The route key deliberately remounts Inspection when navigation
+replaces its source; App never sends a cleanup message or mirrors the open
+subject. `src/presentation/battle/route.lua` owns BattlePlayback and the one
+Battle Spellbook beneath that root.
 
 `src/presentation/hud/connected.lua` is the application-facing bottom
 navigation layer. Its sibling `hud.lua` owns placement and `button.lua` owns
