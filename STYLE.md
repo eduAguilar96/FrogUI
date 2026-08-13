@@ -483,10 +483,13 @@ projections, companion style files, or geometry files.
   a keyboard shortcut in raw screen key handling.
 - Keep a reusable visual component free of feature-global state. For spells,
   bare `SpellCard` is the static face and `InspectableSpellCard` is the named
-  Button composition. The latter reports `(spell, inspectionKey)` through
-  `onInspect`; the screen owns and mounts the one Inspection actor. Do not
-  duplicate an anonymous press wrapper in each screen or make drag previews
-  interactive.
+  Button composition. The latter reports
+  `(spell, inspectionKey, positionalContext?)` through `onInspect`; ordinary
+  screens omit the context, while a board may provide only its cooked
+  `column` and numeric `slot` together so Mirror stays exact. The screen owns
+  and mounts the one Inspection actor. Do not add a screen/controller handle
+  to that context, duplicate an anonymous press wrapper in each screen, or
+  make drag previews interactive.
 - A `DragSource` owns the domain callback; a `DropTarget` exposes only a typed
   plain-data address and stable key. Never put Run/room policy into a target or
   the FrogUI interaction runtime.
