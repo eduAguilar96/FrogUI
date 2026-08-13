@@ -1452,12 +1452,16 @@ checks and static component stories.
 tree: rear `DaylightForest`, background `BattleAtmosphere`,
 `FighterBodyLayer`, foreground `DaylightForest`, then foreground
 `BattleAtmosphere`. The atmosphere folder's public composition names its
-`SpatialDim`, `GodRays`, and bounded dust/firefly/leaf owners directly. The
-forest and passive field sample raw time. `GodRays` uses one full-field tapered
-shader plus three narrow vertical Box fallbacks; do not approximate a tapered
-shaft with a broad rotated rectangle. The semantic dim and wind shaders retain
-plain primitive/image fallbacks. Keyed attack parallax samples feedback time,
-so it pauses and returns with the fighter while ambient motion continues.
+optional `SpatialDim`, `GodRays`, and bounded dust/firefly/leaf owners
+directly. The forest and passive field sample raw time. `GodRays` uses one
+full-field tapered shader plus three narrow vertical Box fallbacks; do not
+approximate a tapered shaft with a broad rotated rectangle. Full-field shaders
+over an empty Box derive normalized coordinates from `screenCoordinates` and
+`frogViewportPixels`, not the Box's texture coordinates. The background dim is
+off by default and has one hot-reloadable switch at
+`theme.battleAtmosphere.spatialDim.enabled`. The semantic dim and wind shaders
+retain plain primitive/image fallbacks. Keyed attack parallax samples feedback
+time, so it pauses and returns with the fighter while ambient motion continues.
 Reduced motion retains the static world decorations without continuous ambient
 runners. Board, status, dice, and HUD remain outside and above this world
 component.
