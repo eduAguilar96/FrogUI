@@ -175,6 +175,12 @@ projections, companion style files, or geometry files.
 - Keep actor state semantic. One selected atom may derive several ordered
   reference panels; store the atom identity and derive the panels in its
   presentation owner instead of retaining copied panel arrays in state.
+- A persistent Inspection subject may carry only the plain source identity
+  `{ surface, key, token }`. The visible owner publishes a new scalar token
+  only when that exact key or its whole surface is actually replaced;
+  Inspection owns the resulting dismissal. Do not poll source liveness,
+  retain an actor/controller handle, or republish the token for ordinary
+  render revisions.
 
 ## 6. Public APIs are discoverable where they are used
 
