@@ -416,10 +416,20 @@ local Interaction = require("src.frogui.interaction")
 ---@field velocity? FrogUIOffset Logical pixels per second sampled from clock;
 --- requires an explicit clock so the owning application chooses time semantics.
 ---@field clock? FrogUIClock Explicit clock used only by velocity.
+---@field phaseImpulse? FrogTiledPhaseImpulse Optional clock-sampled phase
+--- displacement that rises once to `offset`, returns to zero, and never
+--- creates a Motion runner or component rerender.
 ---@field repeatAxis? FrogUITileRepeat Defaults to `both`.
 ---@field filter? FrogUIImageFilter Defaults to `linear`; `nearest` also snaps
 --- the shared tile phase to whole logical pixels to prevent moving seams.
 ---@field tint? FrogUIColor Optional multiplicative tint.
+
+---@class FrogTiledPhaseImpulse
+---@field clock FrogUIClock Explicit owner-selected timing source.
+---@field startedAt number Clock time at which the impulse begins.
+---@field duration number Positive complete rise-and-return lifetime.
+---@field peakAt number Normalized peak time strictly between zero and one.
+---@field offset FrogUIOffset Logical-pixel displacement at the peak.
 
 ---@alias FrogUIShaderUniform number|boolean|number[]|FrogUIClock
 ---A scalar, boolean, two-to-four-number vector, or explicitly owned clock.

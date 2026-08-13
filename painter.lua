@@ -753,6 +753,28 @@ local function modulo(value, size)
     return ((value % size) + size) % size
 end
 
+-- Samples one bounded rise-and-return tile phase without retained Motion.
+local function tiledImpulse(impulse)
+    if not impulse then return 0, 0 end
+    local elapsed = impulse.clock:now() - impulse.startedAt
+    if elapsed <= 0 or elapsed >= impulse.duration then return 0, 0 end
+    local peakTime = impulse.duration * impulse.peakAt
+    local amount
+    if elapsed <= peakTime then
+        local progress = elapsed / peakTime
+        amount = 1 - (1 - progress) * (1 - progress)
+    else
+        local progress = (elapsed - peakTime)
+            / (impulse.duration - peakTime)
+        local eased = progress < 0.5
+            and 2 * progress * progress
+            or 1 - (-2 * progress + 2) ^ 2 / 2
+        amount = 1 - eased
+    end
+    return (impulse.offset.x or 0) * amount,
+        (impulse.offset.y or 0) * amount
+end
+
 -- Plans one repeated axis with bounded integer work and no floating while-loop.
 local function tilePlan(start, size, tileSize, phase, repeats, snap)
     local origin = start + (repeats and modulo(phase, tileSize) or phase)
@@ -792,8 +814,9 @@ local function tiledGeometry(node, asset)
     end
     local time = props.clock and props.clock:now() or 0
     local phase, velocity = props.phase or {}, props.velocity or {}
-    local phaseX = (phase.x or 0) + (velocity.x or 0) * time
-    local phaseY = (phase.y or 0) + (velocity.y or 0) * time
+    local impulseX, impulseY = tiledImpulse(props.phaseImpulse)
+    local phaseX = (phase.x or 0) + (velocity.x or 0) * time + impulseX
+    local phaseY = (phase.y or 0) + (velocity.y or 0) * time + impulseY
     local axis = props.repeatAxis or "both"
     local snap = props.filter == "nearest" and 1 or nil
     local columnFirst, columnCount = tilePlan(node.layout.x, node.layout.width, tileWidth,
@@ -813,6 +836,7 @@ local function tiledGeometry(node, asset)
         repeatAxis = axis,
         filter = props.filter or "linear",
         clock = props.clock and "explicit" or "none",
+        phaseImpulse = props.phaseImpulse and "explicit" or "none",
     }
 end
 

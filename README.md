@@ -436,6 +436,26 @@ does not rerender the component tree. Nearest filtering snaps the shared phase
 once to whole logical pixels before placing adjacent tiles. It never rounds
 each copy independently, which would create moving seams.
 
+For a single bounded displacement of repeating art, add `phaseImpulse`:
+
+```lua
+phaseImpulse = gust and {
+    clock = props.feedbackClock,
+    startedAt = gust.startedAt,
+    duration = gust.expiresAt - gust.startedAt,
+    peakAt = 0.35,
+    offset = { x = gust.distance, y = 0 },
+} or nil
+```
+
+The impulse rises from zero to `offset` with an out-quadratic curve at
+`peakAt`, then returns with an in-out-quadratic curve by `duration`. FrogUI
+samples that explicit clock during paint; it creates no `Motion` runner and
+does not rebuild or reconcile the tree. This is deliberately a narrow
+primitive capability for tiled-art phase, not a generic animation system.
+Gameplay meaning, duration, distance, clock choice, and reduced-motion policy
+remain with the component owner. F6 reports whether an impulse is explicit.
+
 `Frog.ShaderImage` is a one-child wrapper, not another renderer. The child
 resolves to an `Image`, `SpriteSheet`, `TiledImage`, or empty `Box`, so both
 static and animated visible trees remain literal:
@@ -1453,15 +1473,36 @@ tree: rear `DaylightForest`, background `BattleAtmosphere`,
 `FighterBodyLayer`, foreground `DaylightForest`, then foreground
 `BattleAtmosphere`. The atmosphere folder's public composition names its
 optional `SpatialDim`, `GodRays`, and bounded dust/firefly/leaf owners
-directly. The forest and passive field sample raw time. `GodRays` uses one
+directly. Its `AtmosphereReaction` consumes only detached, addressed
+roll/contact receipts from `BattleVisibleState`: at most one forest gust and
+one light per left/right/center channel. Lights publish through the narrow
+`atmosphere` surface; gusts publish through the separate `forest` surface, so
+light-only events never rebuild the tiled layers. One local light actor and
+two forest-pass actors retain revision tokens, not atmosphere state. Fighter
+art stays independently invalidated. Paint owners settle receipts on feedback
+time without publishing a deletion rebuild; each bounded latest receipt stays
+until its channel receives a replacement.
+The forest and passive field sample raw time. `GodRays` uses one
 full-field tapered shader plus three narrow vertical Box fallbacks; do not
 approximate a tapered shaft with a broad rotated rectangle. Full-field shaders
 over an empty Box derive normalized coordinates from `screenCoordinates` and
 `frogViewportPixels`, not the Box's texture coordinates. The background dim is
 off by default and has one hot-reloadable switch at
 `theme.battleAtmosphere.spatialDim.enabled`. The semantic dim and wind shaders
-retain plain primitive/image fallbacks. Keyed attack parallax samples feedback
-time, so it pauses and returns with the fighter while ambient motion continues.
+retain plain primitive/image fallbacks. Attack parallax and unaccompanied
+impact gusts use the same paint-time `TiledImage.phaseImpulse`, so they pause
+and return with feedback while ambient motion continues. Event lights use that
+same feedback clock. Their numeric
+and paint tuning has one hot-reloadable owner at
+`battle/atmosphere/tuning.lua`; reducer structure remains restart-only. The
+phase impulse adds neither a Motion owner nor five layers of reconciliation
+work.
+The 40 visible passive particles use 12 retained Motion owners: four stable
+drift groups each for dust and fireflies, plus four independently rotating
+leaves. Grouping decorative faces is ordinary FrogUI composition, not a hidden
+batcher. Keep stable keys on both the group and each visible face; use one
+Motion per face only when that face genuinely needs independent retained
+behavior.
 Reduced motion retains the static world decorations without continuous ambient
 runners. Board, status, dice, and HUD remain outside and above this world
 component.

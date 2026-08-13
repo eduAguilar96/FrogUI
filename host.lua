@@ -97,6 +97,7 @@ local TYPE_PROPS = {
     TiledImage = {
         source = true, tileWidth = true, tileHeight = true,
         phase = true, velocity = true, clock = true,
+        phaseImpulse = true,
         repeatAxis = true, filter = true, tint = true,
     },
     ShaderImage = {
@@ -888,6 +889,37 @@ local function validatePrimitiveProps(self, name, props, probe)
             "TiledImage clock must come from Frog.clock")
         assert(props.velocity == nil or props.clock ~= nil,
             "TiledImage velocity requires an explicit Frog.clock")
+        local impulse = props.phaseImpulse
+        assert(impulse == nil or type(impulse) == "table"
+                and getmetatable(impulse) == nil,
+            "TiledImage phaseImpulse must be plain data")
+        if impulse then
+            local allowed = {
+                clock = true, startedAt = true, duration = true,
+                peakAt = true, offset = true,
+            }
+            for key in pairs(impulse) do
+                assert(allowed[key],
+                    "TiledImage phaseImpulse has unknown field "
+                        .. tostring(key))
+            end
+            assert(Clock.isClock(impulse.clock),
+                "TiledImage phaseImpulse clock must come from Frog.clock")
+            validateNumber(impulse.startedAt,
+                "TiledImage phaseImpulse startedAt", 0)
+            validateNumber(impulse.duration,
+                "TiledImage phaseImpulse duration", 0)
+            assert(impulse.duration > 0,
+                "TiledImage phaseImpulse duration must be positive")
+            validateNumber(impulse.peakAt,
+                "TiledImage phaseImpulse peakAt", 0, 1)
+            assert(impulse.peakAt > 0 and impulse.peakAt < 1,
+                "TiledImage phaseImpulse peakAt must be between zero and one")
+            validateOptionalPoint(impulse.offset,
+                "TiledImage phaseImpulse offset")
+            assert(impulse.offset ~= nil,
+                "TiledImage phaseImpulse needs an offset")
+        end
         oneOf(props.repeatAxis, VALIDATION_VALUES.repeatAxis,
             "TiledImage repeatAxis")
         oneOf(props.filter, VALIDATION_VALUES.filter, "TiledImage filter")
