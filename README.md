@@ -1495,6 +1495,27 @@ with shipped Analyze. It owns labels and returns only
 `game/report.lua`. Both the stateless fact query and `BattleSummary` are in the
 gallery hot-reload set.
 
+Battle target preview is another interaction-time read, not render state.
+`BattlePlayback:spellTargetPreview(side, slot)` builds detached columns from
+the already visible board and calls the pure
+`battle/target_preview.lua` owner. It returns only currently reachable sides
+per effect, including an explicit empty array for a current fizzle, and never
+reads the private Battle or advances RNG. The click/hover subject carries that
+snapshot with `ownerSide`; affinity satellites resolve current friendly,
+hostile, mixed, or fizzle prose from it.
+
+The same Inspection actor owns transient mouse preview. An inspectable Battle
+spell/relic reports exact enter and leave edges through `Inspection.Hover`.
+The actor waits 0.12 seconds with a keyed declarative delay, then shows the
+canonical expanded face without Modal, scrim, close control, Scroll, or atom
+Buttons. It is therefore input-transparent by construction and cannot cause a
+hover loop. Leave, drag start, or source generation replacement closes it;
+click/hold replaces it with the ordinary pinned Modal. Touch movement never
+creates hover. A reduced-motion Host settles the finite delay on its next
+update, following the library-wide completion rule. Inspection remains
+restart-only because this changes actor state shape; its static spell/relic
+surfaces and target read model hot-reload.
+
 `battle/world.lua` keeps Battle's physical paint order legible in one small
 tree: rear `DaylightForest`, background `BattleAtmosphere`,
 `FighterBodyLayer`, foreground `DaylightForest`, then foreground
