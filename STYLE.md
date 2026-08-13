@@ -348,9 +348,12 @@ projections, companion style files, or geometry files.
 - The application owns clock meaning. Raw ambience may continue while paused;
   feedback/execution clocks may stop or scale. TiledImage and ShaderImage sample
   clocks but never advance them and never infer reduced-motion behavior.
-- Wrap one `Image`, `TiledImage`, or empty `Box` in `Frog.ShaderImage`. Keep the
-  unwrapped leaf readable in the same tree; do not create an all-in-one forest
-  renderer or pass a custom draw callback.
+- Wrap one `Image`, `SpriteSheet`, `TiledImage`, or empty `Box` in
+  `Frog.ShaderImage`. Keep the unwrapped leaf readable in the same tree; do not
+  create an all-in-one forest/fighter renderer or pass a custom draw callback.
+- A shader around `SpriteSheet` changes only the selected frame's paint. The
+  sheet keeps its one explicit clock, filter, frame selection, facing, and
+  fallback; never mirror animation state inside the shader wrapper.
 - Shader source lives under a semantic token in `theme.shaders`. Components
   declare only that token, explicit uniforms, blend, and fallback. Never embed
   shader source, filenames, Battle event names, or hidden timing in a component.

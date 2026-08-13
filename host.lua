@@ -4132,10 +4132,11 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     end
     if token.name == "ShaderImage" then
         local child = node.children[1]
-        assert(child.type == "Image" or child.type == "TiledImage"
+        assert(child.type == "Image" or child.type == "SpriteSheet"
+                or child.type == "TiledImage"
                 or child.type == "Box" and #child.children == 0,
-            "Frog.ShaderImage child must resolve to Image, TiledImage,"
-                .. " or an empty Box")
+            "Frog.ShaderImage child must resolve to Image, SpriteSheet,"
+                .. " TiledImage, or an empty Box")
     end
     if token.name == "RadialDial" then
         local interactive = {

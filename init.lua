@@ -431,8 +431,8 @@ local Interaction = require("src.frogui.interaction")
 ---@field fallback? FrogUIShaderFallback `plain` draws the child unshaded when
 --- compilation, uniform setup, or drawing fails; `hidden` omits it. Defaults plain.
 ---@field blend? FrogUIShaderBlend Defaults to `alpha`; `add` is intended for light.
----@field [integer] FrogUIElementDescription Exactly one Image, TiledImage, or
---- empty Box paint leaf after component resolution.
+---@field [integer] FrogUIElementDescription Exactly one Image, SpriteSheet,
+--- TiledImage, or empty Box paint leaf after component resolution.
 
 ---@class FrogIconOutline
 ---@field width? number Non-negative outline thickness.
@@ -688,7 +688,8 @@ Frog.TiledImage = Element.primitive("TiledImage")
 --- Applies one theme-owned semantic shader to exactly one paint leaf.
 ---
 --- Uniforms are explicit scalar/vector values or Frog.clock instances. The
---- safe `plain` fallback preserves ordinary art when the GPU path is unavailable.
+--- safe `plain` fallback preserves ordinary or animated art when the GPU path
+--- is unavailable. Image, SpriteSheet, TiledImage, and empty Box are accepted.
 ---@type fun(input:FrogShaderImageProps):FrogUIElementDescription
 Frog.ShaderImage = Element.primitive("ShaderImage")
 

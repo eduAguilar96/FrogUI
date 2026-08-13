@@ -436,9 +436,9 @@ does not rerender the component tree. Nearest filtering snaps the shared phase
 once to whole logical pixels before placing adjacent tiles. It never rounds
 each copy independently, which would create moving seams.
 
-`Frog.ShaderImage` is a one-child wrapper, not another background renderer.
-The child resolves to an `Image`, `TiledImage`, or empty `Box`, so the visible
-tree remains literal:
+`Frog.ShaderImage` is a one-child wrapper, not another renderer. The child
+resolves to an `Image`, `SpriteSheet`, `TiledImage`, or empty `Box`, so both
+static and animated visible trees remain literal:
 
 ```lua
 Frog.ShaderImage {
@@ -464,6 +464,9 @@ The `shader` value is a semantic token in `theme.shaders`; component files do
 not embed GPU source. Uniforms are finite numbers, booleans, numeric vectors of
 two through four values, or explicit clocks. A clock is sampled at paint time.
 Use `blend = "add"` only for additive light; ordinary art defaults to alpha.
+Wrapping a `SpriteSheet` does not create another animation clock or frame
+lifetime. The sheet still samples its own explicit clock exactly once during
+ordinary leaf painting; the wrapper changes only that selected frame's paint.
 
 `fallback = "plain"` preserves the child unshaded after compilation, uniform,
 or draw failure. This is the normal policy for forest wind and color effects.
