@@ -1429,9 +1429,17 @@ and follow helpers only as needed.
 
 ## Development loop
 
-Run `love . --frogui gallery`. Press L in the gallery to open the deterministic
-Battle load acceptance fixture, then Space to play, R to replay the exact
-captured fight, and the speed dial to increase playback pressure. It uses a
+Run `love . --frogui gallery`. Press A to mount the real isolated Application
+and BattleRoute acceptance tree. Open/close the Battle Spellbook through the
+persistent HUD, press the central Play control, inspect spells/relics, resize
+with F7, and exercise the terminal actions. A navigation action visibly removes
+BattleRoute and shows its exact application receipt; R mounts a fresh attempt.
+This is the pre-cutover device surface and still does not enter production
+routing.
+
+Press L to open the deterministic Battle load acceptance fixture, then Space
+to play, R to replay the exact captured fight, and the speed dial to increase
+playback pressure. It uses a
 code-owned seed, pinned full-board spell deal, increasing dice pressure, large
 HP pools, and a bounded long fight; its exact identity and pressure inputs stay
 visible in the trace and live only in `tools/frogui/battle_load_fixture.lua`.
