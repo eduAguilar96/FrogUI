@@ -1392,10 +1392,12 @@ captured fight, and the speed dial to increase playback pressure. It uses a
 code-owned seed, pinned full-board spell deal, increasing dice pressure, large
 HP pools, and a bounded long fight; its exact identity and pressure inputs stay
 visible in the trace and live only in `tools/frogui/battle_load_fixture.lua`.
-F3 toggles the development frame-rate
-overlay; it reports LÖVE's real render FPS and average frame duration,
-independent of Battle playback speed. F4 expands it into the FrogUI execution
-profiler. F6 shows the resolved component/primitive tree. F7 cycles viewport
+F3 toggles the development frame-rate overlay. It reports LÖVE's real render
+FPS plus rolling 180-frame average, p95, maximum, and over-25-ms count,
+independent of Battle playback speed. FPS and average alone do not diagnose
+uneven delivery. F4 expands it into the FrogUI execution profiler; that mode
+adds observer work and its timings must not be read as player-mode frame
+pacing. F6 shows the resolved component/primitive tree. F7 cycles viewport
 sizes. The gallery polls watched file contents and reloads
 saved presentation theme/data tables, stories, and stateless components in
 place; F5 forces that same scoped set. A bad candidate reload keeps the last
