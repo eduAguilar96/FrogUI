@@ -1448,6 +1448,14 @@ ordinary visible component files remain hot-reloadable. The explicitly named
 `static_screen.lua` and `static_board.lua` exist only for fixture/equivalence
 checks and static component stories.
 
+`battle/world.lua` keeps Battle's physical paint order legible in one small
+tree: rear `DaylightForest`, `FighterBodyLayer`, then foreground
+`DaylightForest`. The forest's tiled leaves sample raw time for passive drift;
+canopy/foreground wind uses a semantic shader with a plain-image fallback.
+Keyed attack parallax samples feedback time, so it pauses and returns with the
+fighter while ambient drift continues. Board, status, dice, and HUD remain
+outside and above this world component.
+
 ### Reading the F4 profiler
 
 The gallery opts its Host into a fixed 180-frame diagnostic ring. Ordinary
