@@ -1449,12 +1449,16 @@ ordinary visible component files remain hot-reloadable. The explicitly named
 checks and static component stories.
 
 `battle/world.lua` keeps Battle's physical paint order legible in one small
-tree: rear `DaylightForest`, `FighterBodyLayer`, then foreground
-`DaylightForest`. The forest's tiled leaves sample raw time for passive drift;
-canopy/foreground wind uses a semantic shader with a plain-image fallback.
-Keyed attack parallax samples feedback time, so it pauses and returns with the
-fighter while ambient drift continues. Board, status, dice, and HUD remain
-outside and above this world component.
+tree: rear `DaylightForest`, background `BattleAtmosphere`,
+`FighterBodyLayer`, foreground `DaylightForest`, then foreground
+`BattleAtmosphere`. The atmosphere folder's public composition names its
+`SpatialDim`, `GodRays`, and bounded dust/firefly/leaf owners directly. The
+forest and passive field sample raw time; the semantic dim and wind shaders
+retain plain primitive/image fallbacks. Keyed attack parallax samples feedback
+time, so it pauses and returns with the fighter while ambient motion continues.
+Reduced motion retains the static world decorations without continuous
+ambient runners. Board, status, dice, and HUD remain outside and above this
+world component.
 
 ### Reading the F4 profiler
 
