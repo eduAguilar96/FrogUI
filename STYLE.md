@@ -548,6 +548,12 @@ projections, companion style files, or geometry files.
   the reducer never arranges geometry, and the screen never advances time.
   This is an explicit process boundary, not permission to split ordinary
   component state into generic adapters or hidden state files.
+- Deterministic replay/seek belongs to an explicit user action on that retained
+  playback process. Reconstruct from its captured config, fold silently to the
+  requested boundary, publish one replacement generation, and keep the raw
+  ambient clock mounted. Do not poll or re-simulate per frame, ask a live Run
+  for new config, retain duplicate completed view snapshots, or route replay
+  state through App.
 
 ## 14. Updating this guide
 

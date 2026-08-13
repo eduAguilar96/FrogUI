@@ -1468,6 +1468,19 @@ ordinary visible component files remain hot-reloadable. The explicitly named
 `static_screen.lua` and `static_board.lua` exist only for fixture/equivalence
 checks and static component stories.
 
+After a terminal result, Analyze remains inside that same Playback process.
+The Analyze action reconstructs from the already sealed config; Left/Right
+seek by deterministic re-simulation and Escape or A returns to the terminal
+result. A boundary seek is synchronous and silent: it folds authoritative
+events into the visible state/report, then clears DiceShow/finalize keys,
+execution receipts, and fighter/atmosphere feedback before publishing one new
+generation. Space and the existing speed wheel resume ordinary paced playback
+from that boundary. The raw environment clock stays mounted, so passive forest
+motion does not jump. Analyze never calls the live Run for a new encounter and
+never stores a second completed visible snapshot. `playback.lua` and
+`visible_state.lua` remain restart-only; the visible
+`analyze_controls.lua` component hot-reloads with the other Battle UI.
+
 `battle/world.lua` keeps Battle's physical paint order legible in one small
 tree: rear `DaylightForest`, background `BattleAtmosphere`,
 `FighterBodyLayer`, foreground `DaylightForest`, then foreground
