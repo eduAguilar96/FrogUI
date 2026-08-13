@@ -269,8 +269,9 @@ local Interaction = require("src.frogui.interaction")
 ---@field padding? FrogUIPadding Inner origin for every child `at` point.
 ---@field clip? boolean Clip effects to the layer's content rectangle.
 ---@field overflow? FrogUIOverflow Explicit clipping policy.
----@field [integer] FrogUIElementDescription Ordered PopupText, Projectile, or
---- Flipbook children; later children paint above earlier ones.
+---@field [integer] FrogUIElementDescription Ordered PopupText, Projectile,
+--- Flipbook, ParticleBurst, or bounded Canvas children; later children paint
+--- above earlier ones.
 
 ---@class FrogUIPoint
 ---@field x number Horizontal position from the EffectLayer content's left edge.
@@ -361,6 +362,27 @@ local Interaction = require("src.frogui.interaction")
 ---@field anchor? FrogUIPivot Normalized frame pivot; defaults to its center.
 ---@field tint? FrogUIColor Frame multiply tint.
 ---@field opacity? number Static opacity from 0 through 1.
+---@field testId? string Readable development/test identity shown by F6.
+
+---@class FrogParticleBurstProps
+---@field key string|number Required stable lifetime identity; a new key starts and rerolls one burst.
+---@field at FrogUIEffectAnchor Required owner ref center or point local to the owning EffectLayer.
+---@field atOffset? FrogUIOffset Optional owner-center nudge.
+---@field seed integer Required deterministic seed from 1 through 2147483646; FrogUI never reads simulation RNG.
+---@field clock FrogUIClock Required explicit feedback/raw clock sampled but never advanced by FrogUI.
+---@field duration number Required positive lifetime in clock seconds.
+---@field count? integer Positive particle count; defaults to a small framework value and cannot exceed the code-owned safety budget.
+---@field distance? number Non-negative maximum outward travel in logical pixels.
+---@field angle? number Cone center in radians; zero points right.
+---@field spread? number Cone width from zero through two pi; defaults to a full radial burst.
+---@field gravity? number Vertical acceleration in logical pixels per second squared; positive falls downward.
+---@field radius? number Positive starting radius in logical pixels.
+---@field endRadius? number Non-negative terminal radius; defaults to zero.
+---@field color? FrogUIColor Semantic circle color and default asset tint.
+---@field source? FrogUIAssetSource Optional semantic particle asset; missing art falls back to circles without changing timing.
+---@field tint? FrogUIColor Explicit particle-asset tint overriding `color`.
+---@field opacity? number Static opacity from 0 through 1, composed with lifetime fade.
+---@field onComplete? fun() Exactly-once callback after the keyed burst settles; normally removes its owner entry.
 ---@field testId? string Readable development/test identity shown by F6.
 
 ---@class FrogTextProps:FrogUIElementProps
@@ -685,6 +707,14 @@ Frog.Projectile = require("src.frogui.effects.projectile")
 ---@type fun(input:FrogFlipbookProps):FrogUIElementDescription
 Frog.Flipbook = require("src.frogui.effects.flipbook")
 
+--- Emits one finite deterministic cone or radial particle burst.
+---
+--- `seed`, `clock`, `duration`, and `at` are explicit. The code-owned count
+--- ceiling bounds draw work. Missing optional art uses the semantic circle
+--- fallback; reduced motion completes invisibly on the next Host update.
+---@type fun(input:FrogParticleBurstProps):FrogUIElementDescription
+Frog.ParticleBurst = require("src.frogui.effects.particle_burst")
+
 --- Draws one text leaf. `role` selects a semantic theme size; `fontScale`
 --- changes only this use while preserving responsive role changes. `fitDown`
 --- may shrink that requested size to fit explicit bounds. Hover this symbol or
@@ -868,20 +898,129 @@ Frog.play = Juice.play
 ---@type fun(time?:number):FrogUIClock
 Frog.clock = Clock.new
 
+---@class FrogUIThemeBreakpoints
+---@field wideRatio? number Positive virtual aspect ratio; defaults to 1.
+
+---@class FrogUIButtonTheme
+---@field background? FrogUIColor
+---@field hover? FrogUIColor
+---@field pressed? FrogUIColor
+---@field focused? FrogUIColor
+---@field selected? FrogUIColor
+---@field disabled? FrogUIColor
+---@field border? FrogUIColor
+---@field focusedBorder? FrogUIColor
+---@field radius? number Non-negative shared corner radius.
+
+---@class FrogUIControlTheme
+---@field button? FrogUIButtonTheme
+
+---@class FrogUIMotionSpringTheme
+---@field frequency number Positive oscillation frequency.
+---@field damping number Positive damping ratio.
+
+---@class FrogUIMotionTheme
+---@field springs? table<string,FrogUIMotionSpringTheme>
+
+---@class FrogUISoundTheme
+---@field activate? string
+---@field hover? string
+---@field reject? string
+---@field dismiss? string
+---@field dragGrab? string
+---@field dragDrop? string
+---@field dialSpin? string
+---@field dialCommit? string
+
+---@class FrogUITheme
+---@field colors? table<string,FrogUIRGBA>
+---@field fonts? table<string,number|table|userdata> Positive sizes or font objects.
+---@field fontSizes? table<string,number>
+---@field fontFile? string Non-empty LÖVE font path.
+---@field breakpoints? FrogUIThemeBreakpoints
+---@field shaders? table<string,string>
+---@field controls? FrogUIControlTheme
+---@field sounds? FrogUISoundTheme
+---@field motion? FrogUIMotionTheme
+---@field [string] any Application namespaces are allowed; FrogUI namespaces validate strictly.
+
+---@class FrogUIAssets: table<string,string|table|userdata>
+---Semantic tokens map to non-empty paths or loaded image objects.
+
+---@class FrogUIFeedback
+---@field sound? fun(cue:string)
+---@field haptic? fun(cue:string)
+
+---@class FrogUICustomPainter
+---INTERNAL/EXPERIMENTAL 0.x test seam with no compatibility promise.
+
+---@class FrogUIViewportSnapshot
+---@field width number
+---@field height number
+---@field wide boolean
+---@field scale number
+---@field safe {left:number,right:number,top:number,bottom:number} Detached copy.
+
+---@class FrogUIInspectionSnapshot
+---@field visible boolean
+---@field fault? {origin:string,message:string}
+---@field nodes table[]
+---@field selected? table
+---@field messages table[]
+---@field actors table[]
+---@field interaction table
+
+---@class FrogUIHost
+---@field mount fun(self:FrogUIHost,root:FrogUIElementDescription) Publish the first root; returns nothing. Only one Host may mount per Lua VM.
+---@field render fun(self:FrogUIHost,root?:FrogUIElementDescription) Atomically rebuild; returns nothing.
+---@field refreshTheme fun(self:FrogUIHost,theme:FrogUITheme,assets:FrogUIAssets,root?:FrogUIElementDescription)
+---@field viewport fun(self:FrogUIHost):FrogUIViewportSnapshot Detached responsive snapshot.
+---@field update fun(self:FrogUIHost,dt:number)
+---@field draw fun(self:FrogUIHost,customPainter?:FrogUICustomPainter) Optional painter is internal/experimental.
+---@field resize fun(self:FrogUIHost,width:number,height:number)
+---@field pointerDown fun(self:FrogUIHost,x:number,y:number,pointerId?:string|number,button?:number):boolean
+---@field pointerMove fun(self:FrogUIHost,x:number,y:number,pointerId?:string|number):boolean
+---@field pointerUp fun(self:FrogUIHost,x:number,y:number,pointerId?:string|number,button?:number):boolean
+---@field keyDown fun(self:FrogUIHost,key:string,scancode?:string,isrepeat?:boolean):boolean
+---@field keyUp fun(self:FrogUIHost,key:string):boolean
+---@field textInput fun(self:FrogUIHost,text:string):boolean
+---@field wheelMoved fun(self:FrogUIHost,dx:number,dy:number):boolean
+---@field mousepressed fun(self:FrogUIHost,x:number,y:number,button?:number):boolean
+---@field mousemoved fun(self:FrogUIHost,x:number,y:number):boolean
+---@field mousereleased fun(self:FrogUIHost,x:number,y:number,button?:number):boolean
+---@field touchpressed fun(self:FrogUIHost,id:any,x:number,y:number):boolean
+---@field touchmoved fun(self:FrogUIHost,id:any,x:number,y:number):boolean
+---@field touchreleased fun(self:FrogUIHost,id:any,x:number,y:number):boolean
+---@field keypressed fun(self:FrogUIHost,key:string,scancode?:string,isrepeat?:boolean):boolean
+---@field keyreleased fun(self:FrogUIHost,key:string):boolean
+---@field textinput fun(self:FrogUIHost,text:string):boolean
+---@field wheelmoved fun(self:FrogUIHost,dx:number,dy:number):boolean
+---@field setInspectorVisible fun(self:FrogUIHost,visible:boolean)
+---@field inspect fun(self:FrogUIHost,x:number,y:number):table?
+---@field inspectionTree fun(self:FrogUIHost):FrogUIInspectionSnapshot
+---@field messageTrace fun(self:FrogUIHost):table[]
+---@field diagnostics fun(self:FrogUIHost):FrogUIDiagnosticsSnapshot
+---@field setDiagnosticsEnabled fun(self:FrogUIHost,enabled:boolean):boolean
+---@field clearDiagnostics fun(self:FrogUIHost)
+---@field diagnosticTrace fun(self:FrogUIHost):table[]
+---@field unmount fun(self:FrogUIHost)
+---`Host:tree()` and underscore methods are internal mutable test/diagnostic
+---seams and carry no 0.x compatibility promise.
+
 ---@class FrogUIHostOptions
----@field width? number Initial physical viewport width.
----@field height? number Initial physical viewport height.
----@field theme? table Semantic colors, fonts, assets, and interaction defaults.
----@field assets? table Semantic asset-token lookup.
+---@field width? number Positive physical width; paired omission samples `love.graphics.getDimensions()` once.
+---@field height? number Positive physical height; must be paired with width.
+---@field theme? FrogUITheme
+---@field assets? FrogUIAssets
 ---@field reducedMotion? boolean Settle finite motion while preserving completion.
 ---@field diagnostics? boolean Enable the bounded development execution profiler; disabled by default.
----@field designWidth? number Minimum virtual layout width; defaults to 540.
----@field designHeight? number Minimum virtual layout height; defaults to 960.
+---@field designWidth number Required positive minimum virtual layout width.
+---@field designHeight number Required positive minimum virtual layout height.
 ---@field wideRatio? number Virtual aspect ratio at which `useViewport().wide` becomes true.
----@field viewport? {x?:number,y?:number,width?:number,height?:number} Optional physical subregion.
+---@field viewport? {x?:number,y?:number,width?:number,height?:number} Optional subregion; width and height replace top-level dimensions and must be paired.
 ---@field safe? {left?:number,right?:number,top?:number,bottom?:number} Platform safe-area insets.
----@field feedback? {sound?:fun(cue:string),haptic?:fun(cue:string)} Semantic feedback providers.
----@field painter? table Optional custom painter used by focused checks/tools.
+---@field feedback? FrogUIFeedback Omitted services are deliberate no-ops.
+---@field painter? FrogUICustomPainter INTERNAL/EXPERIMENTAL test seam.
 ---@field inspectorActive? boolean Begin with F6 inspection visible.
 ---@field messageTraceLimit? integer Bounded F6 typed-message history; defaults to 80.
 ---@field messageLoopLimit? integer Maximum deliveries in one callback transaction; defaults to 256.
@@ -895,7 +1034,8 @@ Frog.clock = Clock.new
 --- `host:diagnosticTrace()` once afterward; the trace allocates a detached row
 --- per retained frame and must not be polled. Diagnostic control/read calls
 --- require a mounted Host outside update, draw, callbacks, and external input.
----@param options? FrogUIHostOptions
+---@param options FrogUIHostOptions
+---@return FrogUIHost
 function Frog.host(options)
     return Host.new(options)
 end

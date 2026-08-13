@@ -40,6 +40,8 @@ local DIAGNOSTIC_PROP_FAMILIES = {
         x = true, y = true, scale = true, scaleX = true, scaleY = true,
         pivot = true, coreRatio = true,
         trailDuration = true, trailAlpha = true,
+        count = true, angle = true, spread = true, gravity = true,
+        endRadius = true,
     },
     interaction = {
         onPress = true, onLongPress = true, onHoverChange = true,
@@ -56,6 +58,8 @@ local DIAGNOSTIC_PROP_FAMILIES = {
     retained = {
         juice = true, reactions = true, ref = true, duration = true,
         distance = true, clock = true, feedbackClock = true,
+        seed = true, count = true, angle = true, spread = true,
+        gravity = true, endRadius = true,
         onComplete = true, contactAt = true, onContact = true,
         fps = true, phase = true, velocity = true, phaseImpulse = true,
         value = true,

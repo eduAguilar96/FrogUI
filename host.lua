@@ -29,6 +29,7 @@ local EMPTY_CHILDREN = {}
 local PRIMITIVES = {
     Box = true, Row = true, Column = true, Overlay = true,
     EffectLayer = true, PopupText = true, Projectile = true, Flipbook = true,
+    ParticleBurst = true,
     Text = true, Image = true, SpriteSheet = true,
     TiledImage = true, ShaderImage = true,
     Icon = true, Canvas = true, Button = true, TextInput = true, Motion = true,
@@ -93,6 +94,13 @@ local TYPE_PROPS = {
         frames = true, at = true, atOffset = true, fps = true, clock = true,
         contactAt = true, onContact = true, onComplete = true,
         rotation = true, mirror = true, anchor = true, tint = true,
+    },
+    ParticleBurst = {
+        at = true, atOffset = true, seed = true, count = true,
+        duration = true, clock = true, onComplete = true,
+        distance = true, angle = true, spread = true, gravity = true,
+        radius = true, endRadius = true,
+        color = true, source = true, tint = true,
     },
     TiledImage = {
         source = true, tileWidth = true, tileHeight = true,
@@ -316,6 +324,7 @@ local function validatePrimitive(name, children, probe)
         assert(#children == 1, "Frog.ShaderImage accepts exactly one child")
     elseif name == "Text" or name == "PopupText"
             or name == "Projectile" or name == "Flipbook"
+            or name == "ParticleBurst"
             or name == "Image" or name == "SpriteSheet"
             or name == "TiledImage"
             or name == "Icon" or name == "Canvas" then
@@ -362,6 +371,21 @@ local function validateColorTable(value, label)
 end
 
 local function validateTheme(theme)
+    assert(type(theme) == "table" and getmetatable(theme) == nil,
+        "theme must be a plain FrogUITheme table")
+    -- The root remains extensible for application-owned semantic namespaces.
+    -- Every namespace interpreted by FrogUI is strict below this boundary.
+    local function plainOptional(value, label)
+        assert(value == nil or (type(value) == "table"
+                and getmetatable(value) == nil),
+            label .. " must be a plain table")
+    end
+    plainOptional(theme.colors, "theme.colors")
+    plainOptional(theme.fonts, "theme.fonts")
+    plainOptional(theme.fontSizes, "theme.fontSizes")
+    plainOptional(theme.breakpoints, "theme.breakpoints")
+    plainOptional(theme.controls, "theme.controls")
+    plainOptional(theme.motion, "theme.motion")
     if theme.fontFile ~= nil then
         assert(type(theme.fontFile) == "string" and theme.fontFile ~= "",
             "theme.fontFile must be a non-empty asset path")
@@ -369,6 +393,26 @@ local function validateTheme(theme)
     for token, color in pairs(theme.colors or {}) do
         assert(type(token) == "string", "theme color tokens must be strings")
         validateColorTable(color, "theme color " .. token)
+    end
+    for role, value in pairs(theme.fonts or {}) do
+        assert(type(role) == "string" and role ~= "",
+            "theme font roles must be non-empty strings")
+        assert((finite(value) and value > 0) or method(value, "getHeight"),
+            "theme font " .. role .. " must be positive or a font object")
+    end
+    for role, size in pairs(theme.fontSizes or {}) do
+        assert(type(role) == "string" and role ~= ""
+                and finite(size) and size > 0,
+            "theme fontSizes entries must map non-empty roles to positive numbers")
+    end
+    for key in pairs(theme.breakpoints or {}) do
+        assert(key == "wideRatio",
+            "unknown theme.breakpoints field " .. tostring(key))
+    end
+    if theme.breakpoints and theme.breakpoints.wideRatio ~= nil then
+        assert(finite(theme.breakpoints.wideRatio)
+                and theme.breakpoints.wideRatio > 0,
+            "theme.breakpoints.wideRatio must be finite and positive")
     end
     assert(theme.shaders == nil or (type(theme.shaders) == "table"
             and getmetatable(theme.shaders) == nil),
@@ -379,7 +423,12 @@ local function validateTheme(theme)
         assert(type(source) == "string" and source ~= "",
             "theme shader " .. token .. " must be non-empty source text")
     end
+    for key in pairs(theme.controls or {}) do
+        assert(key == "button",
+            "unknown theme.controls field " .. tostring(key))
+    end
     local button = ((theme.controls or {}).button or {})
+    plainOptional(button, "theme.controls.button")
     local colorKeys = {
         background = true, hover = true, pressed = true, focused = true,
         selected = true, disabled = true, border = true,
@@ -411,6 +460,50 @@ local function validateTheme(theme)
             "unknown theme.sounds field " .. tostring(key))
         assert(type(cue) == "string" and cue ~= "",
             "theme.sounds." .. key .. " must be a non-empty cue id")
+    end
+    for key in pairs(theme.motion or {}) do
+        assert(key == "springs",
+            "unknown theme.motion field " .. tostring(key))
+    end
+    local springs = (theme.motion or {}).springs
+    plainOptional(springs, "theme.motion.springs")
+    for name, spring in pairs(springs or {}) do
+        assert(type(name) == "string" and name ~= ""
+                and type(spring) == "table" and getmetatable(spring) == nil,
+            "theme motion springs require named plain tables")
+        for key in pairs(spring) do
+            assert(key == "frequency" or key == "damping",
+                "unknown theme.motion.springs." .. name
+                    .. " field " .. tostring(key))
+        end
+        assert(finite(spring.frequency) and spring.frequency > 0,
+            "theme motion spring frequency must be positive")
+        assert(finite(spring.damping) and spring.damping > 0,
+            "theme motion spring damping must be positive")
+    end
+end
+
+local function validateAssets(assets)
+    assert(type(assets) == "table" and getmetatable(assets) == nil,
+        "assets must be a plain FrogUIAssets table")
+    for token, source in pairs(assets) do
+        assert(type(token) == "string" and token ~= "",
+            "FrogUI asset tokens must be non-empty strings")
+        assert((type(source) == "string" and source ~= "")
+                or assetObject(source),
+            "FrogUI asset " .. tostring(token)
+                .. " must be a non-empty path or image object")
+    end
+end
+
+local function validateFeedback(feedback)
+    assert(type(feedback) == "table" and getmetatable(feedback) == nil,
+        "feedback must be a plain FrogUIFeedback table")
+    for name, callback in pairs(feedback) do
+        assert(name == "sound" or name == "haptic",
+            "unknown FrogUI feedback service " .. tostring(name))
+        assert(type(callback) == "function",
+            "feedback." .. name .. " must be a function")
     end
 end
 
@@ -879,6 +972,42 @@ local function validatePrimitiveProps(self, name, props, probe)
         assert(props.mirror == nil or type(props.mirror) == "boolean",
             "Flipbook mirror must be a boolean")
         validateNormalizedPivot(props.anchor, "Flipbook anchor")
+    elseif name == "ParticleBurst" then
+        assert(props.ref == nil and props.offset == nil and props.grow == nil
+                and props.width == nil and props.height == nil
+                and props.juice == nil and props.reactions == nil,
+            "ParticleBurst position/lifecycle belongs to its effect props")
+        assert(type(props.key) == "string" or type(props.key) == "number",
+            "ParticleBurst requires a stable string/number key")
+        validateEffectAnchor(self, props.at, "ParticleBurst at")
+        validateOptionalPoint(props.atOffset, "ParticleBurst atOffset")
+        validateNumber(props.seed, "ParticleBurst seed", 1,
+            2147483646)
+        assert(props.seed and props.seed % 1 == 0,
+            "ParticleBurst seed must be an integer")
+        validateNumber(props.count, "ParticleBurst count", 1,
+            Effect.maxParticleCount)
+        assert(props.count == nil or props.count % 1 == 0,
+            "ParticleBurst count must be a positive integer")
+        validateNumber(props.duration, "ParticleBurst duration")
+        assert(props.duration and props.duration > 0,
+            "ParticleBurst duration must be positive")
+        assert(Clock.isClock(props.clock),
+            "ParticleBurst clock must come from Frog.clock")
+        assert(props.onComplete == nil or type(props.onComplete) == "function",
+            "ParticleBurst onComplete must be a function")
+        validateNumber(props.distance, "ParticleBurst distance", 0)
+        validateNumber(props.angle, "ParticleBurst angle")
+        validateNumber(props.spread, "ParticleBurst spread", 0,
+            math.pi * 2)
+        validateNumber(props.gravity, "ParticleBurst gravity")
+        validateNumber(props.radius, "ParticleBurst radius")
+        assert(props.radius == nil or props.radius > 0,
+            "ParticleBurst radius must be positive")
+        validateNumber(props.endRadius, "ParticleBurst endRadius", 0)
+        if props.source ~= nil then
+            validateAssetSource(self, props.source, "ParticleBurst")
+        end
     elseif name == "SpriteSheet" then
         validateAssetSource(self, props.source, name)
         assert(finite(props.frameCount) and props.frameCount > 0
@@ -1252,7 +1381,8 @@ local function nodeEntry(node, depth, visibleBounds)
                 shineSplit = node.props.shineSplit,
             },
         }
-    elseif node.type == "Projectile" or node.type == "Flipbook" then
+    elseif node.type == "Projectile" or node.type == "Flipbook"
+            or node.type == "ParticleBurst" then
         entry.effect = Effect.inspect(node._effect)
     elseif node.type == "TiledImage" then
         entry.tiledImage = deepCopy(node._tileGeometry or {
@@ -1409,6 +1539,7 @@ end
 local function concreteInspectionHit(node)
     if node.type == "Text" or node.type == "PopupText"
             or node.type == "Projectile" or node.type == "Flipbook"
+            or node.type == "ParticleBurst"
             or node.type == "Image" or node.type == "SpriteSheet"
             or node.type == "TiledImage"
             or node.type == "Icon" or node.type == "Canvas"
@@ -2655,22 +2786,32 @@ end
 
 function host.new(options)
     options = options or {}
+    assert(type(options) == "table" and getmetatable(options) == nil,
+        "Frog.host options must be a plain table")
+    local optionFields = {
+        width = true, height = true, designWidth = true, designHeight = true,
+        wideRatio = true, viewport = true, safe = true,
+        theme = true, assets = true, feedback = true, reducedMotion = true,
+        diagnostics = true, painter = true, inspectorActive = true,
+        messageTraceLimit = true, messageLoopLimit = true,
+    }
+    for key in pairs(options) do
+        assert(optionFields[key],
+            "unknown FrogUI Host option " .. tostring(key))
+    end
     local self = setmetatable({}, host)
     self.theme = options.theme or {}
     validateTheme(self.theme)
     self.assets = options.assets or {}
+    validateAssets(self.assets)
     assert(options.reducedMotion == nil or type(options.reducedMotion) == "boolean",
         "reducedMotion must be a boolean")
     self.reducedMotion = options.reducedMotion == true
     self.feedback = options.feedback or {}
-    assert(type(self.feedback) == "table" and getmetatable(self.feedback) == nil,
-        "feedback must be a plain { sound?, haptic? } table")
-    for name, callback in pairs(self.feedback) do
-        assert(name == "sound" or name == "haptic",
-            "unknown FrogUI feedback service " .. tostring(name))
-        assert(type(callback) == "function",
-            "feedback." .. name .. " must be a function")
-    end
+    validateFeedback(self.feedback)
+    assert(options.painter == nil or (type(options.painter) == "table"
+            and getmetatable(options.painter) == nil),
+        "painter must be a plain experimental FrogUICustomPainter table")
     self._customPainter = options.painter
     assert(options.diagnostics == nil or type(options.diagnostics) == "boolean",
         "diagnostics must be a boolean")
@@ -2688,6 +2829,9 @@ function host.new(options)
     self._validatedPrimitiveDescriptors = newDescriptorValidationCache()
     Shader.clear(self)
     self._captures = {}
+    assert(options.inspectorActive == nil
+            or type(options.inspectorActive) == "boolean",
+        "inspectorActive must be a boolean")
     self._inspectorVisible = options.inspectorActive == true
     self._lastInputText = nil
     self._generation = 0
@@ -3216,7 +3360,6 @@ function host:mount(root)
     self._generation = self._generation + 1
     self:_publishRenderHooks(context)
     self:_commitFeedback()
-    return candidate
 end
 
 function host:_withRender(label, callback, ...)
@@ -4110,7 +4253,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     local reconciles = token.name == "Scroll" or token.name == "RadialDial"
         or token.name == "Motion" or descriptor.props.juice
         or descriptor.props.reactions or token.name == "Projectile"
-        or token.name == "Flipbook"
+        or token.name == "Flipbook" or token.name == "ParticleBurst"
     pipelineBefore = reconciles and pipelineProbe
         and collectgarbage("count") or nil
     if token.name == "Scroll" then
@@ -4173,7 +4316,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             profiler:finish("motionReconciliation", started)
         end
     end
-    if token.name == "Projectile" or token.name == "Flipbook" then
+    if token.name == "Projectile" or token.name == "Flipbook"
+            or token.name == "ParticleBurst" then
         local started = profiler and profiler:start() or nil
         local detailBefore = pipelineProbe and collectgarbage("count") or nil
         local instance = Effect.reconcile(self._effects[logicalPath], node,
@@ -4234,9 +4378,11 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
     if token.name == "EffectLayer" then
         for _, child in ipairs(node.children) do
             assert(child.type == "PopupText" or child.type == "Projectile"
-                    or child.type == "Flipbook" or child.type == "Canvas",
+                    or child.type == "Flipbook"
+                    or child.type == "ParticleBurst"
+                    or child.type == "Canvas",
                 "Frog.EffectLayer accepts only PopupText, Projectile,"
-                    .. " Flipbook, or bounded Canvas children")
+                    .. " Flipbook, ParticleBurst, or bounded Canvas children")
         end
     end
     if token.name == "ShaderImage" then
@@ -4265,6 +4411,7 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                     and child.type ~= "PopupText"
                     and child.type ~= "Projectile"
                     and child.type ~= "Flipbook"
+                    and child.type ~= "ParticleBurst"
                     and child._motion == nil,
                 "Frog.RadialDial child must be static presentation")
             for _, nested in ipairs(child.children or {}) do checkStatic(nested) end
@@ -4392,7 +4539,7 @@ end
 local function finalizeResolvedTree(node, insideLayer, portalAncestor,
         nextOrder, context)
     if node.type == "PopupText" or node.type == "Projectile"
-            or node.type == "Flipbook" then
+            or node.type == "Flipbook" or node.type == "ParticleBurst" then
         assert(insideLayer,
             "Frog." .. node.type .. " must be a direct Frog.EffectLayer child")
     elseif node.type == "EffectLayer" then
@@ -5047,7 +5194,6 @@ function host:render(root)
     end
     self._diagnostics:finish("reconcile", reconcileStarted)
     self._diagnostics:finish("external", externalStarted)
-    return candidate
 end
 
 -- Measures one complete public Host operation that happens outside update and
@@ -5090,6 +5236,7 @@ function host:_refreshTheme(theme, assets, root)
     assert(type(theme) == "table", "Host:refreshTheme needs a theme table")
     assert(type(assets) == "table", "Host:refreshTheme needs an asset table")
     validateTheme(theme)
+    validateAssets(assets)
     local previousTheme, previousAssets = self.theme, self.assets
     local previousGeneration = self._generation
     local previousFonts, previousAssetCache = self._fontCache, self._assetCache
@@ -5121,7 +5268,6 @@ function host:_refreshTheme(theme, assets, root)
         end
         error(result, 0)
     end
-    return result
 end
 
 function host:refreshTheme(theme, assets, root)

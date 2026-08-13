@@ -293,9 +293,9 @@ projections, companion style files, or geometry files.
 - Keep `EffectLayer` after the stable surface it decorates. It is a feedback
   plane, never a replacement owner for cards, figures, status, controls, or
   scene layout.
-- EffectLayer children are direct `PopupText`, `Projectile`, `Flipbook`, or
-  bounded `Canvas` leaves. Every generated finite effect has a stable
-  authored/event key; later children paint above earlier ones and none
+- EffectLayer children are direct `PopupText`, `Projectile`, `Flipbook`,
+  `ParticleBurst`, or bounded `Canvas` leaves. Every generated finite effect has
+  a stable authored/event key; later children paint above earlier ones and none
   participate in input.
 - Give every `PopupText` a stable authored/event key and one layer-local center
   point. The popup owns its finite recipe; the actor or playback owner owns the
@@ -309,26 +309,32 @@ projections, companion style files, or geometry files.
 - Use the `impact` treatment for large result numbers before restating its rim,
   shadow, and top-band shine in an application component. Numeric treatment
   props may be set to zero when a specific surface deliberately needs plain ink.
-- Anchor Projectile travel and Flipbook contact art to committed semantic refs
-  when the owner can move or reflow. Use layer-local points only for deliberately
-  detached feedback. Never query a test id or inspect the tree at runtime.
+- Anchor Projectile travel, Flipbook contact art, and ParticleBurst emission to
+  committed semantic refs when the owner can move or reflow. Use layer-local
+  points only for deliberately detached feedback. Never query a test id or
+  inspect the tree at runtime.
 - Projectile `clock` owns arrival; `feedbackClock` owns its looping skin and
   trail. Flipbook `clock` owns frames, contact, and completion. Production
   playback names these policies explicitly instead of inheriting wall time by
   accident.
+- ParticleBurst requires an explicit seed and clock. Keep the seed in detached
+  presentation data, never consume simulation RNG, and stay within the
+  framework-owned count ceiling.
 - Use `Flipbook.onContact` for the one visible contact beat and `onComplete` for
   keyed artwork removal. If contact intentionally removes the effect, its stale
   completion is canceled. Neither callback calculates a game result.
 - Treat each effect key as one immutable timing contract. A changed duration,
-  FPS, frame catalog, or contact point gets a new key; moving refs and ordinary
-  paint props retain the current key and lifetime.
+  FPS, frame catalog, contact point, particle seed, or particle geometry gets a
+  new key; moving refs and ordinary paint props retain the current key and
+  lifetime.
 - EffectLayer is input-transparent and accepts no interactive descendants. Do
   not wrap an effect in Button/Pressable or add a parallel hit-test tree.
 - Effects display authoritative event results. They never calculate damage,
   targets, modifiers, rewards, or other simulation state.
 - Do not add a per-effect update/draw callback. Smooth lifetime sampling,
   resize reprojection, missing-art fallback, and reduced-motion settlement
-  belong to the three effect primitives; owners publish only collection changes.
+  belong to the finite effect primitives; owners publish only collection
+  changes.
 
 ## 10. Sprite, tiled art, and shaders remain ordinary composition
 

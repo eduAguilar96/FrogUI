@@ -535,6 +535,34 @@ local function defaultFlipbook(host, node, state, style)
     g.circle("line", state.center.x, state.center.y, radius)
 end
 
+-- Paints one deterministic particle catalog as semantic circles or one asset.
+local function defaultParticleBurst(host, node, state, style)
+    local g = graphics()
+    if not g or not state or not state.visible or not state.center then return end
+    local asset = node.props.source and host:_asset(node.props.source) or nil
+    local imageWidth, imageHeight
+    if asset then imageWidth, imageHeight = asset:getDimensions() end
+    for _, particle in ipairs(state.particles or {}) do
+        local radius = math.max(0, particle.radius or 0)
+        local alpha = math.max(0, particle.alpha or 0)
+        if radius > 0 and alpha > 0 then
+            if asset then
+                g.setColor(style.tint[1], style.tint[2], style.tint[3],
+                    style.tint[4] * alpha)
+                local height = radius * 2
+                local width = height * imageWidth / imageHeight
+                g.draw(asset, particle.x, particle.y, 0,
+                    width / imageWidth, height / imageHeight,
+                    imageWidth / 2, imageHeight / 2)
+            else
+                g.setColor(style.color[1], style.color[2], style.color[3],
+                    style.color[4] * alpha)
+                g.circle("fill", particle.x, particle.y, radius)
+            end
+        end
+    end
+end
+
 local function imageGeometry(node, asset, fit, sourceRect)
     local imageWidth = sourceRect and sourceRect.width or asset:getWidth()
     local imageHeight = sourceRect and sourceRect.height or asset:getHeight()
@@ -1130,6 +1158,20 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
                 node._effect, effectStyle)
         else
             defaultFlipbook(host, node, node._effect, effectStyle)
+        end
+    elseif node.type == "ParticleBurst" then
+        local effectStyle = {
+            color = faded(tinted(host:_color(node.props.color, "text"),
+                style.tint), style.opacity),
+            tint = faded(tinted(host:_color(node.props.tint, nil,
+                node.props.color and host:_color(node.props.color)
+                    or { 1, 1, 1, 1 }), style.tint), style.opacity),
+        }
+        if custom then
+            customCall(custom, "particleBurst", customDescriptor,
+                node._effect, effectStyle)
+        else
+            defaultParticleBurst(host, node, node._effect, effectStyle)
         end
     elseif node.type == "Text" or node.type == "PopupText" then
         local textStyle = textStyleFor(host, node, style, custom, paintRow)

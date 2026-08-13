@@ -36,6 +36,47 @@ draw immediately. The single mounted **Host** expands component descriptions,
 validates primitive props, measures the resulting tree, paints it, and routes
 input through it.
 
+FrogUI 0.1 permits exactly one mounted Host in a Lua VM. Constructing another
+Host is harmless, but it cannot mount until the current Host unmounts. The
+application owns the virtual design canvas explicitly; FrogUI has no hidden
+540x960 policy:
+
+```lua
+local physicalWidth, physicalHeight = love.graphics.getDimensions()
+local host = Frog.host {
+    width = physicalWidth,
+    height = physicalHeight,
+    designWidth = 540,
+    designHeight = 960,
+    theme = theme,
+    assets = assets,
+    feedback = feedback,
+}
+
+host:mount(App {})
+```
+
+When both physical dimensions are omitted, FrogUI samples
+`love.graphics.getDimensions()` once at construction. Outside LÖVE, callers
+must pass them. `designWidth` and `designHeight` are always required, positive,
+application-owned values. Platform resize callbacks forward the new physical
+size with `host:resize(width, height)`.
+
+`mount`, `render`, and `refreshTheme` publish atomically and return nothing.
+Application code observes layout through `Frog.useViewport` and `Frog.useRef`,
+not through mutable resolved nodes. `Host:tree()` and the optional Host custom
+painter are internal/experimental 0.x test seams with no compatibility promise.
+Hovering `Frog.host` exposes the supported `FrogUIHost` lifecycle, input, and
+detached diagnostic methods through LuaLS.
+
+The public service records are deliberate: `FrogUITheme` validates each
+framework-owned namespace while allowing application namespaces,
+`FrogUIAssets` maps semantic tokens to non-empty paths or loaded images, and
+`FrogUIFeedback` accepts only optional `sound(cue)` and `haptic(cue)` providers.
+Omitted feedback is a no-op; unknown Host options or framework service fields
+fail during construction. The independent `frogui-framework` gate pins this
+inventory and lifecycle contract.
+
 ```text
 RewardTitle { gold = 12 }       component description
               |
@@ -119,6 +160,7 @@ the Host, so unknown props fail loudly.
 | `Frog.PopupText` | Run one finite rising/fading text lifetime | none |
 | `Frog.Projectile` | Travel once between committed refs or authored points | none |
 | `Frog.Flipbook` | Play one finite frame sequence with an optional contact beat | none |
+| `Frog.ParticleBurst` | Emit one deterministic bounded local particle lifetime | none |
 | `Frog.Chrome` | Root-host the one persistent application navigation surface | exactly one |
 | `Frog.Modal` | Root-host one focus/input-isolated surface | exactly one |
 | `Frog.DragSource` | Own a plain payload, preview, and domain drop callback | exactly one |
@@ -227,8 +269,9 @@ like tags without adding a template language or compiler.
 Calling a FrogUI tag detaches its top-level authored input into one framework-
 owned props table. The returned description and its resolved primitive share
 that exact table; FrogUI never copies it again and never mutates it. Treat
-descriptions, `description.props`, and the nodes returned by `Host:tree()` as
-read-only inspection values. To change UI, create a new description through a
+descriptions and `description.props` as read-only framework-owned values.
+Focused checks may use the internal mutable `Host:tree()` seam; it is not an
+application inspection API. To change UI, create a new description through a
 component render or send an actor action. Nested tables and capabilities keep
 their authored identity unless their specific API says it snapshots them.
 Childless resolved primitives also share one read-only empty children
@@ -678,12 +721,14 @@ callbacks. The simulation or playback owner creates plain display entries from
 already-authoritative events. Sample committed refs when creating/reprojecting
 those entries; PopupText only displays the resulting layer-local point.
 
-### Travel and frame effects
+### Travel, frame, and particle effects
 
-`Frog.Projectile` and `Frog.Flipbook` are direct EffectLayer leaves. A
-Projectile travels once from `from` to `to`; either anchor may be a committed
-ref or a point local to the layer. A Flipbook plays a finite ordered frame list
-at one ref or local point:
+`Frog.Projectile`, `Frog.Flipbook`, and `Frog.ParticleBurst` are direct
+EffectLayer leaves. A Projectile travels once from `from` to `to`; either
+anchor may be a committed ref or a point local to the layer. A Flipbook plays
+a finite ordered frame list
+at one ref or local point. A ParticleBurst emits one bounded deterministic
+catalog from one ref or local point:
 
 ```lua
 local source = Frog.useRef()
@@ -723,6 +768,20 @@ return Frog.Overlay {
                 send(Removed { id = impact.id })
             end,
         },
+        burst and Frog.ParticleBurst {
+            key = burst.id,
+            at = target,
+            seed = burst.seed,
+            clock = props.feedbackClock,
+            duration = 0.28,
+            count = 12,
+            distance = 46,
+            color = "impactSpark",
+            source = burst.particleAsset,
+            onComplete = function()
+                send(Removed { id = burst.id })
+            end,
+        },
     },
 }
 ```
@@ -732,13 +791,15 @@ normally sends the action that removes the exact entry; Projectile arrival may
 instead replace it with a keyed Flipbook. `Flipbook.onContact` marks a visible
 beat such as slash contact, while `onComplete` removes the artwork. If contact
 removes the effect immediately, its now-stale completion is deliberately
-canceled.
+canceled. ParticleBurst is local impact decoration; remote missiles and
+multi-stage shockwaves remain readable components composed from these leaves.
 
 A stable key also retains the effect's timing contract. Change the key when a
-Projectile's duration/FPS/frames or a Flipbook's FPS/frames/contact point must
-change; FrogUI rejects those changes on an active key instead of silently
-warping its visible lifetime. Endpoint refs, offsets, callbacks, dimensions,
-and paint props may update while that lifetime remains mounted.
+Projectile's duration/FPS/frames, a Flipbook's FPS/frames/contact point, or a
+ParticleBurst's seed/timing/geometry must change; FrogUI rejects those changes
+on an active key instead of silently warping its visible lifetime. Endpoint
+refs, offsets, callbacks, dimensions, and paint props may update while that
+lifetime remains mounted.
 
 Projectile `clock` owns travel and arrival. Its optional `feedbackClock` owns
 animated skin frames and trail aging, so visual feedback can remain readable
@@ -747,11 +808,23 @@ policy. Flipbook has one `clock` for frame, contact, and completion timing.
 Omitting a clock uses Host raw time; production playback should pass the named
 policy whose meaning owns the beat.
 
+ParticleBurst requires an explicit `seed`, `clock`, positive `duration`, and
+stable key. FrogUI generates its catalog once without reading simulation RNG,
+then samples every pose from absolute clock progress, so dt partitioning and
+rerenders cannot reroll or drift it. `count` defaults to 12 and is hard-capped
+at 64; this is a framework safety budget, not game tuning. `angle` and `spread`
+define a cone (the default spread is a full circle), while `distance`,
+`gravity`, `radius`, and `endRadius` define its finite shape. `color` is a
+semantic theme color. Optional `source` uses a semantic asset token; missing art
+falls back to circles without changing timing.
+
 Refs resolve to their committed primitive centers. When layout reflows, a live
 Projectile preserves its current physical head, resolves the new semantic
 target, and travels the remaining duration from there; its trail samples are
 reprojected too. A Flipbook follows its ref while keeping its current frame and
-already-fired contact bit. Rerender and resize never replay either callback.
+already-fired contact bit. A ParticleBurst follows its owner while retaining
+the original catalog and elapsed time. Rerender and resize never replay any
+callback.
 Removing or replacing a key cancels stale callbacks. A ref must be attached to
 one primitive when its effect first mounts; an unattached handle fails loudly.
 If that primitive leaves later, an already-visible effect finishes at its last
@@ -762,9 +835,10 @@ it travels; Flipbook frames run once. Explicit `width`, `height`, `anchor`,
 rotation/mirroring, and tint props style the art. Missing art keeps the same
 timing and paints a primitive head or contact-ring fallback, so presentation
 assets cannot stall playback. Reduced motion settles at the target/final frame
-on the next Host update and delivers each still-mounted callback once. Hold F6
-to inspect elapsed time, progress, frame, head/target, trail count, contact,
-completion, and reduced-motion state.
+or makes a particle burst invisible on the next Host update, then delivers each
+still-mounted callback once. Hold F6 to inspect elapsed time, progress, frame,
+head/target, trail or particle count, particle seed, contact, completion, and
+reduced-motion state.
 
 ## State is a separate concept
 
@@ -827,6 +901,7 @@ The current public vocabulary is:
 | `Frog.PopupText` | Run one keyed finite text effect |
 | `Frog.Projectile` | Travel one keyed effect between refs or points |
 | `Frog.Flipbook` | Run one keyed frame sequence with a contact beat |
+| `Frog.ParticleBurst` | Emit one seeded, clocked, bounded local effect |
 | `Frog.Canvas` | Record validated local shapes inside explicit bounds |
 | `Frog.host` | Create the one application tree owner |
 | `Frog.clock` | Create a deterministic explicitly advanced clock |
@@ -1071,8 +1146,9 @@ source, the resulting cancellation fact follows in the next semantic batch.
 Runtime callback, reducer, or reconciliation failures fault the Host instead of
 restoring a broad pre-input snapshot.
 
-After a fault, use `tree`, `viewport`, `inspectionTree`, `messageTrace`, or
-`draw` only to diagnose the last committed presentation. The Host rejects
+After a fault, use `viewport`, `inspectionTree`, `messageTrace`, or `draw` only
+to diagnose the last committed presentation. Internal tools may additionally
+use `tree`. The Host rejects
 render, resize, theme refresh, update, messages, and input. Call `unmount`;
 faulted unmount skips authored interaction callbacks while still cleaning every
 mounted actor/resource exactly once. Then create a fresh Host. Never resume the
@@ -1224,6 +1300,8 @@ local audio = Audio.new {
 }
 
 local host = Frog.host {
+    designWidth = 540,
+    designHeight = 960,
     theme = theme,
     assets = theme.assets,
     feedback = audio:feedback(),
@@ -1360,6 +1438,8 @@ shape is:
 
 ```lua
 local host = Frog.host {
+    designWidth = 540,
+    designHeight = 960,
     reducedMotion = accessibility.reduceMotion,
     feedback = {
         sound = function(cue) audio:play(cue) end,
@@ -1634,7 +1714,7 @@ shows current/p95 update and paint cost plus p95 attribution by phase:
 | `runtime` | Retained interaction, Motion, refs, and Effect updates |
 | `motion` | Runtime Motion runner sampling plus its committed-tree transform; the two child phases are also exposed |
 | `refs` | Republish arranged ref rectangles after retained updates |
-| `effects` | Projectile/Flipbook refresh, advancement, and bounds; each child phase is also exposed |
+| `effects` | Projectile/Flipbook/ParticleBurst refresh, advancement, and bounds; each child phase is also exposed |
 | `observer` | The profiler-only committed-tree counting walk performed on a rebuild |
 | `external` | Complete public input routing, direct render, resize, or Host theme-refresh work before update |
 | `paint` | Painter traversal and LÖVE draw submission |
@@ -1686,6 +1766,8 @@ an update that has not reached draw never contaminates rolling statistics:
 
 ```lua
 local host = Frog.host {
+    designWidth = 540,
+    designHeight = 960,
     diagnostics = true,
 }
 

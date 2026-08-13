@@ -1,4 +1,5 @@
--- Retains finite Projectile and Flipbook state across Host reconciliation.
+-- Retains finite Projectile, Flipbook, and ParticleBurst state across Host
+-- reconciliation.
 -- PopupText stays on the shared Motion runtime because its trajectory is a
 -- pure local recipe; ref-following effects need endpoint-aware reprojection.
 
@@ -13,8 +14,29 @@ local DEFAULTS = {
     projectileCoreRatio = 0.45,
     trailDuration = 0.35,
     trailAlpha = 0.45,
+    particleCount = 12,
+    particleDistance = 52,
+    particleRadius = 4,
+    particleEndRadius = 0,
+    particleSpread = math.pi * 2,
 }
 runtime.defaults = DEFAULTS
+
+local MAX_PARTICLE_COUNT = 64
+local RANDOM_MODULUS = 2147483647
+local RANDOM_MULTIPLIER = 48271
+
+runtime.maxParticleCount = MAX_PARTICLE_COUNT
+
+local PARTICLE_CONTRACT_DEFAULTS = {
+    count = DEFAULTS.particleCount,
+    distance = DEFAULTS.particleDistance,
+    angle = 0,
+    spread = DEFAULTS.particleSpread,
+    gravity = 0,
+    radius = DEFAULTS.particleRadius,
+    endRadius = DEFAULTS.particleEndRadius,
+}
 
 -- Creates one detached logical point.
 local function point(x, y)
@@ -33,6 +55,54 @@ local function copyTrail(values)
         out[index] = { x = value.x, y = value.y, age = value.age }
     end
     return out
+end
+
+-- Copies one retained deterministic particle catalog and its sampled pose.
+local function copyParticles(values)
+    local out = {}
+    for index, value in ipairs(values or {}) do
+        out[index] = {
+            angle = value.angle,
+            distance = value.distance,
+            radiusScale = value.radiusScale,
+            x = value.x,
+            y = value.y,
+            radius = value.radius,
+            alpha = value.alpha,
+        }
+    end
+    return out
+end
+
+-- Returns a local deterministic scalar generator independent of simulation RNG.
+local function randomSource(seed)
+    local state = seed % RANDOM_MODULUS
+    if state == 0 then state = 1 end
+    return function()
+        state = state * RANDOM_MULTIPLIER % RANDOM_MODULUS
+        return (state - 1) / (RANDOM_MODULUS - 1)
+    end
+end
+
+-- Generates one balanced cone/ring catalog exactly once for a keyed lifetime.
+local function particleCatalog(props)
+    local count = props.count or DEFAULTS.particleCount
+    local distance = props.distance or DEFAULTS.particleDistance
+    local spread = props.spread == nil and DEFAULTS.particleSpread
+        or props.spread
+    local centerAngle = props.angle or 0
+    local random = randomSource(props.seed)
+    local particles = {}
+    for index = 1, count do
+        local lane = (index - 0.5) / count
+        local jitter = (random() - 0.5) * spread / count * 0.7
+        particles[index] = {
+            angle = centerAngle - spread / 2 + spread * lane + jitter,
+            distance = distance * (0.62 + random() * 0.38),
+            radiusScale = 0.72 + random() * 0.56,
+        }
+    end
+    return particles
 end
 
 -- Compares two resolved anchors exactly in logical coordinates.
@@ -92,6 +162,7 @@ local function clone(old)
         segmentStartedAt = old.segmentStartedAt,
         center = copyPoint(old.center),
         trail = copyTrail(old.trail),
+        particles = copyParticles(old.particles),
         frame = old.frame,
         rotation = old.rotation,
         visible = old.visible,
@@ -107,7 +178,9 @@ end
 
 -- Resolves the finite lifetime from one validated effect description.
 local function durationFor(node)
-    if node.type == "Projectile" then return node.props.duration end
+    if node.type == "Projectile" or node.type == "ParticleBurst" then
+        return node.props.duration
+    end
     return #node.props.frames / (node.props.fps or DEFAULTS.fps)
 end
 
@@ -121,6 +194,12 @@ local function sameFrames(left, right)
     return true
 end
 
+-- Normalizes an omitted particle option before comparing one retained key.
+local function particleContractValue(props, name)
+    if props[name] ~= nil then return props[name] end
+    return PARTICLE_CONTRACT_DEFAULTS[name]
+end
+
 -- A stable key retains timing semantics; changing them starts a new key instead
 -- of silently warping an already-visible lifetime.
 local function validateRetainedContract(old, node)
@@ -132,7 +211,7 @@ local function validateRetainedContract(old, node)
             "Projectile fps changed without a new key")
         assert(sameFrames(old.props.frames, node.props.frames),
             "Projectile frames changed without a new key")
-    else
+    elseif node.type == "Flipbook" then
         assert((old.props.fps or DEFAULTS.fps)
                 == (node.props.fps or DEFAULTS.fps),
             "Flipbook fps changed without a new key")
@@ -140,6 +219,18 @@ local function validateRetainedContract(old, node)
             "Flipbook contactAt changed without a new key")
         assert(sameFrames(old.props.frames, node.props.frames),
             "Flipbook frames changed without a new key")
+    else
+        local props = node.props
+        assert(old.duration == props.duration,
+            "ParticleBurst duration changed without a new key")
+        for _, name in ipairs({
+                "seed", "count", "distance", "angle", "spread",
+                "gravity", "radius", "endRadius",
+            }) do
+            assert(particleContractValue(old.props, name)
+                    == particleContractValue(props, name),
+                "ParticleBurst " .. name .. " changed without a new key")
+        end
     end
 end
 
@@ -157,6 +248,8 @@ function runtime.reconcile(old, node, identity, order, host)
         visible = true,
         contactFired = false,
         completeFired = false,
+        particles = node.type == "ParticleBurst"
+            and particleCatalog(node.props) or nil,
     }
     instance.identity = identity
     instance.type = node.type
@@ -266,6 +359,29 @@ local function arrangeFlipbook(instance, rectangles, host)
     instance.viewport = viewport(host)
 end
 
+-- Samples every particle pose from immutable seed output and absolute progress.
+local function updateParticleGeometry(instance)
+    if not instance.center then return end
+    local props = instance.props
+    local progress = instance.duration == 0 and 1
+        or math.min(1, instance.elapsed / instance.duration)
+    local elapsed = instance.duration * progress
+    local startRadius = props.radius or DEFAULTS.particleRadius
+    local endRadius = props.endRadius == nil
+        and DEFAULTS.particleEndRadius or props.endRadius
+    local gravity = props.gravity or 0
+    for _, particle in ipairs(instance.particles) do
+        particle.x = instance.center.x
+            + math.cos(particle.angle) * particle.distance * progress
+        particle.y = instance.center.y
+            + math.sin(particle.angle) * particle.distance * progress
+            + gravity * elapsed * elapsed / 2
+        particle.radius = (startRadius
+            + (endRadius - startRadius) * progress) * particle.radiusScale
+        particle.alpha = 1 - progress
+    end
+end
+
 -- Resolves every candidate effect against one complete arranged ref snapshot.
 function runtime.arrangeAll(instances, rectangles, host)
     for _, instance in pairs(instances or {}) do
@@ -273,6 +389,9 @@ function runtime.arrangeAll(instances, rectangles, host)
             arrangeProjectile(instance, rectangles, host)
         else
             arrangeFlipbook(instance, rectangles, host)
+            if instance.type == "ParticleBurst" then
+                updateParticleGeometry(instance)
+            end
         end
         instance.node._effect = instance
     end
@@ -401,6 +520,23 @@ local function updateFlipbook(instance, completions)
     end
 end
 
+-- Advances one deterministic burst and queues its terminal removal callback.
+local function updateParticleBurst(instance, completions)
+    local delta = clockDelta(instance,
+        instance.travelClock, "lastTravelTime")
+    instance.elapsed = instance.reducedMotion and instance.duration
+        or math.min(instance.duration, instance.elapsed + delta)
+    updateParticleGeometry(instance)
+    if instance.elapsed >= instance.duration and not instance.completeFired then
+        instance.completeFired = true
+        instance.visible = false
+        if instance.props.onComplete then
+            completions[#completions + 1] = completion(
+                instance, "complete", instance.props.onComplete)
+        end
+    end
+end
+
 -- Advances every committed effect and returns ordered terminal callbacks.
 function runtime.updateAll(instances)
     local ordered, completions = {}, {}
@@ -409,6 +545,8 @@ function runtime.updateAll(instances)
     for _, instance in ipairs(ordered) do
         if instance.type == "Projectile" then
             updateProjectile(instance, completions)
+        elseif instance.type == "ParticleBurst" then
+            updateParticleBurst(instance, completions)
         else
             updateFlipbook(instance, completions)
         end
@@ -456,16 +594,49 @@ end
 -- Publishes tight F6 bounds without making the whole EffectLayer selectable.
 function runtime.updateBounds(instances, host)
     for _, instance in pairs(instances or {}) do
-        local center = instance.type == "Projectile" and instance.head
-            or instance.center
-        if center then
-            local width, height = visualSize(instance, host)
-            instance.node._visualBounds = {
-                x = center.x - width / 2,
-                y = center.y - height / 2,
-                width = width,
-                height = height,
+        if instance.type == "ParticleBurst" and instance.center then
+            local source = instance.props.source
+            local asset = source and host and host:_asset(source) or nil
+            local aspect = 1
+            if asset then
+                local width, height = asset:getDimensions()
+                aspect = width / height
+            end
+            local minX, minY = math.huge, math.huge
+            local maxX, maxY = -math.huge, -math.huge
+            for _, particle in ipairs(instance.particles) do
+                local radius = math.max(0, particle.radius or 0)
+                if radius > 0 and (particle.alpha or 0) > 0 then
+                    local radiusX = radius * aspect
+                    minX = math.min(minX, particle.x - radiusX)
+                    maxX = math.max(maxX, particle.x + radiusX)
+                    minY = math.min(minY, particle.y - radius)
+                    maxY = math.max(maxY, particle.y + radius)
+                end
+            end
+            instance.node._visualBounds = maxX == -math.huge and {
+                x = instance.center.x,
+                y = instance.center.y,
+                width = 0,
+                height = 0,
+            } or {
+                x = minX,
+                y = minY,
+                width = maxX - minX,
+                height = maxY - minY,
             }
+        else
+            local center = instance.type == "Projectile" and instance.head
+                or instance.center
+            if center then
+                local width, height = visualSize(instance, host)
+                instance.node._visualBounds = {
+                    x = center.x - width / 2,
+                    y = center.y - height / 2,
+                    width = width,
+                    height = height,
+                }
+            end
         end
     end
 end
@@ -486,6 +657,8 @@ function runtime.inspect(instance)
         contactFired = instance.contactFired,
         completeFired = instance.completeFired,
         reducedMotion = instance.reducedMotion,
+        particleCount = #(instance.particles or {}),
+        seed = instance.type == "ParticleBurst" and instance.props.seed or nil,
     }
 end
 
