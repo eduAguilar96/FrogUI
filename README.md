@@ -1481,6 +1481,20 @@ never stores a second completed visible snapshot. `playback.lua` and
 `visible_state.lua` remain restart-only; the visible
 `analyze_controls.lua` component hot-reloads with the other Battle UI.
 
+Analyze Inspection uses the ordinary `Inspection.Open` path. Playback exposes
+detached spell/relic facts from its presentation report only while Analyze is
+active; the click snapshots those rows with the subject. The reusable
+`BattleSummary` appears before selected spell satellites, or beside/below the
+canonical Relic according to viewport mode. A seek replaces Playback
+generation and dismisses the old pin before new facts can open. There is no
+Battle-only tooltip or report polling during render.
+
+`battle/report_facts.lua` is the one structured player-facing read model shared
+with shipped Analyze. It owns labels and returns only
+`{ id, label, value, detail }`; simulation remains authoritative in
+`game/report.lua`. Both the stateless fact query and `BattleSummary` are in the
+gallery hot-reload set.
+
 `battle/world.lua` keeps Battle's physical paint order legible in one small
 tree: rear `DaylightForest`, background `BattleAtmosphere`,
 `FighterBodyLayer`, foreground `DaylightForest`, then foreground
