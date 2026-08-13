@@ -1445,6 +1445,12 @@ and follow helpers only as needed.
 
 ## Development loop
 
+Run `love . --frogui application` to traverse the complete isolated game: Menu,
+Character Select, Sandbox, Camp, rooms, Battle, Reward, and Victory all share
+one Host and one authoritative Run reference. F7 cycles the target viewport
+presets. This application boundary and its stateful owners are restart-only;
+the command remains unfused and does not enter production routing.
+
 Run `love . --frogui gallery`. Press A to mount the real isolated Application
 and BattleRoute acceptance tree. Open/close the Battle Spellbook through the
 persistent HUD, press the central Play control, inspect spells/relics, resize
