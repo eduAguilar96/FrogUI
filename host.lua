@@ -135,7 +135,8 @@ local TYPE_PROPS = {
         align = true, justify = true,
     },
     Motion = {
-        x = true, y = true, rotation = true, scale = true,
+        x = true, y = true, rotation = true,
+        scale = true, scaleX = true, scaleY = true, pivot = true,
         opacity = true, tint = true,
     },
     Pressable = {
@@ -557,8 +558,8 @@ local function validateEffectFrames(self, value, label, required)
     end
 end
 
--- Validates a normalized image pivot used by animated projectile skins.
-local function validateEffectPivot(value, label)
+-- Validates a complete normalized pivot shared by image effects and Motion.
+local function validateNormalizedPivot(value, label)
     if value == nil then return end
     assert(type(value) == "table" and getmetatable(value) == nil,
         label .. " must be a plain { x, y } point")
@@ -828,7 +829,7 @@ local function validatePrimitiveProps(self, name, props, probe)
         validateNumber(props.fps, "Projectile fps")
         assert(props.fps == nil or props.fps > 0,
             "Projectile fps must be positive")
-        validateEffectPivot(props.anchor, "Projectile anchor")
+        validateNormalizedPivot(props.anchor, "Projectile anchor")
         assert(props.rotate == nil or type(props.rotate) == "boolean",
             "Projectile rotate must be a boolean")
     elseif name == "Flipbook" then
@@ -857,7 +858,7 @@ local function validatePrimitiveProps(self, name, props, probe)
         validateNumber(props.rotation, "Flipbook rotation")
         assert(props.mirror == nil or type(props.mirror) == "boolean",
             "Flipbook mirror must be a boolean")
-        validateEffectPivot(props.anchor, "Flipbook anchor")
+        validateNormalizedPivot(props.anchor, "Flipbook anchor")
     elseif name == "SpriteSheet" then
         validateAssetSource(self, props.source, name)
         assert(finite(props.frameCount) and props.frameCount > 0
@@ -908,6 +909,7 @@ local function validatePrimitiveProps(self, name, props, probe)
         oneOf(props.blend, VALIDATION_VALUES.shaderBlend,
             "ShaderImage blend")
     elseif name == "Motion" then
+        validateNormalizedPivot(props.pivot, "Frog.Motion pivot")
         assert(props.reactions == nil or #props.reactions == 0 or props.juice ~= nil,
             "Frog.Motion reactions require named juice recipes")
     elseif name == "Pressable" then

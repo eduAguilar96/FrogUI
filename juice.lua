@@ -6,7 +6,8 @@ local Clock = require("src.frogui.clock")
 local juice = {}
 
 local PROPERTIES = {
-    x = true, y = true, rotation = true, scale = true,
+    x = true, y = true, rotation = true,
+    scale = true, scaleX = true, scaleY = true,
     opacity = true, tint = true,
 }
 
@@ -54,9 +55,9 @@ local function properties(input, label)
         elseif name == "opacity" then
             assert(finite(value) and value >= 0 and value <= 1,
                 label .. ".opacity must be between 0 and 1")
-        elseif name == "scale" then
+        elseif name == "scale" or name == "scaleX" or name == "scaleY" then
             assert(finite(value) and value >= 0,
-                label .. ".scale must be finite and non-negative")
+                label .. "." .. name .. " must be finite and non-negative")
         else
             assert(finite(value), label .. "." .. name .. " must be finite")
         end

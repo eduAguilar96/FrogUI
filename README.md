@@ -1189,6 +1189,27 @@ Frog.Motion {
 }
 ```
 
+Uniform `scale` composes multiplicatively with independent `scaleX` and
+`scaleY`. `pivot` is a normalized point inside the arranged box and defaults
+to its center. Character reactions use a bottom-center pivot so squash,
+stretch, and recoil keep the figure's feet on its standing line:
+
+```lua
+Frog.Motion {
+    pivot = { x = 0.5, y = 1 },
+    scaleX = { target = props.bracing and 1.08 or 1, spring = "snappy" },
+    scaleY = { target = props.bracing and 0.92 or 1, spring = "snappy" },
+    CharacterFigure { character = props.character },
+}
+```
+
+All three scale values must be non-negative. The effective horizontal scale is
+`scale * scaleX`; the effective vertical scale is `scale * scaleY`. Paint,
+hit testing, and F6 use the same affine transform. A ref on Motion deliberately
+continues to expose the stable arranged rectangle, not transient visual bounds;
+use F6/inspection for transformed development geometry and refs for stable
+effect/layout anchors.
+
 A Motion with only immediate scalar/color values is fixed presentation. It
 does not mount an animation process, even when `juice = {}` or
 `reactions = {}` is present. Adding a spring target, a named recipe, or an
@@ -1197,8 +1218,8 @@ returns the same keyed element to fixed presentation. Component authors do not
 manage that lifecycle or choose a separate primitive.
 
 The current presentation properties are `x`, `y`, `rotation` in radians,
-non-negative `scale`, `opacity` from 0–1, and `tint`. Animated tint endpoints
-must be numeric `{ r = ..., g = ..., b = ..., a = ... }` tables or
+non-negative `scale`, `scaleX`, and `scaleY`, `opacity` from 0–1, and `tint`.
+Animated tint endpoints must be numeric `{ r = ..., g = ..., b = ..., a = ... }` tables or
 `{ red, green, blue, alpha? }` arrays because FrogUI interpolates their
 channels; semantic theme-token strings remain valid for
 ordinary static paint props but are not Motion targets.
@@ -1957,6 +1978,9 @@ Canvas preflight fell 4.611 KB/quiet frame and 4.351 KB/rebuilt frame. Complete
 late allocation fell from 515.365 to 510.878 KB/frame and now passes the
 code-owned 512 KB target.
 
-B4p remains open and B5 remains blocked. The full ownership decision, rejected
-experiment, and source hashes live in
-`design/reference/frog-ui-battle-migration.md`.
+B4p closed on 2026-08-12 after the source-exact B4p.79 saturation audit. The
+probe continues to print shipped-relative mean, p95, and allocation ratios as
+comparison telemetry, but absolute FrogUI p95, over-budget frequency, uncapped
+measurement, and the 512 KB/frame ceiling now own pass/fail. B5 must stop if an
+absolute gate fails. The full ownership decision, rejected experiments, and
+source hashes live in `design/reference/frog-ui-battle-migration.md`.

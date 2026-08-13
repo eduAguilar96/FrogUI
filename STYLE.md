@@ -421,6 +421,9 @@ projections, companion style files, or geometry files.
   uses raw. UI recipes never advance a clock themselves.
 - `Frog.Motion` changes presentation only. Its parent allocates the stable
   layout footprint; scaling must not be used to negotiate sibling geometry.
+- Use `scale` for uniform size and `scaleX`/`scaleY` for intentional squash or
+  stretch. Visible figures use the explicit normalized feet pivot
+  `{ x = 0.5, y = 1 }`; do not recreate pivot math inside a figure component.
 - Removing a prop-driven Motion target restores its neutral presentation;
   do not preserve layout or semantic state in an animation runner.
 - Components declare semantic sound ids, never asset paths or `love.audio`

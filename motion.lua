@@ -8,14 +8,17 @@ local motion = {}
 local composeActive
 
 local DEFAULT_VALUES = {
-    x = 0, y = 0, rotation = 0, scale = 1, opacity = 1,
+    x = 0, y = 0, rotation = 0,
+    scale = 1, scaleX = 1, scaleY = 1,
+    opacity = 1,
 }
 local DEFAULT_COLOR = { 1, 1, 1, 1 }
 local MOTION_TARGET_NAMES = {
-    "x", "y", "rotation", "scale", "opacity", "tint",
+    "x", "y", "rotation", "scale", "scaleX", "scaleY",
+    "opacity", "tint",
 }
 local STATIC_NUMERIC_TARGET_NAMES = {
-    "x", "y", "rotation", "scale", "opacity",
+    "x", "y", "rotation", "scale", "scaleX", "scaleY", "opacity",
 }
 
 local SPRINGS = {
@@ -97,8 +100,9 @@ function motion.reconcileStatic(node, props)
                 "Frog.Motion " .. name .. " target must be finite")
             assert(name ~= "opacity" or value >= 0 and value <= 1,
                 "Frog.Motion opacity target must be between 0 and 1")
-            assert(name ~= "scale" or value >= 0,
-                "Frog.Motion scale target must be non-negative")
+            assert(name ~= "scale" and name ~= "scaleX" and name ~= "scaleY"
+                    or value >= 0,
+                "Frog.Motion " .. name .. " target must be non-negative")
             if value ~= DEFAULT_VALUES[name] then
                 presentation = presentation or {}
                 presentation[name] = value
@@ -149,6 +153,7 @@ end
 local function sameGeometry(left, right)
     return left.x == right.x and left.y == right.y
         and left.rotation == right.rotation and left.scale == right.scale
+        and left.scaleX == right.scaleX and left.scaleY == right.scaleY
 end
 
 local function sortedKeys(input)
@@ -239,7 +244,8 @@ local function geometryMask(recipe)
     local written = writtenProperties(recipe)
     local translated = written.x ~= nil or written.y ~= nil
     local rotated = written.rotation ~= nil
-    local scaled = written.scale ~= nil
+    local scaled = written.scale ~= nil or written.scaleX ~= nil
+        or written.scaleY ~= nil
     local kinds = (translated and 1 or 0) + (rotated and 1 or 0)
         + (scaled and 1 or 0)
     if kinds == 0 then return nil end
@@ -741,8 +747,10 @@ local function reconcileMotionTargets(instance, props, host, firstMount)
                     "Frog.Motion " .. name .. " target must be finite")
                 assert(name ~= "opacity" or target >= 0 and target <= 1,
                     "Frog.Motion opacity target must be between 0 and 1")
-                assert(name ~= "scale" or target >= 0,
-                    "Frog.Motion scale target must be non-negative")
+                assert(name ~= "scale" and name ~= "scaleX"
+                        and name ~= "scaleY" or target >= 0,
+                    "Frog.Motion " .. name
+                        .. " target must be non-negative")
             end
             if spring then
                 Juice.spring {
@@ -1231,13 +1239,21 @@ end
 local function localMatrix(node, out)
     local value = node.presentation or DEFAULT_VALUES
     local scale = value.scale or 1
+    local scaleX = scale * (value.scaleX or 1)
+    local scaleY = scale * (value.scaleY or 1)
     local rotation = value.rotation or 0
-    local cosine, sine = math.cos(rotation) * scale, math.sin(rotation) * scale
-    local centerX, centerY = node.layout.x + node.layout.width / 2, node.layout.y + node.layout.height / 2
+    local cosine, sine = math.cos(rotation), math.sin(rotation)
+    local a, b = cosine * scaleX, sine * scaleX
+    local c, d = -sine * scaleY, cosine * scaleY
+    local pivot = node.props.pivot
+    local pivotX = node.layout.x + node.layout.width
+        * (pivot and pivot.x or 0.5)
+    local pivotY = node.layout.y + node.layout.height
+        * (pivot and pivot.y or 0.5)
     out = out or {}
-    out.a, out.b, out.c, out.d = cosine, sine, -sine, cosine
-    out.tx = (value.x or 0) + centerX - cosine * centerX + sine * centerY
-    out.ty = (value.y or 0) + centerY - sine * centerX - cosine * centerY
+    out.a, out.b, out.c, out.d = a, b, c, d
+    out.tx = (value.x or 0) + pivotX - a * pivotX - c * pivotY
+    out.ty = (value.y or 0) + pivotY - b * pivotX - d * pivotY
     return out
 end
 

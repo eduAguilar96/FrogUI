@@ -207,6 +207,10 @@ local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch,
     transform.y = presentation.y or 0
     transform.rotation = presentation.rotation or 0
     transform.scale = presentation.scale or 1
+    transform.scaleX = presentation.scaleX or 1
+    transform.scaleY = presentation.scaleY or 1
+    transform.pivotX = node.props.pivot and node.props.pivot.x or 0.5
+    transform.pivotY = node.props.pivot and node.props.pivot.y or 0.5
     if retainedScratch then
         -- Static identity nodes use their authoritative layout rectangle
         -- directly instead of retaining a duplicate transformed-bounds table.
@@ -1033,13 +1037,19 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
         and Interaction.radialPresentation(node) or nil
     local radialScale = radialPresentation and radialPresentation.scale or 1
     if not custom and g then
-        local centerX, centerY = node.layout.x + node.layout.width / 2, node.layout.y + node.layout.height / 2
+        local pivot = node.props.pivot
+        local pivotX = node.layout.x + node.layout.width
+            * (pivot and pivot.x or 0.5)
+        local pivotY = node.layout.y + node.layout.height
+            * (pivot and pivot.y or 0.5)
+        local scale = presentation.scale or 1
         g.push("all")
         g.translate(presentation.x or 0, presentation.y or 0)
-        g.translate(centerX, centerY)
+        g.translate(pivotX, pivotY)
         g.rotate(presentation.rotation or 0)
-        g.scale((presentation.scale or 1) * radialScale)
-        g.translate(-centerX, -centerY)
+        g.scale(scale * (presentation.scaleX or 1) * radialScale,
+            scale * (presentation.scaleY or 1) * radialScale)
+        g.translate(-pivotX, -pivotY)
     end
     local style = styleFor(host, node, inheritedOpacity or 1, inheritedTint,
         not custom and defaultScratch(node, paintRow) or nil, paintRow)

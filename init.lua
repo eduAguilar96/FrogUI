@@ -494,8 +494,11 @@ local Interaction = require("src.frogui.interaction")
 ---@class FrogMotionProps:FrogUIElementProps
 ---@field x? number|FrogMotionNumberTarget Horizontal paint/input translation.
 ---@field y? number|FrogMotionNumberTarget Vertical paint/input translation.
----@field rotation? number|FrogMotionNumberTarget Radians around element center.
----@field scale? number|FrogMotionNumberTarget Non-negative center scale.
+---@field rotation? number|FrogMotionNumberTarget Radians around `pivot`.
+---@field scale? number|FrogMotionNumberTarget Non-negative multiplier for both axes.
+---@field scaleX? number|FrogMotionNumberTarget Non-negative horizontal multiplier composed with `scale`.
+---@field scaleY? number|FrogMotionNumberTarget Non-negative vertical multiplier composed with `scale`.
+---@field pivot? FrogUIPivot Normalized transform pivot; defaults to `{ x = 0.5, y = 0.5 }`.
 ---@field opacity? number|FrogMotionNumberTarget Value from 0 through 1.
 ---@field tint? FrogUIRGBA|FrogMotionColorTarget Numeric multiplicative tint.
 ---@field [integer] FrogUIElementDescription Zero or one stable-layout child.
@@ -716,6 +719,8 @@ Frog.Button = Element.primitive("Button")
 --- Animates one child's paint and input transform without changing layout.
 ---
 --- Scalar targets snap; `{ target, spring }` targets reconcile smoothly.
+--- `scale` multiplies both `scaleX` and `scaleY`; `pivot` uses normalized
+--- arranged-box coordinates, so `{ x = 0.5, y = 1 }` keeps feet planted.
 ---@type fun(input?: FrogMotionProps):FrogUIElementDescription
 Frog.Motion = Element.primitive("Motion")
 
