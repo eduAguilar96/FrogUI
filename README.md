@@ -1395,9 +1395,13 @@ visible in the trace and live only in `tools/frogui/battle_load_fixture.lua`.
 F3 toggles the development frame-rate overlay. It reports LÖVE's real render
 FPS plus rolling 180-frame average, p95, maximum, and over-25-ms count,
 independent of Battle playback speed. FPS and average alone do not diagnose
-uneven delivery. F4 expands it into the FrogUI execution profiler; that mode
-adds observer work and its timings must not be read as player-mode frame
-pacing. F6 shows the resolved component/primitive tree. F7 cycles viewport
+uneven delivery. Its `ALL` and `SLOW` lines split the complete frame into
+measured Update callback time, Draw callback/submission time, and residual
+`OUTSIDE` time. Outside includes graphics present, vsync, event pumping, and
+the engine loop; it is not FrogUI CPU time. F4 expands the overlay into the
+FrogUI execution profiler; that mode adds observer work and its timings must
+not be read as player-mode frame pacing. F6 shows the resolved
+component/primitive tree. F7 cycles viewport
 sizes. The gallery polls watched file contents and reloads
 saved presentation theme/data tables, stories, and stateless components in
 place; F5 forces that same scoped set. A bad candidate reload keeps the last
