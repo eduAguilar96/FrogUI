@@ -1597,6 +1597,8 @@ function painter.draw(host, custom)
     local preview = session and session.claimed == "drag"
         and session.source and session.source._dragPreview or nil
     if preview then
+        local previewLayout = assert(preview.layout,
+            "FrogUI drag preview has no committed layout")
         customCall(custom, "dragPreview", customNode(preview), {
             x = session.x,
             y = session.y,
@@ -1608,8 +1610,8 @@ function painter.draw(host, custom)
         })
         if not custom and g then
             g.push("all")
-            g.translate(session.x - preview.width / 2,
-                session.y - preview.height / 2)
+            g.translate(session.x - previewLayout.width / 2,
+                session.y - previewLayout.height / 2)
         end
         drawNode(host, preview, custom, nil, nil,
             clipState, preview, paintRow)

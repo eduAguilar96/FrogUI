@@ -506,6 +506,9 @@ projections, companion style files, or geometry files.
 - A `DragSource` owns the domain callback; a `DropTarget` exposes only a typed
   plain-data address and stable key. Never put Run/room policy into a target or
   the FrogUI interaction runtime.
+- Keep a drag preview static and explicitly sized. FrogUI owns its detached
+  measurement, pointer centering, and paint; application code must not compute
+  preview coordinates or reach into its arranged layout.
 - Keep `onDrop` to one atomic domain call. Return its boolean/detail result
   directly when the domain already follows that contract. When a read-only
   quote API returns `value, error`, adapt it once in the mounting screen's

@@ -923,6 +923,13 @@ Reward, Spellbook, or another game concept. A drag source alone calls the
 domain operation after FrogUI supplies the deepest matching
 `{ address, key }` target.
 
+A `DragSource.preview` is one static detached FrogUI tree. FrogUI measures and
+arranges it once with the committed candidate, then the default painter centers
+that arranged footprint under the pointer. Component authors provide the
+ordinary description and explicit size; they never calculate preview screen
+coordinates. Interaction acceptance must draw a claimed preview through the
+real default painter as well as any record-only custom painter.
+
 `HorizontalSwipe` is the narrow broad-surface exception needed by the Battle
 arena and similar paging regions. Its child stays completely readable:
 
