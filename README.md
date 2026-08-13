@@ -1398,9 +1398,10 @@ independent of Battle playback speed. FPS and average alone do not diagnose
 uneven delivery. Its `ALL` and `SLOW` lines split the complete frame into
 measured Update callback time, Draw callback/submission time, and residual
 `OUTSIDE` time. Outside includes graphics present, vsync, event pumping, and
-the engine loop; it is not FrogUI CPU time. F4 expands the overlay into the
-FrogUI execution profiler; that mode adds observer work and its timings must
-not be read as player-mode frame pacing. F6 shows the resolved
+the engine loop; it is not FrogUI CPU time. F4 starts a fresh FrogUI execution
+profile and expands the overlay; closing F4 disables and discards that
+observer. Profiling adds substantial observer work and its timings must not be
+read as player-mode frame pacing. F6 shows the resolved
 component/primitive tree. F7 cycles viewport
 sizes. The gallery polls watched file contents and reloads
 saved presentation theme/data tables, stories, and stateless components in
@@ -1411,6 +1412,12 @@ process, or effect failures are different: they fail loudly and fault the Host
 instead of attempting to resume from a partial runtime advance.
 Stateful actors/processes and FrogUI framework core require a restart because
 their live instance schema cannot be safely replaced.
+
+For a bounded reproducible pacing sweep, run
+`love . --frogui frame-capture`. It follows the same public C-key route from
+SpellCards to Battle, then exercises Play and every supported speed before
+printing the final and worst rolling windows and quitting. The tool changes
+only the fixture's terminal HP/round bounds so all speeds remain measurable.
 
 Battle follows the same split. Ordinary Battle components hot-reload.
 `battle/dice_show_tuning.lua` and `battle/execution_tuning.lua` are named

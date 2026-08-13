@@ -5918,6 +5918,34 @@ function host:diagnostics()
     return self._diagnostics:snapshot()
 end
 
+-- Enables the expensive development profiler only on explicit request. A
+-- fresh render on enable seeds structural counts; disabling removes every
+-- observer table before ordinary update/draw resumes.
+---@param enabled boolean
+---@return boolean changed
+function host:setDiagnosticsEnabled(enabled)
+    assert(type(enabled) == "boolean",
+        "Host diagnostics enabled state must be a boolean")
+    assert(self._mounted, "cannot toggle diagnostics on an unmounted Host")
+    assertOperational(self, "toggle diagnostics")
+    assert(not self._diagnosticUpdateActive,
+        "cannot toggle diagnostics during Host update")
+    assert(not self._drawing,
+        "cannot toggle diagnostics during Host draw")
+    assert(self._callbackDepth == 0,
+        "cannot toggle diagnostics during a FrogUI callback")
+    assert((self._diagnosticExternalDepth or 0) == 0,
+        "cannot toggle diagnostics during external Host input")
+    if not self._diagnostics:setEnabled(enabled) then return false end
+    self._diagnosticPrimitiveNames = enabled and {} or nil
+    if enabled then
+        self:render(self._rootDescriptor)
+    else
+        self._pendingTransformAttribution = nil
+    end
+    return true
+end
+
 local function assertDiagnosticToolBoundary(self, operation)
     assert(self._mounted,
         "cannot " .. operation .. " on an unmounted FrogUI Host")

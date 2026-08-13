@@ -848,13 +848,15 @@ Frog.clock = Clock.new
 ---@field messageTraceLimit? integer Bounded F6 typed-message history; defaults to 80.
 ---@field messageLoopLimit? integer Maximum deliveries in one callback transaction; defaults to 256.
 
---- Creates the one mounted tree owner. Set `diagnostics = true` only on a
---- development surface, then read its detached rolling summary with
---- `host:diagnostics()`. One-shot tools may call `host:clearDiagnostics()`
---- before a fixed window and `host:diagnosticTrace()` once afterward; the
---- trace allocates a detached row per retained frame and must not be polled.
---- Both calls require a mounted diagnostics-enabled Host at a quiet boundary,
---- outside update, draw, callbacks, and external input routing.
+--- Creates the one mounted tree owner. Diagnostics are disabled by default.
+--- A development surface may either construct with `diagnostics = true` or
+--- call `host:setDiagnosticsEnabled(true)` at a quiet boundary, then read the
+--- detached rolling summary with `host:diagnostics()`. Disable again when the
+--- profiler closes; observation is intentionally expensive. One-shot tools
+--- may call `host:clearDiagnostics()` before a fixed window and
+--- `host:diagnosticTrace()` once afterward; the trace allocates a detached row
+--- per retained frame and must not be polled. Diagnostic control/read calls
+--- require a mounted Host outside update, draw, callbacks, and external input.
 ---@param options? FrogUIHostOptions
 function Frog.host(options)
     return Host.new(options)

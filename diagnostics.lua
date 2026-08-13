@@ -135,6 +135,22 @@ function diagnostics.new(options)
     }, diagnostics)
 end
 
+-- Starts or stops observation at a Host-validated quiet boundary. Every
+-- transition gets a fresh ring so disabled time and prior sessions never leak
+-- into a newly requested profile.
+function diagnostics:setEnabled(enabled)
+    assert(type(enabled) == "boolean",
+        "FrogUI diagnostics enabled state must be a boolean")
+    if self.enabled == enabled then return false end
+    self.enabled = enabled
+    self.history = {}
+    self.historyCount = 0
+    self.historyCursor = 0
+    self.current = nil
+    self.retainedCounts = {}
+    return true
+end
+
 -- Begins one Host update sample. Headless callers that omit draw still commit
 -- their preceding update before the next sample begins.
 function diagnostics:ensureFrame()
