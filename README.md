@@ -109,6 +109,7 @@ the Host, so unknown props fail loudly.
 | `Frog.Icon` | Draw and recolor an alpha silhouette | none |
 | `Frog.Canvas` | Record bounded local vector shapes for rare custom drawing | none |
 | `Frog.Button` | Keyboard-focusable tap/hold box with visible theme states | zero or one |
+| `Frog.TextInput` | Focus and edit one controlled append/backspace game field | exactly one Text |
 | `Frog.Motion` | Animate one child's paint/input presentation without changing layout | zero or one |
 | `Frog.Pressable` | Add pointer tap, hold, and mouse-hover to one child | exactly one |
 | `Frog.HorizontalSwipe` | Arbitrate a broad horizontal swipe against descendant tap/hold | exactly one |
@@ -132,6 +133,14 @@ RGB while Icon continues to recolor from alpha.
 `Overlay` is the important SpellCard primitive. Its first child is painted
 first (behind); later children paint on top. It is used for visual layers, not
 for application reuse or state.
+
+`TextInput` is controlled: the owning actor supplies `value` and stores the
+next string from `onChange`. Text appends at the trailing cursor, Backspace
+removes one UTF-8 character, and Tab yields focus. Optional `onSubmit(value)`
+and `onCancel(value)` own Return and unconsumed Escape. Its one `Frog.Text`
+child keeps placeholder and visible-caret wording explicit in the component
+tree. It is intended for compact game/search fields, not selection, multiline,
+or general document editing.
 
 Common layout props are `width`, `height`, `grow`, `padding`, `offset`, and
 `testId`. Containers add `gap`, `align`, `justify`, `wrap`, `clip`, and

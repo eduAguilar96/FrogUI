@@ -44,6 +44,7 @@ local DIAGNOSTIC_PROP_FAMILIES = {
     interaction = {
         onPress = true, onLongPress = true, onHoverChange = true,
         onCommit = true, onResult = true, onChange = true,
+        onSubmit = true, onCancel = true,
         onScrollEnd = true, onDismiss = true, onDrop = true,
         onDragStart = true, onDragEnd = true, onSwipe = true,
         disabled = true, selected = true, shortcut = true, value = true,

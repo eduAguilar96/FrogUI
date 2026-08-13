@@ -927,7 +927,7 @@ local function childBox(node, child, host, session)
         align, justify = align or "stretch", justify or "stretch"
     elseif node.type == "Modal" then
         align, justify = align or "center", justify or "center"
-    elseif node.type == "Button" then
+    elseif node.type == "Button" or node.type == "TextInput" then
         align, justify = align or "center", justify or "center"
     else
         align, justify = align or "stretch", justify or "stretch"

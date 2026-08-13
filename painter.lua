@@ -234,14 +234,14 @@ local function styleFor(host, node, inheritedOpacity, inheritedTint, scratch,
             ty = world.ty,
         } or nil
     end
-    if node.type == "Button" then
+    if node.type == "Button" or node.type == "TextInput" then
         local button = ((host.theme.controls or {}).button or {})
         background = props.background or button.background
         border = props.border or button.border
         if props.disabled then
             background = props.background or button.disabled
             background = host:_color(background, "buttonDisabled")
-        elseif host._pressedIdentity == node.identity then
+        elseif node.type == "Button" and host._pressedIdentity == node.identity then
             background = props.pressedBackground or props.background
                 or button.pressed
             border = props.pressedBorder or props.border or button.border

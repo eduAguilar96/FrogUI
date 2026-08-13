@@ -31,7 +31,7 @@ local PRIMITIVES = {
     EffectLayer = true, PopupText = true, Projectile = true, Flipbook = true,
     Text = true, Image = true, SpriteSheet = true,
     TiledImage = true, ShaderImage = true,
-    Icon = true, Canvas = true, Button = true, Motion = true,
+    Icon = true, Canvas = true, Button = true, TextInput = true, Motion = true,
     Pressable = true, HorizontalSwipe = true, RadialDial = true,
     Scroll = true, Modal = true, Chrome = true,
     DragSource = true, DropTarget = true,
@@ -134,6 +134,12 @@ local TYPE_PROPS = {
         sound = true, rejectSound = true, hoverSound = true,
         disabled = true, selected = true, shortcut = true,
         align = true, justify = true,
+    },
+    TextInput = {
+        padding = true, background = true, border = true, borderWidth = true,
+        focusedBackground = true, focusedBorder = true, radius = true,
+        value = true, onChange = true, onSubmit = true, onCancel = true,
+        disabled = true, align = true, justify = true,
     },
     Motion = {
         x = true, y = true, rotation = true,
@@ -300,7 +306,8 @@ local function validatePrimitive(name, children, probe)
     assert(PRIMITIVES[name], "unknown FrogUI primitive " .. tostring(name))
     if name == "Box" or name == "Button" or name == "Motion" then
         assert(#children <= 1, "Frog." .. name .. " accepts at most one child")
-    elseif name == "Pressable" or name == "HorizontalSwipe"
+    elseif name == "TextInput" or name == "Pressable"
+            or name == "HorizontalSwipe"
             or name == "Scroll" or name == "Modal"
             or name == "Chrome"
             or name == "DragSource" or name == "DropTarget" then
@@ -660,7 +667,8 @@ local function validatePrimitiveProps(self, name, props, probe)
         assert(props.wrap == nil or type(props.wrap) == "boolean",
             name .. " wrap must be a boolean")
         assert(not props.wrap or name == "Row", "wrap is currently supported on Row only")
-    elseif name == "Box" or name == "Overlay" or name == "Button" then
+    elseif name == "Box" or name == "Overlay" or name == "Button"
+            or name == "TextInput" then
         oneOf(props.align, VALIDATION_VALUES.stretchAlign,
             name .. " align")
         oneOf(props.justify, VALIDATION_VALUES.stretchAlign,
@@ -706,6 +714,17 @@ local function validatePrimitiveProps(self, name, props, probe)
                     "Button shortcut item " .. index .. " must be a string")
             end
         end
+    elseif name == "TextInput" then
+        assert(type(props.value) == "string",
+            "TextInput value must be a string")
+        assert(type(props.onChange) == "function",
+            "TextInput onChange must be a function")
+        assert(props.onSubmit == nil or type(props.onSubmit) == "function",
+            "TextInput onSubmit must be a function")
+        assert(props.onCancel == nil or type(props.onCancel) == "function",
+            "TextInput onCancel must be a function")
+        assert(props.disabled == nil or type(props.disabled) == "boolean",
+            "TextInput disabled must be a boolean")
     elseif name == "Image" or name == "Icon" then
         validateAssetSource(self, props.source, name)
         assert(props.fit == nil or props.fit == "contain" or props.fit == "cover"
@@ -1433,6 +1452,8 @@ end
 local function collectFocusables(node, output, spent)
     if (node.type == "Button" and not node.props.disabled
             and not spent[node.identity]) then
+        output[#output + 1] = node
+    elseif node.type == "TextInput" and not node.props.disabled then
         output[#output + 1] = node
     elseif node.type == "RadialDial" and not node.props.disabled then
         output[#output + 1] = node
@@ -3979,7 +4000,8 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
                 and token.name ~= "Scroll"
                 and token.name ~= "Modal" and token.name ~= "Chrome"
                 and token.name ~= "DragSource"
-                and token.name ~= "DropTarget" and token.name ~= "Button",
+                and token.name ~= "DropTarget" and token.name ~= "Button"
+                and token.name ~= "TextInput",
             "DragSource preview must be static presentation")
         assert(token.name ~= "Motion" and descriptor.props.juice == nil
                 and descriptor.props.reactions == nil,
@@ -4225,9 +4247,14 @@ function host:_resolve(descriptor, owner, path, descendantPath, context,
             "Frog.ShaderImage child must resolve to Image, SpriteSheet,"
                 .. " TiledImage, or an empty Box")
     end
+    if token.name == "TextInput" then
+        assert(node.children[1].type == "Text",
+            "Frog.TextInput child must resolve to Frog.Text")
+    end
     if token.name == "RadialDial" then
         local interactive = {
-            Button = true, Pressable = true, HorizontalSwipe = true,
+            Button = true, TextInput = true, Pressable = true,
+            HorizontalSwipe = true,
             RadialDial = true, Scroll = true, Modal = true, Chrome = true,
             DragSource = true, DropTarget = true,
         }
@@ -5775,6 +5802,27 @@ function host:_activateButton(button)
     return true
 end
 
+-- Removes one complete trailing UTF-8 sequence without importing a text
+-- editor or retaining cursor state for the compact game-field contract.
+local function withoutTrailingCharacter(value)
+    local index = #value
+    while index > 0 do
+        local byte = value:byte(index)
+        if byte < 128 or byte >= 192 then break end
+        index = index - 1
+    end
+    return index > 0 and value:sub(1, index - 1) or ""
+end
+
+-- Delivers one controlled value change through the ordinary Host transaction.
+function host:_changeTextInput(input, value, origin)
+    if value == input.props.value then return true end
+    self:_runCallback(function()
+        input.props.onChange(value)
+    end, origin or ("TextInput:" .. input.identity), input.source)
+    return true
+end
+
 function host.send(address, record)
     assert(renderingHost == nil, "FrogUI messages may not be sent during render")
     assert(activeHost, "Frog.send requires a mounted Host")
@@ -6301,6 +6349,33 @@ function host:_keyDown(key, scancode, isrepeat)
         Interaction.revealFocus(self, self._focusedIdentity)
         return true
     end
+    local focusedControl = Interaction.findActiveIdentity(
+        self, self._focusedIdentity)
+    if focusedControl and focusedControl.type == "TextInput"
+            and not focusedControl.props.disabled then
+        if key == "backspace" then
+            return self:_changeTextInput(focusedControl,
+                withoutTrailingCharacter(focusedControl.props.value),
+                "TextInput:backspace:" .. focusedControl.identity)
+        elseif key == "return" or key == "kpenter" then
+            if focusedControl.props.onSubmit then
+                self:_runCallback(function()
+                    focusedControl.props.onSubmit(focusedControl.props.value)
+                end, "TextInput:submit:" .. focusedControl.identity,
+                    focusedControl.source)
+            end
+            return true
+        elseif key == "escape" and focusedControl.props.onCancel then
+            self:_runCallback(function()
+                focusedControl.props.onCancel(focusedControl.props.value)
+            end, "TextInput:cancel:" .. focusedControl.identity,
+                focusedControl.source)
+            return true
+        end
+        -- Text arrives through Host:textInput. Consuming the matching key-down
+        -- prevents source-ordered Button shortcuts from firing while typing.
+        return true
+    end
     local activated
     local activationKey = key == "return" or key == "space"
         or key == "kpenter"
@@ -6330,7 +6405,7 @@ function host:_keyDown(key, scancode, isrepeat)
         self:_activateButton(activated)
         return true
     end
-    local focusedControl = Interaction.findActiveIdentity(
+    focusedControl = Interaction.findActiveIdentity(
         self, self._focusedIdentity)
     if focusedControl and focusedControl.type == "RadialDial"
             and Interaction.keyRadialDial(self, focusedControl, key) then
@@ -6368,6 +6443,14 @@ function host:_textInput(text)
     assertInputBoundary(self)
     assert(type(text) == "string", "Host:textInput expects text")
     self._lastInputText = text
+    local focused = Interaction.findActiveIdentity(
+        self, self._focusedIdentity)
+    if focused and focused.type == "TextInput"
+            and not focused.props.disabled then
+        return self:_changeTextInput(focused,
+            focused.props.value .. text,
+            "TextInput:text:" .. focused.identity)
+    end
     return self._modal ~= nil
 end
 

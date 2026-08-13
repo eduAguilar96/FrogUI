@@ -486,6 +486,24 @@ local Interaction = require("src.frogui.interaction")
 ---@field shortcut? string|string[] Keyboard shortcut or ordered alternatives.
 ---@field [integer] FrogUIElementDescription Zero or one child.
 
+---@class FrogTextInputProps:FrogUIElementProps
+---@field value string Required controlled single-line value.
+---@field onChange fun(value:string) Called with appended text or one trailing
+--- UTF-8 character removed by Backspace. The owning actor stores the value.
+---@field onSubmit? fun(value:string) Called by Return or keypad Enter.
+---@field onCancel? fun(value:string) Called by Escape when no Modal consumes it.
+---@field padding? FrogUIPadding
+---@field background? FrogUIColor
+---@field border? FrogUIColor
+---@field borderWidth? number
+---@field radius? number
+---@field focusedBackground? FrogUIColor
+---@field focusedBorder? FrogUIColor
+---@field disabled? boolean Remove pointer, focus, keyboard, and text input.
+---@field align? FrogUIAlign Horizontal placement of the Text child.
+---@field justify? FrogUIBoxJustify Vertical placement of the Text child.
+---@field [integer] FrogUIElementDescription Exactly one Frog.Text child.
+
 ---@class FrogMotionSpring
 ---@field frequency? number Positive oscillation frequency.
 ---@field damping? number Positive damping ratio.
@@ -726,6 +744,16 @@ Frog.Canvas = Element.primitive("Canvas")
 --- pass `false` to silence one interaction without changing its behavior.
 ---@type fun(input?: FrogButtonProps):FrogUIElementDescription
 Frog.Button = Element.primitive("Button")
+
+--- Owns focus and controlled single-line text entry.
+---
+--- The current `value` remains actor-owned. Text input appends at the end and
+--- Backspace removes one trailing UTF-8 character; Tab changes focus. Supply
+--- one Frog.Text child so placeholder/caret wording stays explicit in the
+--- readable component tree. This is a compact game/search field, not a
+--- selection or multiline editor.
+---@type fun(input:FrogTextInputProps):FrogUIElementDescription
+Frog.TextInput = Element.primitive("TextInput")
 
 --- Animates one child's paint and input transform without changing layout.
 ---

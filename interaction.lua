@@ -290,7 +290,7 @@ end
 
 local POINTER_TYPES = {
     Button = true, Pressable = true, HorizontalSwipe = true,
-    RadialDial = true, DragSource = true, Scroll = true,
+    TextInput = true, RadialDial = true, DragSource = true, Scroll = true,
 }
 
 local function radialInside(node, x, y)
@@ -773,12 +773,15 @@ function interaction.pointerDown(host, x, y, pointerId, button)
         end)
     local pressSurface = deepestOf(path, "Pressable")
         or deepestOf(path, "Button")
+    local textInput = deepestOf(path, "TextInput",
+        function(node) return not node.props.disabled end)
     local radial = deepestOf(path, "RadialDial",
         function(node) return not node.props.disabled end)
     local swipe = not radial and deepestOf(path, "HorizontalSwipe") or nil
     local source = deepestOf(path, "DragSource")
     local scroll = nearestScroll(path)
-    if not press and not swipe and not radial and not source and not scroll then
+    if not press and not textInput and not swipe and not radial
+            and not source and not scroll then
         return modal ~= nil
     end
     local session = {
@@ -787,6 +790,7 @@ function interaction.pointerDown(host, x, y, pointerId, button)
         started = host._rawClock:now(), elapsed = 0, distance = 0,
         pressIdentity = press and press.identity or nil,
         pressType = press and press.type or nil,
+        textInputIdentity = textInput and textInput.identity or nil,
         swipeIdentity = swipe and swipe.identity or nil,
         swipeTapBlocked = pressSurface ~= nil,
         sourceIdentity = source and source.identity or nil,
@@ -805,6 +809,8 @@ function interaction.pointerDown(host, x, y, pointerId, button)
         beginRadial(host, radial, session, x, y)
     elseif press and press.type == "Button" then
         host._focusedIdentity = press.identity
+    elseif textInput then
+        host._focusedIdentity = textInput.identity
     end
     setHover(host, hoverNode(host, x, y), pointerId)
     return true

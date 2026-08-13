@@ -196,6 +196,11 @@ projections, companion style files, or geometry files.
 - A new or renamed primitive prop updates four places in the same change: the
   inline LuaLS contract, Host validation, the code-reading guide, and a focused
   framework regression.
+- Keep `TextInput` controlled by its nearest semantic actor. The primitive
+  reports the next string through `onChange`; do not retain a second query in
+  App, read Host internals, or translate letters into hidden Button shortcuts.
+  Its trailing-cursor contract serves compact game/search fields. A selection,
+  multiline, or document editor requires a separately reviewed primitive.
 - `PopupText.travel = { x?, y? }` declares a directional trajectory from its
   authored `at` point; use `distance` for the ordinary straight-up float, never
   both. `PopupText.sound` attaches one semantic cue to the same keyed lifetime,
