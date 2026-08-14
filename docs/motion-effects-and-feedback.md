@@ -16,6 +16,12 @@ clocks, committed refs or layer-local points, and terminal callbacks. A particle
 burst also requires a deterministic presentation seed and has a framework-owned
 count ceiling.
 
+A quiet reconciliation shares the committed immutable particle catalog. It
+copies that catalog only if candidate time or placement needs a new pose, then
+ends the rollback alias when the candidate commits. Rejected candidates cannot
+mutate committed particles, while an unchanged rerender avoids copying every
+particle.
+
 Use `recolor` when an effect skin's authored pixels provide shape and
 brightness while runtime state supplies the visible hue:
 

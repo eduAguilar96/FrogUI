@@ -12,6 +12,14 @@ in beta.
   asset-backed ParticleBurst effects, with an authored multiplicative-tint
   fallback when the device cannot compile the built-in shader.
 
+### Changed
+
+- Quiet ParticleBurst reconciliation now shares unchanged particle catalogs
+  transactionally instead of deep-copying them.
+- Resolved-tree finalization no longer creates empty fallback collections for
+  nodes without actors or event listeners.
+- Host teardown now releases Host-owned decoded asset and font caches.
+
 ## [0.1.0-beta.1] - 2026-08-13
 
 ### Added

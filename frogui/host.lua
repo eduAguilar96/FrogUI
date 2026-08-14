@@ -4579,23 +4579,29 @@ local function finalizeResolvedTree(node, insideLayer, portalAncestor,
         context.chrome = node
     end
     local nextPortalAncestor = isPortal and node or portalAncestor
-    for _, instance in ipairs(node._actorInstances or {}) do
-        instance.eventOrder = nextOrder
-        context.eventReceivers[#context.eventReceivers + 1] = instance
-        nextOrder = nextOrder + 1
+    local actorInstances = node._actorInstances
+    if actorInstances then
+        for _, instance in ipairs(actorInstances) do
+            instance.eventOrder = nextOrder
+            context.eventReceivers[#context.eventReceivers + 1] = instance
+            nextOrder = nextOrder + 1
+        end
     end
-    for _, listener in ipairs(node._hookEventListeners or {}) do
-        listener.eventOrder = nextOrder
-        context.eventReceivers[#context.eventReceivers + 1] = listener
-        context.orderedEventListeners[listener] = true
-        nextOrder = nextOrder + 1
+    local hookEventListeners = node._hookEventListeners
+    if hookEventListeners then
+        for _, listener in ipairs(hookEventListeners) do
+            listener.eventOrder = nextOrder
+            context.eventReceivers[#context.eventReceivers + 1] = listener
+            context.orderedEventListeners[listener] = true
+            nextOrder = nextOrder + 1
+        end
     end
     if node._motion then
         node._motion.eventOrder = nextOrder
         context.eventReceivers[#context.eventReceivers + 1] = node._motion
         nextOrder = nextOrder + 1
     end
-    for _, child in ipairs(node.children or {}) do
+    for _, child in ipairs(node.children) do
         nextOrder = finalizeResolvedTree(
             child, insideLayer, nextPortalAncestor, nextOrder, context)
     end
@@ -5146,6 +5152,7 @@ function host:render(root)
     }
     local published = false
     local function commit()
+        Effect.commitAll(context.effects)
         self._rootDescriptor = requested
         transferPaintScratch(previous.tree, candidate, pipelineProbe)
         self._tree = candidate
@@ -6785,6 +6792,12 @@ function host:unmount()
     self._eventReceivers = {}
     self._effects = {}
     Shader.clear(self)
+    -- A terminal Host lifetime must not retain decoded GPU/font resources.
+    -- Caller-owned asset objects remain in `assets`; only Host-owned caches
+    -- are released, and a later remount may load them again on demand.
+    self._fontCache = {}
+    self._assetCache = {}
+    self._validatedPrimitiveDescriptors = newDescriptorValidationCache()
     self._scrolls = {}
     self._radials = {}
     self._modals = {}

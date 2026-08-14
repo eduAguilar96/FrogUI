@@ -96,12 +96,14 @@ local function deterministicLifetime()
             == "-1.317220900750:48.253024483894:1.224617132158",
         "ParticleBurst changed its published known-seed catalog")
     local initial = fingerprint(burst)
+    local retainedParticles = burst._effect.particles
     host:render(Burst(clock, 481516, function()
         completions = completions + 1
     end, { gravity = 24, spread = math.pi }))
     burst = assert(host:tree().children[1])
-    assert(fingerprint(burst) == initial,
-        "quiet rerender rerolled a keyed ParticleBurst")
+    assert(burst._effect.particles == retainedParticles
+            and fingerprint(burst) == initial,
+        "quiet rerender copied or rerolled a keyed ParticleBurst")
 
     clock:advance(0.5)
     host:update(0)

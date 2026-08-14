@@ -162,7 +162,14 @@ local function clone(old)
         segmentStartedAt = old.segmentStartedAt,
         center = copyPoint(old.center),
         trail = copyTrail(old.trail),
-        particles = copyParticles(old.particles),
+        -- Particle samples are unchanged during ordinary reconciliation.
+        -- Share them transactionally; arrange detaches only when candidate
+        -- geometry changes, and Host commit releases the rollback alias.
+        particles = old.particles,
+        particlesShared = old.particles ~= nil,
+        particleGeometryElapsed = old.particleGeometryElapsed,
+        particleGeometryCenterX = old.particleGeometryCenterX,
+        particleGeometryCenterY = old.particleGeometryCenterY,
         frame = old.frame,
         rotation = old.rotation,
         visible = old.visible,
@@ -250,6 +257,7 @@ function runtime.reconcile(old, node, identity, order, host)
         completeFired = false,
         particles = node.type == "ParticleBurst"
             and particleCatalog(node.props) or nil,
+        particlesShared = false,
     }
     instance.identity = identity
     instance.type = node.type
@@ -362,6 +370,15 @@ end
 -- Samples every particle pose from immutable seed output and absolute progress.
 local function updateParticleGeometry(instance)
     if not instance.center then return end
+    if instance.particleGeometryElapsed == instance.elapsed
+            and instance.particleGeometryCenterX == instance.center.x
+            and instance.particleGeometryCenterY == instance.center.y then
+        return
+    end
+    if instance.particlesShared then
+        instance.particles = copyParticles(instance.particles)
+        instance.particlesShared = false
+    end
     local props = instance.props
     local progress = instance.duration == 0 and 1
         or math.min(1, instance.elapsed / instance.duration)
@@ -380,6 +397,9 @@ local function updateParticleGeometry(instance)
             + (endRadius - startRadius) * progress) * particle.radiusScale
         particle.alpha = 1 - progress
     end
+    instance.particleGeometryElapsed = instance.elapsed
+    instance.particleGeometryCenterX = instance.center.x
+    instance.particleGeometryCenterY = instance.center.y
 end
 
 -- Resolves every candidate effect against one complete arranged ref snapshot.
@@ -394,6 +414,13 @@ function runtime.arrangeAll(instances, rectangles, host)
             end
         end
         instance.node._effect = instance
+    end
+end
+
+-- Ends candidate rollback sharing after one tree commits successfully.
+function runtime.commitAll(instances)
+    for _, instance in pairs(instances or {}) do
+        instance.particlesShared = false
     end
 end
 

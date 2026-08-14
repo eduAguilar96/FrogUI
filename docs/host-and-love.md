@@ -9,6 +9,9 @@ reconciles a new root description. Both return nothing: consumers cannot retain
 or mutate committed nodes. Candidate render, layout, resize, and theme-refresh
 failures keep the last committed tree. Runtime update/input/feedback failures
 fault the Host; inspect or draw it for diagnosis, then unmount and replace it.
+Unmounting releases Host-owned decoded image and font caches along with actors,
+resources, effects, and shaders. Caller-supplied loaded asset objects remain
+caller-owned. Remounting the same Host reloads path assets on demand.
 
 Call `update(dt)` and `draw()` from the matching LÖVE callbacks. Forward resize,
 mouse, touch, keyboard, text, and wheel callbacks. Coordinates are converted

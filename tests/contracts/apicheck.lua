@@ -157,7 +157,12 @@ local function viewportAndLifecycle()
     first:resize(1920, 1080)
     assert(first:viewport().wide,
         "explicit wide resize did not rebuild responsive state")
+    first._fontCache[14] = { retained = true }
+    first._assetCache["fixture.png"] = { retained = true }
     first:unmount()
+    assert(next(first._fontCache) == nil
+            and next(first._assetCache) == nil,
+        "unmounted Host retained its owned font or asset cache")
     second:mount(description)
     second:unmount()
 end
