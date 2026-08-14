@@ -89,18 +89,20 @@ local TYPE_PROPS = {
         onComplete = true, color = true, radius = true, coreRatio = true,
         trailDuration = true, trailAlpha = true,
         frames = true, fps = true, anchor = true, rotate = true, tint = true,
+        recolor = true,
     },
     Flipbook = {
         frames = true, at = true, atOffset = true, fps = true, clock = true,
         contactAt = true, onContact = true, onComplete = true,
         rotation = true, mirror = true, anchor = true, tint = true,
+        recolor = true,
     },
     ParticleBurst = {
         at = true, atOffset = true, seed = true, count = true,
         duration = true, clock = true, onComplete = true,
         distance = true, angle = true, spread = true, gravity = true,
         radius = true, endRadius = true,
-        color = true, source = true, tint = true,
+        color = true, source = true, tint = true, recolor = true,
     },
     TiledImage = {
         source = true, tileWidth = true, tileHeight = true,
@@ -554,6 +556,30 @@ local function validateNumber(value, label, low, high)
     if high ~= nil then assert(value <= high, label .. " is above its maximum") end
 end
 
+-- Validates brightness-preserving effect-art recoloring independently from
+-- ordinary multiplicative tint. The application owns every visible value.
+local function validateEffectRecolor(self, value, label)
+    if value == nil then return end
+    assert(type(value) == "table" and getmetatable(value) == nil,
+        label .. " must be a plain table")
+    for key in pairs(value) do
+        assert(key == "color" or key == "hotCore" or key == "hotCoreExp",
+            label .. " has unknown field " .. tostring(key))
+    end
+    assert(value.color ~= nil, label .. ".color is required")
+    if type(value.color) == "string" then
+        assert((self.theme.colors or {})[value.color]
+                or Painter.defaults[value.color],
+            "unknown FrogUI color token " .. value.color)
+    else
+        validateColorTable(value.color, label .. ".color")
+    end
+    validateNumber(value.hotCore, label .. ".hotCore", 0, 1)
+    validateNumber(value.hotCoreExp, label .. ".hotCoreExp", 0)
+    assert(value.hotCoreExp == nil or value.hotCoreExp > 0,
+        label .. ".hotCoreExp must be positive")
+end
+
 local function validatePadding(value)
     if value == nil then return end
     if type(value) == "number" then
@@ -945,6 +971,7 @@ local function validatePrimitiveProps(self, name, props, probe)
         validateNormalizedPivot(props.anchor, "Projectile anchor")
         assert(props.rotate == nil or type(props.rotate) == "boolean",
             "Projectile rotate must be a boolean")
+        validateEffectRecolor(self, props.recolor, "Projectile recolor")
     elseif name == "Flipbook" then
         assert(props.ref == nil and props.offset == nil and props.grow == nil
                 and props.juice == nil and props.reactions == nil,
@@ -972,6 +999,7 @@ local function validatePrimitiveProps(self, name, props, probe)
         assert(props.mirror == nil or type(props.mirror) == "boolean",
             "Flipbook mirror must be a boolean")
         validateNormalizedPivot(props.anchor, "Flipbook anchor")
+        validateEffectRecolor(self, props.recolor, "Flipbook recolor")
     elseif name == "ParticleBurst" then
         assert(props.ref == nil and props.offset == nil and props.grow == nil
                 and props.width == nil and props.height == nil
@@ -1008,6 +1036,7 @@ local function validatePrimitiveProps(self, name, props, probe)
         if props.source ~= nil then
             validateAssetSource(self, props.source, "ParticleBurst")
         end
+        validateEffectRecolor(self, props.recolor, "ParticleBurst recolor")
     elseif name == "SpriteSheet" then
         validateAssetSource(self, props.source, name)
         assert(finite(props.frameCount) and props.frameCount > 0

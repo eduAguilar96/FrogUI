@@ -318,6 +318,11 @@ local Version = require("frogui.version")
 --- between 0 and 1.
 ---@field testId? string Readable development/test identity shown by F6.
 
+---@class FrogEffectRecolor
+---@field color FrogUIColor Replacement hue; source brightness and alpha remain.
+---@field hotCore? number Bright-pixel whitening strength from 0 through 1.
+---@field hotCoreExp? number Positive bright-core tightness; defaults to 2.5.
+
 ---@class FrogProjectileProps
 ---@field key string|number Required stable lifetime identity.
 ---@field from FrogUIEffectAnchor Source ref center or layer-local point.
@@ -341,7 +346,9 @@ local Version = require("frogui.version")
 ---@field height? number Optional positive drawn skin height; defaults to 64.
 ---@field anchor? FrogUIPivot Normalized skin pivot; defaults to its center.
 ---@field rotate? boolean Rotate the skin along travel; defaults to true.
----@field tint? FrogUIColor Explicit animated-skin tint.
+---@field tint? FrogUIColor Multiplicative skin tint and recolor fallback.
+---@field recolor? FrogEffectRecolor Brightness-preserving skin recolor. When
+--- active it replaces source RGB; `tint` remains the safe shader fallback.
 ---@field opacity? number Static opacity from 0 through 1.
 ---@field testId? string Readable development/test identity shown by F6.
 
@@ -361,7 +368,8 @@ local Version = require("frogui.version")
 ---@field rotation? number Rotation in radians.
 ---@field mirror? boolean Flip the frame horizontally.
 ---@field anchor? FrogUIPivot Normalized frame pivot; defaults to its center.
----@field tint? FrogUIColor Frame multiply tint.
+---@field tint? FrogUIColor Frame multiply tint and recolor fallback.
+---@field recolor? FrogEffectRecolor Brightness-preserving frame recolor.
 ---@field opacity? number Static opacity from 0 through 1.
 ---@field testId? string Readable development/test identity shown by F6.
 
@@ -382,6 +390,8 @@ local Version = require("frogui.version")
 ---@field color? FrogUIColor Semantic circle color and default asset tint.
 ---@field source? FrogUIAssetSource Optional semantic particle asset; missing art falls back to circles without changing timing.
 ---@field tint? FrogUIColor Explicit particle-asset tint overriding `color`.
+---@field recolor? FrogEffectRecolor Brightness-preserving optional asset
+--- recolor; semantic circle fallbacks continue to use `color`.
 ---@field opacity? number Static opacity from 0 through 1, composed with lifetime fade.
 ---@field onComplete? fun() Exactly-once callback after the keyed burst settles; normally removes its owner entry.
 ---@field testId? string Readable development/test identity shown by F6.

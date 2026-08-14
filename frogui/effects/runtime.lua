@@ -643,6 +643,7 @@ end
 
 -- Returns detached lifecycle metadata for F6 and focused checks.
 function runtime.inspect(instance)
+    local authoredRecolor = instance.props.recolor
     return {
         kind = instance.type,
         elapsed = instance.elapsed,
@@ -659,6 +660,11 @@ function runtime.inspect(instance)
         reducedMotion = instance.reducedMotion,
         particleCount = #(instance.particles or {}),
         seed = instance.type == "ParticleBurst" and instance.props.seed or nil,
+        recolor = authoredRecolor and {
+            color = authoredRecolor.color,
+            hotCore = authoredRecolor.hotCore or 0,
+            hotCoreExp = authoredRecolor.hotCoreExp or 2.5,
+        } or nil,
     }
 end
 

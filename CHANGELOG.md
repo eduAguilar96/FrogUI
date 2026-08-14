@@ -6,6 +6,12 @@ in beta.
 
 ## [Unreleased]
 
+### Added
+
+- Brightness-preserving `recolor` recipes for Projectile, Flipbook, and
+  asset-backed ParticleBurst effects, with an authored multiplicative-tint
+  fallback when the device cannot compile the built-in shader.
+
 ## [0.1.0-beta.1] - 2026-08-13
 
 ### Added

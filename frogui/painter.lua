@@ -474,8 +474,9 @@ local function defaultText(host, node, style, clipState, paintRow)
     end
 end
 
--- Draws one image frame at an effect-owned center/pivot and authored size.
-local function drawEffectFrame(asset, center, props, rotation, tint)
+-- Draws one image frame with either ordinary multiply tint or the explicit
+-- brightness-preserving effect recolor contract.
+local function drawEffectFrame(host, asset, center, props, rotation, style)
     local g = graphics()
     if not g or not asset or not center then return false end
     local imageWidth, imageHeight = asset:getDimensions()
@@ -484,10 +485,20 @@ local function drawEffectFrame(asset, center, props, rotation, tint)
     local anchor = props.anchor or { x = 0.5, y = 0.5 }
     local scaleX = width / imageWidth
     if props.mirror then scaleX = -scaleX end
-    setColor(tint)
+    local previousShader = g.getShader and g.getShader() or nil
+    local recolored = style.recolor and Shader.activateEffectRecolor(
+        host, style.recolor, style.hotCore, style.hotCoreExp)
+    if recolored then
+        local inherited = style.inheritedTint or WHITE
+        g.setColor(inherited[1], inherited[2], inherited[3],
+            (inherited[4] or 1) * (style.opacity or 1))
+    else
+        setColor(style.tint)
+    end
     g.draw(asset, center.x, center.y, rotation or 0,
         scaleX, height / imageHeight,
         imageWidth * anchor.x, imageHeight * anchor.y)
+    if recolored then g.setShader(previousShader) end
     return true
 end
 
@@ -513,7 +524,8 @@ local function defaultProjectile(host, node, state, style)
     local source = state.frame and frames[state.frame]
     local asset = source and host:_asset(source) or nil
     local rotation = props.rotate == false and 0 or state.rotation
-    if drawEffectFrame(asset, state.head, props, rotation, style.tint) then return end
+    if drawEffectFrame(host, asset, state.head,
+            props, rotation, style) then return end
     setColor(color)
     g.circle("fill", state.head.x, state.head.y, radius)
     setColor({ 1, 1, 1, color[4] })
@@ -527,8 +539,8 @@ local function defaultFlipbook(host, node, state, style)
     if not g or not state or not state.visible or not state.center then return end
     local source = node.props.frames[state.frame]
     local asset = source and host:_asset(source) or nil
-    if drawEffectFrame(asset, state.center, node.props,
-            node.props.rotation or 0, style.tint) then return end
+    if drawEffectFrame(host, asset, state.center, node.props,
+            node.props.rotation or 0, style) then return end
     local radius = (node.props.height or Effect.defaults.frameHeight) / 2
     setColor(style.tint)
     g.setLineWidth(3)
@@ -542,13 +554,23 @@ local function defaultParticleBurst(host, node, state, style)
     local asset = node.props.source and host:_asset(node.props.source) or nil
     local imageWidth, imageHeight
     if asset then imageWidth, imageHeight = asset:getDimensions() end
+    local previousShader = g.getShader and g.getShader() or nil
+    local recolored = asset and style.recolor
+        and Shader.activateEffectRecolor(
+            host, style.recolor, style.hotCore, style.hotCoreExp)
     for _, particle in ipairs(state.particles or {}) do
         local radius = math.max(0, particle.radius or 0)
         local alpha = math.max(0, particle.alpha or 0)
         if radius > 0 and alpha > 0 then
             if asset then
-                g.setColor(style.tint[1], style.tint[2], style.tint[3],
-                    style.tint[4] * alpha)
+                if recolored then
+                    local inherited = style.inheritedTint or WHITE
+                    g.setColor(inherited[1], inherited[2], inherited[3],
+                        (inherited[4] or 1) * (style.opacity or 1) * alpha)
+                else
+                    g.setColor(style.tint[1], style.tint[2], style.tint[3],
+                        style.tint[4] * alpha)
+                end
                 local height = radius * 2
                 local width = height * imageWidth / imageHeight
                 g.draw(asset, particle.x, particle.y, 0,
@@ -561,6 +583,7 @@ local function defaultParticleBurst(host, node, state, style)
             end
         end
     end
+    if recolored then g.setShader(previousShader) end
 end
 
 local function imageGeometry(node, asset, fit, sourceRect)
@@ -1135,12 +1158,18 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
             end
         end
     elseif node.type == "Projectile" then
+        local recolor = node.props.recolor
         local effectStyle = {
             color = faded(tinted(host:_color(node.props.color, "text"),
                 style.tint), style.opacity),
             tint = faded(tinted(host:_color(node.props.tint, nil,
                 node.props.color and host:_color(node.props.color)
                     or { 1, 1, 1, 1 }), style.tint), style.opacity),
+            recolor = recolor and host:_color(recolor.color),
+            hotCore = recolor and recolor.hotCore,
+            hotCoreExp = recolor and recolor.hotCoreExp,
+            inheritedTint = style.tint,
+            opacity = style.opacity,
         }
         if custom then
             customCall(custom, "projectile", customDescriptor,
@@ -1149,9 +1178,15 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
             defaultProjectile(host, node, node._effect, effectStyle)
         end
     elseif node.type == "Flipbook" then
+        local recolor = node.props.recolor
         local effectStyle = {
             tint = faded(tinted(host:_color(node.props.tint, nil,
                 { 1, 1, 1, 1 }), style.tint), style.opacity),
+            recolor = recolor and host:_color(recolor.color),
+            hotCore = recolor and recolor.hotCore,
+            hotCoreExp = recolor and recolor.hotCoreExp,
+            inheritedTint = style.tint,
+            opacity = style.opacity,
         }
         if custom then
             customCall(custom, "flipbook", customDescriptor,
@@ -1160,12 +1195,18 @@ drawNode = function(host, node, custom, inheritedOpacity, inheritedTint,
             defaultFlipbook(host, node, node._effect, effectStyle)
         end
     elseif node.type == "ParticleBurst" then
+        local recolor = node.props.recolor
         local effectStyle = {
             color = faded(tinted(host:_color(node.props.color, "text"),
                 style.tint), style.opacity),
             tint = faded(tinted(host:_color(node.props.tint, nil,
                 node.props.color and host:_color(node.props.color)
                     or { 1, 1, 1, 1 }), style.tint), style.opacity),
+            recolor = recolor and host:_color(recolor.color),
+            hotCore = recolor and recolor.hotCore,
+            hotCoreExp = recolor and recolor.hotCoreExp,
+            inheritedTint = style.tint,
+            opacity = style.opacity,
         }
         if custom then
             customCall(custom, "particleBurst", customDescriptor,
@@ -1402,6 +1443,10 @@ local function defaultInspector(host, entry, selected)
                     effect.kind:lower(), head.x, head.y,
                     effect.elapsed, effect.duration,
                     tostring(effect.frame or "-"), effect.frameCount)
+                if effect.recolor then
+                    label = label .. " / recolor "
+                        .. tostring(effect.recolor.color)
+                end
             else
                 local at = effect.at
                 label = ("popup %s @ %.1f,%.1f / %.2fs / rise %.1f"):format(

@@ -8,6 +8,7 @@ local check = {}
 local ASSETS = {
     ["slash-a"] = support.generatedImage(4, 4, { 1, 0.2, 0.2, 1 }),
     ["slash-b"] = support.generatedImage(4, 4, { 0.2, 0.7, 1, 1 }),
+    ["recolor-green"] = support.generatedImage(4, 4, { 0, 1, 0, 1 }),
     ["missing-frame"] = "tests/fixtures/__frogui_missing_frame__.png",
 }
 local FRAMES = { "slash-a", "slash-b" }
@@ -307,6 +308,64 @@ local function cancellationAndReducedMotion()
     host:unmount()
 end
 
+-- Proves effect recolor replaces source hue by brightness and preserves the
+-- authored hot core instead of multiplying the source's green channel.
+local function effectRecolorContract()
+    local target = { 0.08, 0.40, 0.78, 1 }
+    local host = support.host {
+        designWidth = 32,
+        designHeight = 32,
+        width = 32,
+        height = 32,
+        assets = ASSETS,
+        theme = { colors = { water = target } },
+    }
+    host:mount(Frog.EffectLayer {
+        width = 32,
+        height = 32,
+        Frog.Flipbook {
+            key = "recolor",
+            testId = "recolored-effect",
+            frames = { "recolor-green" },
+            at = { x = 16, y = 16 },
+            width = 16,
+            height = 16,
+            tint = "water",
+            recolor = {
+                color = "water",
+                hotCore = 0.65,
+                hotCoreExp = 2.5,
+            },
+        },
+    })
+    local inspected = inspectionEntry(host, "recolored-effect").effect
+    assert(inspected.recolor.color == "water"
+            and inspected.recolor.hotCore == 0.65
+            and inspected.recolor.hotCoreExp == 2.5,
+        "F6 omitted the explicit effect recolor recipe")
+    local canvas = love.graphics.newCanvas(32, 32)
+    local previousCanvas = love.graphics.getCanvas()
+    love.graphics.setCanvas(canvas)
+    love.graphics.clear(0, 0, 0, 0)
+    host:draw()
+    love.graphics.setCanvas(previousCanvas)
+    local red, green, blue, alpha = canvas:newImageData():getPixel(16, 16)
+    assert(red > 0.60 and green > red and blue > green and alpha > 0.95,
+        ("effect recolor multiplied source RGB instead of replacing hue: "
+            .. "%.3f/%.3f/%.3f/%.3f"):format(red, green, blue, alpha))
+    host:unmount()
+
+    rejects("missing recolor target", function()
+        support.host { width = 32, height = 32, assets = ASSETS }:mount(
+            Frog.EffectLayer { Frog.Flipbook {
+                key = "bad-recolor",
+                frames = { "recolor-green" },
+                at = { x = 16, y = 16 },
+                recolor = { hotCore = 0.5 },
+            } })
+    end, "recolor.color is required")
+end
+
 -- Proves missing declared art preserves timing and malformed APIs fail loudly.
 local function fallbacksAndValidation()
     local completed = 0
@@ -403,6 +462,7 @@ function check.run()
     projectileLifecycle()
     flipbookLifecycle()
     cancellationAndReducedMotion()
+    effectRecolorContract()
     fallbacksAndValidation()
 end
 

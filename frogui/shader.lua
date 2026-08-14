@@ -4,6 +4,22 @@ local Clock = require("frogui.clock")
 
 local shader = {}
 
+local EFFECT_RECOLOR_TOKEN = "__frogui-effect-recolor"
+local EFFECT_RECOLOR_SOURCE = [[
+    extern vec3 target;
+    extern float hotCore;
+    extern float hotCoreExp;
+
+    vec4 effect(vec4 color, Image texture, vec2 textureCoordinates,
+            vec2 screenCoordinates) {
+        vec4 pixel = Texel(texture, textureCoordinates);
+        float value = max(pixel.r, max(pixel.g, pixel.b));
+        vec3 recolored = target * value;
+        float core = pow(value, hotCoreExp) * hotCore;
+        return vec4(mix(recolored, vec3(1.0), core), pixel.a) * color;
+    }
+]]
+
 local function graphics()
     return love and love.graphics or nil
 end
@@ -62,6 +78,33 @@ local function compiled(host, token)
     return result
 end
 
+-- Compiles FrogUI's one generic effect-art recolor program independently
+-- from application shader tokens. Failure falls back to ordinary tint.
+local function compiledEffectRecolor(host)
+    if host._effectRecolorShader ~= nil then
+        return host._effectRecolorShader or nil
+    end
+    local g = graphics()
+    if not g or not g.newShader then return nil end
+    local ok, result = pcall(g.newShader, EFFECT_RECOLOR_SOURCE)
+    if not ok then
+        fail(host, EFFECT_RECOLOR_TOKEN, result)
+        host._effectRecolorShader = false
+        return nil
+    end
+    host._effectRecolorShader = result
+    return result
+end
+
+-- Sends one already-validated effect recipe without allocating a per-draw
+-- closure around the protected GPU boundary.
+local function sendEffectRecolor(program, target, hotCore, hotCoreExp, g)
+    program:send("target", target)
+    program:send("hotCore", hotCore or 0)
+    program:send("hotCoreExp", hotCoreExp or 2.5)
+    g.setShader(program)
+end
+
 -- Sends one uniform only when the compiled program declares its name.
 local function sendUniform(program, name, value)
     if program.hasUniform and not program:hasUniform(name) then
@@ -105,6 +148,29 @@ function shader.activate(host, node)
     return true
 end
 
+-- Activates brightness-preserving hue replacement for one effect asset.
+-- `target` is already resolved from the application's semantic color table.
+function shader.activateEffectRecolor(host, target, hotCore, hotCoreExp)
+    local program = compiledEffectRecolor(host)
+    if not program then return false end
+    local targetScratch = host._effectRecolorTarget
+    if not targetScratch then
+        targetScratch = {}
+        host._effectRecolorTarget = targetScratch
+    end
+    targetScratch[1] = target[1] or target.r
+    targetScratch[2] = target[2] or target.g
+    targetScratch[3] = target[3] or target.b
+    local ok, reason = pcall(sendEffectRecolor, program, targetScratch,
+        hotCore, hotCoreExp, graphics())
+    if not ok then
+        fail(host, EFFECT_RECOLOR_TOKEN, reason)
+        host._effectRecolorShader = false
+        return false
+    end
+    return true
+end
+
 -- Marks a draw-time GPU failure so later frames use the authored fallback.
 function shader.drawFailed(host, node, reason)
     fail(host, node.props.shader, reason)
@@ -139,6 +205,8 @@ end
 function shader.clear(host)
     host._shaderCache = {}
     host._shaderFailures = {}
+    host._effectRecolorShader = nil
+    host._effectRecolorTarget = nil
 end
 
 return shader
