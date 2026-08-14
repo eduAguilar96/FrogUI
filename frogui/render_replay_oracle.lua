@@ -1,10 +1,10 @@
 -- RenderReplayOracle is an opt-in diagnostic census for exact component
 -- render-description replay. It observes every callback but never skips one.
 
-local Message = require("src.frogui.message")
-local Element = require("src.frogui.element")
-local Clock = require("src.frogui.clock")
-local Ref = require("src.frogui.ref")
+local Message = require("frogui.message")
+local Element = require("frogui.element")
+local Clock = require("frogui.clock")
+local Ref = require("frogui.ref")
 
 local Oracle = {}
 Oracle.__index = Oracle

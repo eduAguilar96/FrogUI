@@ -1,6 +1,6 @@
 -- Owns semantic shader compilation, explicit uniforms, and safe fallback state.
 
-local Clock = require("src.frogui.clock")
+local Clock = require("frogui.clock")
 
 local shader = {}
 

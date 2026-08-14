@@ -1,7 +1,7 @@
 -- Retains and evaluates per-element Motion/juice state. Application code
 -- declares recipes; this runtime alone advances presentation properties.
 
-local Juice = require("src.frogui.juice")
+local Juice = require("frogui.juice")
 
 local motion = {}
 
@@ -441,7 +441,7 @@ local function unwrap(recipe, rawClock)
     return recipe, rawClock
 end
 
--- Records one stopped-collector interval in the private Battle probe.
+-- Records one stopped-collector interval in the private allocation probe.
 local function recordReconciliationAllocation(probe, callsField, kbField,
         before)
     if not probe then return end

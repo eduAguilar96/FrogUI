@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime.version": "Lua 5.1",
+  "runtime.special": {
+    "love.filesystem.load": "loadfile"
+  },
+  "workspace.library": [
+    "frogui"
+  ],
+  "workspace.checkThirdParty": false,
+  "diagnostics.globals": [
+    "love"
+  ]
+}

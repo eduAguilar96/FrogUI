@@ -1,9 +1,9 @@
 -- Owns FrogUI's generic pointer session, retained Scroll state, modal input
 -- isolation, and source-owned drag/drop lifecycle. Application components see
--- only the small primitive props exported by src/frogui/init.lua.
+-- only the small primitive props exported by frogui/init.lua.
 
-local Message = require("src.frogui.message")
-local Motion = require("src.frogui.motion")
+local Message = require("frogui.message")
+local Motion = require("frogui.motion")
 
 local interaction = {}
 local stageSound
@@ -28,7 +28,7 @@ interaction.AXIS_BIAS = 1.25
 interaction.WHEEL_STEP = 40
 interaction.MOMENTUM_FRICTION = 12
 
--- HorizontalSwipe intentionally preserves Battle's proven two-stage feel:
+-- HorizontalSwipe intentionally preserves existing two-stage feel:
 -- qualifying horizontal movement first suppresses a descendant inspection
 -- action, while only a longer release commits the semantic swipe. This is the
 -- sole code authority; application components and docs never repeat values.
@@ -173,7 +173,7 @@ local function refreshRadial(host, node, detail)
     local row = runtimeAllocationRow(host)
     local refreshBefore = row and collectgarbage("count") or nil
     local arrangeBefore = row and collectgarbage("count") or nil
-    require("src.frogui.layout").orbitRadialDial(node, host)
+    require("frogui.layout").orbitRadialDial(node, host)
     recordRuntimeAllocation(row,
         "interactionRadialArrangeCalls",
         "interactionRadialArrangeAllocatedKB", arrangeBefore)
@@ -863,7 +863,7 @@ function interaction.pointerMove(host, x, y, pointerId)
             scroll.velocity = delta / dt
             session.lastAxis, session.lastMoveTime = axis, now
             if scroll.node then
-                require("src.frogui.layout").arrangeScroll(scroll.node, host)
+                require("frogui.layout").arrangeScroll(scroll.node, host)
                 host:_invalidateTransform(scroll.node, "Scroll", "drag")
                 local _, transform = host:_transformTree(
                     nil, "interactionTransform")
@@ -961,7 +961,7 @@ function interaction.pointerUp(host, x, y, pointerId, button)
                 scroll.offset = math.max(0, math.min(scroll.extent,
                     math.floor(scroll.offset / interval + 0.5) * interval))
                 scroll.velocity = 0
-                require("src.frogui.layout").arrangeScroll(node, host)
+                require("frogui.layout").arrangeScroll(node, host)
                 host:_invalidateTransform(node, "Scroll", "snap")
                 local _, transform = host:_transformTree(
                     nil, "interactionTransform")
@@ -1077,7 +1077,7 @@ function interaction.update(host, dt)
             else scroll.velocity = scroll.velocity * factor end
             scroll.offset = nextOffset
             if scroll.node then
-                require("src.frogui.layout").arrangeScroll(scroll.node, host)
+                require("frogui.layout").arrangeScroll(scroll.node, host)
                 host:_invalidateTransform(scroll.node, "Scroll", "momentum")
             end
         elseif math.abs(scroll.velocity or 0) <= 0.1 then
@@ -1145,7 +1145,7 @@ function interaction.wheelMoved(host, dx, dy)
     scroll.offset = math.max(0, math.min(scroll.extent,
         scroll.offset + amount * interaction.WHEEL_STEP))
     scroll.velocity = 0
-    require("src.frogui.layout").arrangeScroll(node, host)
+    require("frogui.layout").arrangeScroll(node, host)
     host:_invalidateTransform(node, "Scroll", "wheel")
     local _, transform = host:_transformTree(nil, "interactionTransform")
     host:_refreshCommittedRefs("interaction", transform)
@@ -1176,7 +1176,7 @@ function interaction.revealFocus(host, identity)
             if low < viewLow then scroll.offset = scroll.offset + low - viewLow
             elseif high > viewHigh then scroll.offset = scroll.offset + high - viewHigh end
             scroll.offset = math.max(0, math.min(scroll.extent, scroll.offset))
-            require("src.frogui.layout").arrangeScroll(node, host)
+            require("frogui.layout").arrangeScroll(node, host)
             host:_invalidateTransform(node, "Scroll", "focus")
         end
     end

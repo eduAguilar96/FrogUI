@@ -1,7 +1,7 @@
 -- Defines the small declarative motion/feedback recipe vocabulary. Recipes
 -- are inert data until a mounted Host plays them on an element.
 
-local Clock = require("src.frogui.clock")
+local Clock = require("frogui.clock")
 
 local juice = {}
 

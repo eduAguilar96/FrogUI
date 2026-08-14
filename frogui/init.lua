@@ -1,12 +1,13 @@
 -- Public FrogUI vocabulary. Application code imports this one module to define
 -- primitives, components, actors, messages, and the single Host.
 
-local Element = require("src.frogui.element")
-local Host = require("src.frogui.host")
-local Message = require("src.frogui.message")
-local Clock = require("src.frogui.clock")
-local Juice = require("src.frogui.juice")
-local Interaction = require("src.frogui.interaction")
+local Element = require("frogui.element")
+local Host = require("frogui.host")
+local Message = require("frogui.message")
+local Clock = require("frogui.clock")
+local Juice = require("frogui.juice")
+local Interaction = require("frogui.interaction")
+local Version = require("frogui.version")
 
 ---@alias FrogUISize number|string
 ---Logical pixels or a percentage such as `"100%"`.
@@ -648,7 +649,7 @@ local Interaction = require("src.frogui.interaction")
 ---@field address table Plain finite acyclic application destination.
 ---@field [integer] FrogUIElementDescription Exactly one visible target child.
 
-local Frog = {}
+local Frog = { VERSION = Version.string }
 
 -- Primitives are FrogUI's built-in layout/paint vocabulary. Calling one
 -- creates a description; the Host later measures, paints, and routes it.
@@ -682,7 +683,7 @@ Frog.Overlay = Element.primitive("Overlay")
 --- measured from this layer's content origin; refs use their committed center.
 --- Later children paint above earlier ones.
 ---@type fun(input?: FrogEffectLayerProps):FrogUIElementDescription
-Frog.EffectLayer = require("src.frogui.effects.effect_layer")
+Frog.EffectLayer = require("frogui.effects.effect_layer")
 
 --- Animates one finite text effect and reports when it may be removed.
 ---
@@ -691,21 +692,21 @@ Frog.EffectLayer = require("src.frogui.effects.effect_layer")
 --- Supply a stable `key`, a center point inside an EffectLayer, and normally
 --- an `onComplete` callback that sends the owner's typed removal action.
 ---@type fun(input:FrogPopupTextProps):FrogUIElementDescription
-Frog.PopupText = require("src.frogui.effects.popup_text")
+Frog.PopupText = require("frogui.effects.popup_text")
 
 --- Travels once between refs/points and reports arrival exactly once.
 ---
 --- Geometry is reprojected across resize without restarting elapsed time.
 --- Supply an explicit `clock` when arrival gates a playback process.
 ---@type fun(input:FrogProjectileProps):FrogUIElementDescription
-Frog.Projectile = require("src.frogui.effects.projectile")
+Frog.Projectile = require("frogui.effects.projectile")
 
 --- Plays one finite ordered frame sequence with an optional contact beat.
 ---
 --- Frame and callback state survive rerender/resize. Missing declared art keeps
 --- the same timing and paints a simple ring fallback.
 ---@type fun(input:FrogFlipbookProps):FrogUIElementDescription
-Frog.Flipbook = require("src.frogui.effects.flipbook")
+Frog.Flipbook = require("frogui.effects.flipbook")
 
 --- Emits one finite deterministic cone or radial particle burst.
 ---
@@ -713,7 +714,7 @@ Frog.Flipbook = require("src.frogui.effects.flipbook")
 --- ceiling bounds draw work. Missing optional art uses the semantic circle
 --- fallback; reduced motion completes invisibly on the next Host update.
 ---@type fun(input:FrogParticleBurstProps):FrogUIElementDescription
-Frog.ParticleBurst = require("src.frogui.effects.particle_burst")
+Frog.ParticleBurst = require("frogui.effects.particle_burst")
 
 --- Draws one text leaf. `role` selects a semantic theme size; `fontScale`
 --- changes only this use while preserving responsive role changes. `fitDown`
@@ -860,7 +861,8 @@ Frog.DropTarget = Element.primitive("DropTarget")
 -- component(name, render) defines a reusable stateless application concept.
 -- Calling the returned token also creates a description; during Host render,
 -- its render(props) function expands that description into primitives and
--- other components. See src/frogui/README.md for the complete reading model.
+-- other components. See README.md and docs/components-and-primitives.md for
+-- the complete reading model.
 Frog.component = Element.component
 Frog.each = Element.each
 --- Defines one state owner with typed actions, reactions, and visible output.
@@ -1099,7 +1101,7 @@ Frog.useFrame = Host.useFrame
 ---
 --- Hooks are positional and unconditional. Use an actor reaction when the
 --- event changes ordinary UI state; reserve `useEvent` for a retained process
---- such as BattlePlayback that cannot live in actor state.
+--- such as retained playback resource that cannot live in actor state.
 ---@param event table Token created by Frog.event(name, validate?).
 ---@param callback fun(event:table)
 Frog.useEvent = Host.useEvent

@@ -1,0 +1,35 @@
+# Changelog
+
+All notable changes to FrogUI are documented here. The format follows Keep a
+Changelog, and versions follow Semantic Versioning while the public API remains
+in beta.
+
+## [Unreleased]
+
+## [0.1.0-beta.1] - 2026-08-13
+
+### Added
+
+- Readable nested primitives and stateless components.
+- Actor-owned state with typed actions, addressed sends, broadcast events, and
+  deterministic breadth-first delivery.
+- One atomic Host with responsive virtual viewports, input forwarding,
+  semantic services, lifecycle-bound resources, refs, and diagnostics.
+- Declarative Motion, juice, Canvas, shaders, semantic feedback, and finite
+  popup, projectile, flipbook, and deterministic particle effects.
+- Independent headless and graphical contracts, examples, LuaLS annotations,
+  and the first standalone compatibility policy.
+
+### Changed
+
+- Extracted the public namespace to `require("frogui")` with no legacy alias.
+- Made virtual design dimensions explicit Host input instead of a game-owned
+  default.
+
+### Known gaps
+
+- Windows, Android, and iOS consumer smoke passes have not yet been completed;
+  `0.1.0-beta.1` records macOS and automated-contract evidence only.
+
+[Unreleased]: https://github.com/eduAguilar96/FrogUI/compare/v0.1.0-beta.1...HEAD
+[0.1.0-beta.1]: https://github.com/eduAguilar96/FrogUI/releases/tag/v0.1.0-beta.1

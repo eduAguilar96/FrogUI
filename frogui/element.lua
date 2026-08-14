@@ -3,9 +3,28 @@
 
 local element = {}
 
+local function normalizedSource(path)
+    if type(path) ~= "string" then return nil end
+    return (path:gsub("^@", ""):gsub("\\", "/"))
+end
+
+local ELEMENT_SOURCE = normalizedSource(
+    debug and debug.getinfo and debug.getinfo(1, "S").source)
+local FRAMEWORK_ROOT = ELEMENT_SOURCE
+    and ELEMENT_SOURCE:match("^(.*[/])element%.lua$")
+
+-- Recognizes this loaded package root exactly. This remains correct when the
+-- repository is installed below a nested vendor path and does not hide an
+-- unrelated application path that merely contains the word "frogui".
+function element._isFrameworkSource(path)
+    path = normalizedSource(path)
+    return path ~= nil and FRAMEWORK_ROOT ~= nil
+        and path:sub(1, #FRAMEWORK_ROOT) == FRAMEWORK_ROOT
+end
+
 -- One private Host-owned allocation probe may observe source, identity, tree
 -- construction, or the Host pipeline at a time. This is deliberately not
--- FrogUI's public API; the Battle performance harness owns the observer.
+-- FrogUI's public API; the private allocation harness owns the observer.
 local allocationProbeOwner
 local sourceAllocationProbe
 local structureAllocationProbe
@@ -52,7 +71,7 @@ function element._endRenderSource(owner)
     renderSource = nil
 end
 
-local function captureSource(excludedPath)
+local function captureSource(excluded)
     local probe = sourceAllocationProbe
     local before = probe and collectgarbage("count") or nil
     local lookups = 0
@@ -69,7 +88,14 @@ local function captureSource(excludedPath)
         if probe then lookups = lookups + 1 end
         if not info then break end
         local path = info.short_src or info.source
-        if path and not path:find(excludedPath, 1, true) then
+        local normalized = normalizedSource(path)
+        local isExcluded
+        if type(excluded) == "function" then
+            isExcluded = excluded(normalized)
+        else
+            isExcluded = normalized == excluded
+        end
+        if path and not isExcluded then
             local result = { path = path, line = info.currentline }
             if probe then
                 local after = collectgarbage("count")
@@ -93,15 +119,20 @@ local function captureSource(excludedPath)
 end
 
 local function sourceOutsideFrogUI()
-    local result = captureSource("src/frogui/")
-    return result
+    return captureSource(element._isFrameworkSource)
+end
+
+-- Shared private provenance helper used by message definitions and positional
+-- hooks. It deliberately returns a detached record rather than package paths.
+function element._sourceOutsideFrogUI()
+    return sourceOutsideFrogUI()
 end
 
 -- Captures a reusable component definition once. Unlike the descriptor
 -- fallback, framework-owned components deliberately keep their own file:line
 -- instead of borrowing whichever application module first required FrogUI.
 local function componentSource()
-    local result = captureSource("src/frogui/element.lua")
+    local result = captureSource(ELEMENT_SOURCE)
     return result
 end
 

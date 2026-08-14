@@ -3,7 +3,7 @@
 -- PopupText stays on the shared Motion runtime because its trajectory is a
 -- pure local recipe; ref-following effects need endpoint-aware reprojection.
 
-local Ref = require("src.frogui.ref")
+local Ref = require("frogui.ref")
 
 local runtime = {}
 

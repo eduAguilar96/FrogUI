@@ -1,20 +1,20 @@
 -- Owns FrogUI's one mounted tree: component expansion, actor reconciliation,
 -- input routing, inspection, resource lookup, and committed rendering.
 
-local Layout = require("src.frogui.layout")
-local Painter = require("src.frogui.painter")
-local Viewport = require("src.frogui.viewport")
-local Element = require("src.frogui.element")
-local Message = require("src.frogui.message")
-local Clock = require("src.frogui.clock")
-local Motion = require("src.frogui.motion")
-local Effect = require("src.frogui.effects.runtime")
-local Shader = require("src.frogui.shader")
-local Interaction = require("src.frogui.interaction")
-local Ref = require("src.frogui.ref")
-local Diagnostics = require("src.frogui.diagnostics")
-local DiagnosticComparison = require("src.frogui.diagnostic_comparison")
-local ActorLocal = require("src.frogui.actor_local")
+local Layout = require("frogui.layout")
+local Painter = require("frogui.painter")
+local Viewport = require("frogui.viewport")
+local Element = require("frogui.element")
+local Message = require("frogui.message")
+local Clock = require("frogui.clock")
+local Motion = require("frogui.motion")
+local Effect = require("frogui.effects.runtime")
+local Shader = require("frogui.shader")
+local Interaction = require("frogui.interaction")
+local Ref = require("frogui.ref")
+local Diagnostics = require("frogui.diagnostics")
+local DiagnosticComparison = require("frogui.diagnostic_comparison")
+local ActorLocal = require("frogui.actor_local")
 
 local host = {}
 host.__index = host
@@ -301,7 +301,7 @@ local function validateActorState(token, value, label)
     return value
 end
 
--- Adds one stopped-GC validation interval to the private Battle probe.
+-- Adds one stopped-GC validation interval to the private allocation probe.
 -- Ordinary Hosts never call this helper.
 local function recordValidationAllocation(probe, callsField, kbField, before)
     local after = collectgarbage("count")
@@ -1788,7 +1788,7 @@ local function resetPaintAllocationRow(row)
 end
 
 -- Resets one preallocated Host:update attribution row. This private probe is
--- active only in the stopped-collector Battle tool and has no ordinary path.
+-- active only in the stopped-collector allocation tool and has no ordinary path.
 local function resetRuntimeAllocationRow(row)
     for _, field in ipairs(RUNTIME_ALLOCATION_ROW_FIELDS) do row[field] = 0 end
 end
@@ -2179,7 +2179,7 @@ local function resetAllocationProbe(probe)
     resetPendingFrameAllocation(probe)
 end
 
--- Private, globally exclusive allocation attribution for the Battle harness.
+-- Private, globally exclusive allocation attribution for the allocation harness.
 -- It is intentionally absent from Host options and the public Frog table.
 function host:_attachAllocationProbe(mode)
     assert(ALLOCATION_PROBE_MODES[mode],
@@ -2568,7 +2568,7 @@ function host:_readLayoutAllocationProbe()
 end
 
 -- Returns scalar evidence for the ordinary incremental-layout route without
--- expanding the older allocation tuple consumed by the Battle harness.
+-- expanding the older allocation tuple consumed by the allocation harness.
 function host:_readLayoutReuseProbe()
     local probe = rawget(self, "_allocationProbe")
     assert(probe and probe.mode == "pipeline",
@@ -2586,7 +2586,7 @@ function host:_readLayoutReuseProbe()
 end
 
 -- Selects the already-allocated quiet or rebuilt paint row for one draw.
--- This is private Battle-harness plumbing, not a component authoring API.
+-- This is private allocation-harness plumbing, not a component authoring API.
 function host:_setPaintAllocationCohort(rebuilt)
     local probe = rawget(self, "_allocationProbe")
     assert(probe and probe.mode == "pipeline",
@@ -2716,7 +2716,7 @@ function host:_attachRenderReplayCensus()
         "Render replay census needs ordinary actor-local scheduling enabled")
     assert(rawget(self, "_renderReplayOracle") == nil,
         "Render replay census is already attached")
-    local RenderReplayOracle = require("src.frogui.render_replay_oracle")
+    local RenderReplayOracle = require("frogui.render_replay_oracle")
     self._actorLocalEnabled = false
     self._actorLocal:reset()
     self._renderReplayOracle = RenderReplayOracle.new()
@@ -2936,16 +2936,7 @@ end
 -- Captures the application call site so reordered positional hooks fail at the
 -- owning component instead of silently receiving another hook's identity.
 local function hookSource()
-    if not debug or not debug.getinfo then return nil end
-    for level = 2, 14 do
-        local info = debug.getinfo(level, "Sl")
-        if not info then break end
-        local path = info.short_src or info.source
-        if path and not path:find("src/frogui/", 1, true) then
-            return { path = path, line = info.currentline }
-        end
-    end
-    return nil
+    return Element._sourceOutsideFrogUI()
 end
 
 -- Formats one hook call site for direct, actionable diagnostics.

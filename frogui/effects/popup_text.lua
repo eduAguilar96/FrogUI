@@ -1,8 +1,8 @@
 -- Defines one self-animating text effect with an explicit finite lifetime.
 
-local Clock = require("src.frogui.clock")
-local Element = require("src.frogui.element")
-local Juice = require("src.frogui.juice")
+local Clock = require("frogui.clock")
+local Element = require("frogui.element")
+local Juice = require("frogui.juice")
 
 local PopupTextLeaf = Element.primitive("PopupText")
 

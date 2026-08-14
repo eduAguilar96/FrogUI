@@ -115,7 +115,7 @@ local function copyCandidateComparisons(source)
 end
 
 -- Creates one disabled-by-default profiler. A fixed ring prevents the tool
--- itself from creating unbounded history during long Battle sessions.
+-- itself from creating unbounded history during long long-running sessions.
 function diagnostics.new(options)
     options = options or {}
     assert(type(options) == "table" and getmetatable(options) == nil,

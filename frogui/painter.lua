@@ -1,10 +1,10 @@
 -- Paints the committed resolved tree with generic primitive rendering and
 -- optional application painter overrides.
 
-local Effect = require("src.frogui.effects.runtime")
-local Shader = require("src.frogui.shader")
-local Canvas = require("src.frogui.canvas")
-local Interaction = require("src.frogui.interaction")
+local Effect = require("frogui.effects.runtime")
+local Shader = require("frogui.shader")
+local Canvas = require("frogui.canvas")
+local Interaction = require("frogui.interaction")
 
 local painter = {}
 
@@ -29,7 +29,7 @@ local function graphics()
     return love and love.graphics or nil
 end
 
--- Returns the preallocated row used only by the private Battle allocation
+-- Returns the preallocated row used only by the private allocation
 -- harness. Ordinary Hosts do not own a probe, so normal painting takes the
 -- single raw lookup and no diagnostic storage or snapshots.
 local function paintAllocationRow(host)

@@ -1,4 +1,4 @@
--- Provides deterministic clocks for motion, feedback, and later Battle
+-- Provides deterministic clocks for motion, feedback, and later animation
 -- playback. A clock moves only when its owner explicitly advances it.
 
 local clock = {}
@@ -33,7 +33,7 @@ function Clock:reset(time)
     return self._time
 end
 
--- Creates an independent clock. Hosts own a raw clock; Battle may pass
+-- Creates an independent clock. Hosts own a raw clock; callers may pass
 -- explicit playback and feedback clocks to recipes later.
 function clock.new(time)
     local self = setmetatable({ __frogClock = true, _time = 0 }, Clock)

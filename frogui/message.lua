@@ -1,24 +1,15 @@
 -- Defines stateful actor tokens, typed actions/events, declarative transitions,
 -- addressed views, and their validation rules.
 
-local Element = require("src.frogui.element")
-local Juice = require("src.frogui.juice")
+local Element = require("frogui.element")
+local Juice = require("frogui.juice")
 
 local message = {}
 
 local recordTokens = setmetatable({}, { __mode = "k" })
 
 local function sourceOutsideFrogUI()
-    if not debug or not debug.getinfo then return nil end
-    for level = 3, 14 do
-        local info = debug.getinfo(level, "Sl")
-        if not info then break end
-        local path = info.short_src or info.source
-        if path and not path:find("src/frogui/", 1, true) then
-            return { path = path, line = info.currentline }
-        end
-    end
-    return nil
+    return Element._sourceOutsideFrogUI()
 end
 
 local function denseArray(value, label)

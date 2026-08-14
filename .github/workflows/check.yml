@@ -1,0 +1,51 @@
+name: FrogUI checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  love-11-5:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LÖVE 11.5 and virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libfuse2 xvfb
+          curl --fail --location --output /tmp/love.AppImage \
+            https://github.com/love2d/love/releases/download/11.5/love-11.5-x86_64.AppImage
+          chmod +x /tmp/love.AppImage
+
+      - name: Headless contracts
+        run: xvfb-run --auto-servernum /tmp/love.AppImage . --headless
+
+      - name: Graphical contracts
+        run: xvfb-run --auto-servernum /tmp/love.AppImage . --graphical
+
+      - name: Nested vendor installation
+        run: |
+          mkdir -p /tmp/frogui-consumer/vendor/frogui /tmp/frogui-consumer/frogui_feature
+          rsync -a --exclude .git ./ /tmp/frogui-consumer/vendor/frogui/
+          cp tests/nested_consumer/conf.lua tests/nested_consumer/main.lua /tmp/frogui-consumer/
+          cp tests/nested_consumer/frogui_feature/probe.lua /tmp/frogui-consumer/frogui_feature/
+          cd /tmp/frogui-consumer/vendor/frogui
+          xvfb-run --auto-servernum /tmp/love.AppImage . --headless
+          xvfb-run --auto-servernum /tmp/love.AppImage . --graphical
+          cd /tmp/frogui-consumer
+          xvfb-run --auto-servernum /tmp/love.AppImage .
+
+      - name: Namespace and consumer-reference scan
+        run: |
+          legacy_module='src''.frogui'
+          ! grep -R --line-number --fixed-strings "require(\"${legacy_module}" frogui
+          ! grep -R --line-number -E 'src\.(game|presentation|ui)|require\("data' frogui tests/contracts
+
+      - name: Release tag consistency
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/.*string = "\([^"]*\)".*/\1/p' frogui/version.lua)
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          grep --fixed-strings "## [${version}]" CHANGELOG.md
