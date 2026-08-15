@@ -16,7 +16,11 @@ to another primitive. RadialDial treats small angular touch jitter as a tap;
 the left and right halves step backward and forward until a deliberate turn
 crosses its code-owned drag boundary. Settling never locks input: rapid taps
 emit every controlled value immediately, and accepted steps accumulate from
-the previous destination while the wheel catches up visually.
+the previous destination while the wheel catches up visually. Its `hitArea`
+is `circle` by default, matching the painted wheel. Set it to `bounds` only
+when a deliberately clipped wheel needs its entire arranged rectangle split
+into accessible left/right tap halves; nested controls still win their own
+overlapping input.
 
 Modal creates a root input-isolated surface. `dismiss` is `back`, `outside`,
 `both`, or `none`; only the top modal receives input. Closing restores focus to

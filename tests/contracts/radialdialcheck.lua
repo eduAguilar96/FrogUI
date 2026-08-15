@@ -45,6 +45,7 @@ local function surface(log, options)
         value = options.value or 1,
         values = values,
         disabled = options.disabled,
+        hitArea = options.hitArea,
         focusedBorder = options.focusedBorder,
         background = options.background,
         border = options.border,
@@ -209,6 +210,11 @@ local function validation()
         dragRadians = 0.01,
         option(1, 0.5), option(2, 1), option(3, 2),
     }, "unknown prop dragRadians")
+    rejects("unknown hit area", Frog.RadialDial {
+        value = 1, values = VALUES, onChange = function() end,
+        hitArea = "semicircle",
+        option(1, 0.5), option(2, 1), option(3, 2),
+    }, "RadialDial hitArea has unsupported value semicircle")
     rejects("asymmetric center", Frog.RadialDial {
         width = 240, height = 240, padding = { left = 20 },
         value = 1, values = VALUES, onChange = function() end,
@@ -232,6 +238,34 @@ local function validation()
         Frog.Box { key = "one", width = 20, height = 40 },
         Frog.Box { key = "two", width = 20, height = 40 },
     }, "keep every option child inside")
+end
+
+-- Circular hit ownership remains the safe default. A deliberately clipped
+-- wheel may explicitly expose its complete arranged bounds as a touch target.
+local function hitAreaContract()
+    local log = {}
+    local host, dial = mounted(log)
+    local cornerX, cornerY = dial.layout.x + 1, dial.layout.y + 1
+    assert(not host:pointerDown(cornerX, cornerY, "touch", 1),
+        "default RadialDial claimed its unpainted square corner")
+    host:unmount()
+
+    log = {}
+    host, dial = mounted(log, { hitArea = "bounds" })
+    cornerX, cornerY = dial.layout.x + 1, dial.layout.y + 1
+    assert(host:pointerDown(cornerX, cornerY, "touch", 1),
+        "bounds RadialDial rejected its arranged corner")
+    assert(host:pointerUp(cornerX, cornerY, "touch", 1),
+        "bounds RadialDial rejected its corner release")
+    assert(#log == 1 and log[1] == 0.5,
+        "bounds RadialDial did not step from its left half")
+
+    host:setInspectorVisible(true)
+    local selected = host:inspect(cornerX, cornerY)
+    assert(selected and selected.testId == "radial-dial"
+            and selected.inspectionShape == nil,
+        "F6 did not expose the bounds RadialDial as a rectangular hit area")
+    host:unmount()
 end
 
 local function dialGeometry(node)
@@ -818,6 +852,7 @@ end
 
 function check.run()
     validation()
+    hitAreaContract()
     stableRootRef()
     previewAndDeadZone()
     branchCrossing()

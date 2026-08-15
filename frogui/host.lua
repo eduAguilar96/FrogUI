@@ -163,7 +163,7 @@ local TYPE_PROPS = {
     HorizontalSwipe = { onSwipe = true, onPress = true },
     RadialDial = {
         value = true, values = true, onChange = true, disabled = true,
-        trackRadius = true, sound = true, spinSound = true,
+        trackRadius = true, hitArea = true, sound = true, spinSound = true,
         background = true, border = true, borderWidth = true,
         focusedBorder = true,
     },
@@ -206,6 +206,7 @@ local VALIDATION_VALUES = {
     shaderFallback = { "plain", "hidden" },
     shaderBlend = { "alpha", "add" },
     scrollAxis = { "vertical", "horizontal" },
+    radialHitArea = { "circle", "bounds" },
     modalDismiss = { "back", "outside", "both", "none" },
 }
 
@@ -1166,6 +1167,8 @@ local function validatePrimitiveProps(self, name, props, probe)
         validateNumber(props.trackRadius, "RadialDial trackRadius")
         assert(props.trackRadius == nil or props.trackRadius > 0,
             "RadialDial trackRadius must be positive")
+        oneOf(props.hitArea, VALIDATION_VALUES.radialHitArea,
+            "RadialDial hitArea")
         validateSound(props.sound, "RadialDial sound")
         validateSound(props.spinSound, "RadialDial spinSound")
     elseif name == "Scroll" then
@@ -1336,6 +1339,11 @@ end
 local function inside(node, x, y)
     local localX, localY = Motion.localPoint(node, x, y)
     if node.type == "RadialDial" then
+        if node.props.hitArea == "bounds" then
+            return localX >= node.layout.x and localY >= node.layout.y
+                and localX <= node.layout.x + node.layout.width
+                and localY <= node.layout.y + node.layout.height
+        end
         local centerX = node.layout.x + node.layout.width / 2
         local centerY = node.layout.y + node.layout.height / 2
         local dx, dy = localX - centerX, localY - centerY
@@ -1460,12 +1468,14 @@ local function nodeEntry(node, depth, visibleBounds)
         }
     elseif node.type == "RadialDial" then
         local visual = Interaction.radialPresentation(node)
-        local circle = inspectionCircle(node)
-        entry.inspectionShape = {
-            type = "circle",
-            center = deepCopy(circle.center),
-            radius = circle.radius,
-        }
+        if node.props.hitArea ~= "bounds" then
+            local circle = inspectionCircle(node)
+            entry.inspectionShape = {
+                type = "circle",
+                center = deepCopy(circle.center),
+                radius = circle.radius,
+            }
+        end
         entry.radialDial = {
             value = node._radialDial.value,
             values = deepCopy(node._radialDial.values),

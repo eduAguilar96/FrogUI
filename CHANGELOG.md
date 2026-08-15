@@ -8,6 +8,9 @@ in beta.
 
 ### Added
 
+- RadialDial now accepts an explicit `hitArea = "bounds"` accessibility mode
+  for deliberately clipped wheels; the painted circular hit area remains the
+  default.
 - A continuous finite `Frog.pulse` recipe for symmetric out-and-back recoil,
   squash, and emphasis without hand-joined tween seams.
 - Brightness-preserving `recolor` recipes for Projectile, Flipbook, and

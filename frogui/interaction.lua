@@ -303,6 +303,7 @@ local POINTER_TYPES = {
 }
 
 local function radialInside(node, x, y)
+    if node.props.hitArea == "bounds" then return true end
     local localX, localY = Motion.localPoint(node, x, y)
     local centerX, centerY = node.layout.x + node.layout.width / 2, node.layout.y + node.layout.height / 2
     local dx, dy = localX - centerX, localY - centerY

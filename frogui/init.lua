@@ -595,6 +595,9 @@ local Version = require("frogui.version")
 --- every option footprint around the track.
 ---@field trackRadius? number Visual-only positive radius for option centers;
 --- every option footprint must remain inside the arranged circle.
+---@field hitArea? 'circle'|'bounds' Pointer shape; `circle` is the default and
+--- matches the painted wheel. Use `bounds` when a deliberately clipped wheel
+--- needs its complete arranged rectangle to remain an accessible tap target.
 ---@field sound? FrogUISoundCue Terminal settle cue; defaults to
 --- theme.sounds.dialCommit.
 ---@field spinSound? FrogUISoundCue First drag-threshold crossing cue; defaults
@@ -827,6 +830,8 @@ Frog.HorizontalSwipe = Element.primitive("HorizontalSwipe")
 --- calls `onChange(value)` once. A pointer that starts exactly at center and
 --- never becomes a drag is silent, as is cancellation. `padding` and direct
 --- option `offset` are rejected so the circular center stays unambiguous.
+--- `hitArea` is `circle` by default or `bounds` for a clipped wheel whose
+--- complete arranged rectangle should remain tappable.
 --- Source-ordered Button shortcuts win before the focused dial fallback.
 ---@type fun(input:FrogRadialDialProps):FrogUIElementDescription
 Frog.RadialDial = Element.primitive("RadialDial")
