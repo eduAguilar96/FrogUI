@@ -898,6 +898,12 @@ Frog.events = Interaction.events
 -- reactions decide when the Host plays them.
 Frog.tween = Juice.tween
 Frog.spring = Juice.spring
+---@class FrogPulseSpec
+---@field to table Presentation targets reached at the midpoint, then released.
+---@field duration number Non-negative total out-and-back lifetime.
+---@field exponent? number Positive symmetric curve exponent; defaults to 1.
+---@type fun(spec:FrogPulseSpec):table
+Frog.pulse = Juice.pulse
 ---@class FrogShakeSpec
 ---@field x? number Peak additive horizontal displacement.
 ---@field y? number Peak additive vertical displacement.

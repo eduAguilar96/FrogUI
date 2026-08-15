@@ -119,6 +119,8 @@ function interaction.reconcileRadialDial(old, node, props, identity, reducedMoti
     local signature = radialSignature(values)
     local compatible = old and old.signature == signature
     local controlledChanged = compatible and old.value ~= props.value
+    local internalCommit = controlledChanged and old.pendingCommit
+        and old.pendingCommit.value == props.value
     local instance = compatible and copyRadial(old) or {
         angle = radialAngle(index, #values),
         bounce = 0,
@@ -128,13 +130,17 @@ function interaction.reconcileRadialDial(old, node, props, identity, reducedMoti
     instance.values = values
     instance.value = props.value
     instance.index = assert(index, "RadialDial value must occur in values")
-    instance.targetAngle = radialTarget(instance.angle, index, #values)
+    -- Tap/key commits may arrive several steps ahead of the painted wheel.
+    -- Continue those discrete inputs from the last destination; a drag or
+    -- external controlled jump still chooses from its truthful visual angle.
+    local queuedStep = internalCommit
+        and old.pendingCommit.restartBounce == true
+    local targetBase = queuedStep and old.targetAngle or instance.angle
+    instance.targetAngle = radialTarget(targetBase, index, #values)
     instance.previewAngle = nil
     instance.node = node
     instance.reducedMotion = reducedMotion == true
     if controlledChanged then
-        local internalCommit = instance.pendingCommit
-            and instance.pendingCommit.value == props.value
         if not internalCommit or instance.pendingCommit.restartBounce then
             instance.bounce = reducedMotion and 0 or 1
         end
@@ -450,9 +456,16 @@ end
 
 local function armRadialSettle(host, node, restartBounce)
     local dial = node._radialDial
-    dial.angle = dial.previewAngle or dial.angle
+    local previewAngle = dial.previewAngle
+    dial.angle = previewAngle or dial.angle
     dial.previewAngle = nil
-    dial.targetAngle = radialTarget(dial.angle, dial.index, #dial.values)
+    -- A tap/key has no preview to cancel and may already be settling toward a
+    -- prior accepted step. Preserve that destination until its controlled
+    -- owner accepts the next value. Drag release starts from its preview.
+    if previewAngle ~= nil then
+        dial.targetAngle = radialTarget(dial.angle,
+            dial.index, #dial.values)
+    end
     if restartBounce then dial.bounce = host.reducedMotion and 0 or 1 end
     if host.reducedMotion then dial.angle = dial.targetAngle end
     refreshRadial(host, node, "settle")

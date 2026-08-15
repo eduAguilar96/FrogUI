@@ -694,6 +694,38 @@ local function settleAndFault()
     host:unmount()
 end
 
+-- Rapid controlled taps remain distinct inputs even while the visual wheel is
+-- still settling. Each accepted value extends the prior destination instead
+-- of choosing a new shortest path from the lagging painted angle.
+local function rapidControlledSteps()
+    local log = {}
+    local host = support.host { width = 540, height = 960 }
+    host:mount(ControlledDial { log = log })
+    local initial = assert(inspectionEntry(host)).radialDial
+    local initialAngle = initial.angle
+    local step = math.pi * 2 / #VALUES
+
+    for index = 1, 3 do
+        local dial = assert(support.find(host:tree(), "radial-dial"))
+        local centerX, centerY, radius = dialGeometry(dial)
+        assert(host:pointerDown(centerX + radius * 0.7,
+            centerY, "rapid-touch", 1),
+            "rapid RadialDial tap rejected pointer down")
+        assert(host:pointerUp(centerX + radius * 0.7,
+            centerY, "rapid-touch", 1),
+            "rapid RadialDial tap rejected pointer up")
+    end
+
+    assert(#log == 3 and log[1] == 2 and log[2] == 0.5 and log[3] == 1,
+        "rapid RadialDial taps were blocked, collapsed, or reordered")
+    local settled = assert(inspectionEntry(host)).radialDial
+    support.near(settled.angle, initialAngle,
+        "rapid RadialDial taps advanced without raw time")
+    support.near(settled.targetAngle, initialAngle - step * 3,
+        "rapid RadialDial taps did not accumulate authored steps")
+    host:unmount()
+end
+
 local function soundAndCallbackFailure()
     local sounds, log = {}, {}
     local host, dial = mounted(log, nil, {
@@ -794,6 +826,7 @@ function check.run()
     keyboardPriority()
     focusedPaint()
     settleAndFault()
+    rapidControlledSteps()
     soundAndCallbackFailure()
 end
 

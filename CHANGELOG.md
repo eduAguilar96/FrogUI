@@ -8,6 +8,8 @@ in beta.
 
 ### Added
 
+- A continuous finite `Frog.pulse` recipe for symmetric out-and-back recoil,
+  squash, and emphasis without hand-joined tween seams.
 - Brightness-preserving `recolor` recipes for Projectile, Flipbook, and
   asset-backed ParticleBurst effects, with an authored multiplicative-tint
   fallback when the device cannot compile the built-in shader.
@@ -19,6 +21,8 @@ in beta.
 
 - RadialDial now tolerates incidental angular touch jitter before promoting a
   left/right tap into a drag preview.
+- Rapid controlled RadialDial steps now accumulate while the wheel is settling;
+  visual animation no longer reverses or erases accepted taps.
 - Quiet ParticleBurst reconciliation now shares unchanged particle catalogs
   transactionally instead of deep-copying them.
 - Resolved-tree finalization no longer creates empty fallback collections for

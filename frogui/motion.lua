@@ -196,7 +196,8 @@ end
 
 local function duration(recipe)
     local kind = recipe.kind
-    if kind == "tween" or kind == "shake" or kind == "delay" then
+    if kind == "tween" or kind == "pulse"
+            or kind == "shake" or kind == "delay" then
         return recipe.duration
     elseif kind == "spring" then
         return math.max(0.1, 7 / (recipe.frequency * recipe.damping))
@@ -226,7 +227,7 @@ end
 local function writtenProperties(recipe, out)
     out = out or {}
     local kind = recipe.kind
-    if kind == "tween" or kind == "spring" then
+    if kind == "tween" or kind == "spring" or kind == "pulse" then
         for name in pairs(recipe.to) do out[name] = "replace" end
     elseif kind == "shake" then
         if recipe.x ~= 0 then out.x = out.x or "add" end
@@ -318,6 +319,16 @@ sampleInto = function(analysis, elapsed, base, out, scratch, depth)
         local amount = recipe.duration == 0 and 1
             or math.min(1, math.max(0, elapsed / recipe.duration))
         amount = eased(recipe.ease, amount)
+        for name, target in pairs(recipe.to) do
+            lerpBufferedValue(values, name, values[name], target, amount)
+        end
+    elseif kind == "pulse" then
+        local amount = 0
+        if recipe.duration > 0 and elapsed < recipe.duration then
+            local progress = math.min(1,
+                math.max(0, elapsed / recipe.duration))
+            amount = math.sin(math.pi * progress) ^ recipe.exponent
+        end
         for name, target in pairs(recipe.to) do
             lerpBufferedValue(values, name, values[name], target, amount)
         end

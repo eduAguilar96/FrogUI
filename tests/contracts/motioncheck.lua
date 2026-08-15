@@ -100,6 +100,9 @@ local function constructorAndClockContracts()
     expectError(function() Frog.shake { x = "six" } end, "x must be finite")
     expectError(function() Frog.shake { scale = 0.1, damping = 0 } end,
         "damping must be a finite positive")
+    expectError(function()
+        Frog.pulse { to = { x = 4 }, duration = 0.2, exponent = 0 }
+    end, "exponent must be a finite positive")
     expectError(function() Frog.loop(Frog.delay(1), 10001) end, "at most 10000")
     expectError(function()
         support.host { feedback = { vibration = function() end } }
@@ -183,6 +186,65 @@ local function constructorAndClockContracts()
     }
     assert(pulse.kind == "sequence" and flash.kind == "sequence",
         "pulse/flash did not remain readable named compositions")
+end
+
+-- Proves Pulse is one continuous symmetric out-and-back recipe whose terminal
+-- pose is exactly its starting pose, including under reduced motion.
+local function pulseContract()
+    local clock = Frog.clock()
+    local host = support.host { width = 540, height = 960 }
+    host:mount(Frog.Motion {
+        testId = "pulse",
+        width = 20,
+        height = 20,
+        juice = { recoil = { key = 1, recipe = Frog.withClock(clock,
+            Frog.pulse {
+                to = { x = 40, scaleX = 0.7, scaleY = 1.2 },
+                duration = 0.4,
+                exponent = 0.65,
+            }) } },
+        Frog.Box { width = 20, height = 20 },
+    })
+    local node = assert(support.find(host:tree(), "pulse"))
+    local quarterAmount = math.sin(math.pi * 0.25) ^ 0.65
+    clock:advance(0.1)
+    host:update(0)
+    support.near(node.presentation.x, 40 * quarterAmount,
+        "pulse first quarter")
+    clock:advance(0.1)
+    host:update(0)
+    support.near(node.presentation.x, 40, "pulse midpoint")
+    support.near(node.presentation.scaleX, 0.7, "pulse midpoint scaleX")
+    clock:advance(0.1)
+    host:update(0)
+    support.near(node.presentation.x, 40 * quarterAmount,
+        "pulse mirrored third quarter")
+    clock:advance(0.1)
+    host:update(0)
+    support.near(node.presentation.x, 0, "pulse terminal x")
+    support.near(node.presentation.scaleX, 1, "pulse terminal scaleX")
+    support.near(node.presentation.scaleY, 1, "pulse terminal scaleY")
+    assert(next(node._motion.active) == nil,
+        "pulse retained a finished Motion runner")
+    host:unmount()
+
+    local reduced = support.host {
+        width = 540, height = 960, reducedMotion = true,
+    }
+    reduced:mount(Frog.Motion {
+        testId = "reduced-pulse",
+        width = 20,
+        height = 20,
+        juice = { recoil = Frog.pulse {
+            to = { x = 40 }, duration = 0.4,
+        } },
+        Frog.Box { width = 20, height = 20 },
+    })
+    node = assert(support.find(reduced:tree(), "reduced-pulse"))
+    support.near(node.presentation.x, 0, "reduced pulse terminal x")
+    assert(next(node._motion.active) == nil,
+        "reduced pulse retained a Motion runner")
+    reduced:unmount()
 end
 
 -- Proves recipe completion is terminal, exactly once, and shares keyed motion
@@ -1863,6 +1925,7 @@ end
 
 function check.run()
     constructorAndClockContracts()
+    pulseContract()
     deterministicClockAndNoRerender()
     cachedCommittedTransforms()
     transformLocalityAttribution()

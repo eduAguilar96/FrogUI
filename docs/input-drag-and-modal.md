@@ -14,7 +14,9 @@ Scroll, HorizontalSwipe, RadialDial, presses, and drag participate in explicit
 gesture arbitration. Once a gesture claims a pointer, ownership does not jump
 to another primitive. RadialDial treats small angular touch jitter as a tap;
 the left and right halves step backward and forward until a deliberate turn
-crosses its code-owned drag boundary.
+crosses its code-owned drag boundary. Settling never locks input: rapid taps
+emit every controlled value immediately, and accepted steps accumulate from
+the previous destination while the wheel catches up visually.
 
 Modal creates a root input-isolated surface. `dismiss` is `back`, `outside`,
 `both`, or `none`; only the top modal receives input. Closing restores focus to

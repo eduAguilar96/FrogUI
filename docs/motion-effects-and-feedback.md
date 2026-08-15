@@ -1,8 +1,8 @@
 # Motion, effects, and feedback
 
-Juice recipes are inert declarative data: tween, spring, shake, delay,
-sequence, parallel, loop, sound, and haptic. Bind them by name to a primitive or
-play them from a typed reaction. A stable key starts one finite lifetime;
+Juice recipes are inert declarative data: tween, spring, pulse, shake, delay,
+sequence, parallel, loop, sound, and haptic. Bind them by name to a primitive
+or play them from a typed reaction. A stable key starts one finite lifetime;
 replacement or unmount cancels stale completion.
 
 Motion wraps one child and applies translation, rotation, scale, opacity, tint,
@@ -16,6 +16,13 @@ an exponential `exp(-damping * time)` envelope for authored spring-like
 responses whose exact frequency and residual energy matter. Set
 `coherent = true` when every declared channel must follow that same wave;
 ordinary shakes offset vertical and rotation phases to avoid rigid movement.
+
+`Frog.pulse { to = {...}, duration = seconds }` moves from the current pose to
+the declared midpoint pose and back to the exact starting pose along one
+continuous symmetric curve. Use `exponent` to shape both halves together; a
+value below 1 reaches readable displacement quickly and lingers near its peak.
+Pulse is the direct fit for recoil, squash, and one-shot emphasis that must not
+leave a terminal transform or expose two hand-joined tweens in component code.
 
 EffectLayer is a non-interactive plane for PopupText, Projectile, Flipbook,
 ParticleBurst, or bounded Canvas leaves. Effects use stable keys, explicit

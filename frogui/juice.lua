@@ -98,6 +98,19 @@ function juice.spring(spec)
     })
 end
 
+-- Moves declared presentation properties out and back along one continuous
+-- finite pulse. The optional exponent shapes its rise and return symmetrically.
+function juice.pulse(spec)
+    assert(type(spec) == "table", "Frog.pulse expects a table")
+    onlyFields(spec, { to = true, duration = true, exponent = true },
+        "Frog.pulse")
+    return recipe("pulse", {
+        to = properties(spec.to, "Frog.pulse.to"),
+        duration = positive(spec.duration, "Frog.pulse duration", true),
+        exponent = positive(spec.exponent or 1, "Frog.pulse exponent"),
+    })
+end
+
 -- Adds a decaying deterministic impact displacement, then returns to rest.
 function juice.shake(spec)
     spec = spec or {}
