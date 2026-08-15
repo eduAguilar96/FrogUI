@@ -898,6 +898,16 @@ Frog.events = Interaction.events
 -- reactions decide when the Host plays them.
 Frog.tween = Juice.tween
 Frog.spring = Juice.spring
+---@class FrogShakeSpec
+---@field x? number Peak additive horizontal displacement.
+---@field y? number Peak additive vertical displacement.
+---@field rotation? number Peak additive rotation in radians.
+---@field scale? number Peak additive uniform-scale displacement.
+---@field duration? number Non-negative lifetime; defaults to 0.15 seconds.
+---@field frequency? number Positive cycles per second; defaults to 24.
+---@field damping? number Positive exponential damping coefficient. When
+--- omitted, the shake uses its ordinary finite quadratic envelope.
+---@type fun(spec?:FrogShakeSpec):table
 Frog.shake = Juice.shake
 Frog.sound = Juice.sound
 Frog.haptic = Juice.haptic

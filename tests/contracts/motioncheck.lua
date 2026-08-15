@@ -98,6 +98,8 @@ local function constructorAndClockContracts()
     support.near(clock:reset(0.5), 0.5, "clock reset")
     expectError(function() clock:advance(-1) end, "non-negative")
     expectError(function() Frog.shake { x = "six" } end, "x must be finite")
+    expectError(function() Frog.shake { scale = 0.1, damping = 0 } end,
+        "damping must be a finite positive")
     expectError(function() Frog.loop(Frog.delay(1), 10001) end, "at most 10000")
     expectError(function()
         support.host { feedback = { vibration = function() end } }
@@ -323,6 +325,33 @@ local function deterministicClockAndNoRerender()
     support.near(one.boundsX, split.boundsX, "dt-partition bounds")
     assert(one.x > 9.9 and one.x < 10.1 and one.boundsX > one.restX,
         "explicit clock did not drive transform without layout movement")
+
+    local dampedClock = Frog.clock()
+    local damped = support.host { width = 540, height = 960 }
+    damped:mount(Frog.Motion {
+        testId = "damped-shake",
+        width = 20,
+        height = 20,
+        juice = { pulse = { key = 1, recipe = Frog.withClock(dampedClock,
+            Frog.shake {
+                x = 3,
+                scale = 0.10,
+                duration = 0.5,
+                frequency = 10,
+                damping = 7,
+            }) } },
+        Frog.Box { width = 20, height = 20 },
+    })
+    local peakTime = 1 / 40
+    dampedClock:advance(peakTime)
+    damped:update(0)
+    local dampedNode = assert(support.find(damped:tree(), "damped-shake"))
+    local envelope = math.exp(-7 * peakTime)
+    support.near(dampedNode.presentation.x, 3 * envelope,
+        "exponentially damped shake translation")
+    support.near(dampedNode.presentation.scale, 1 + 0.10 * envelope,
+        "exponentially damped shake scale")
+    damped:unmount()
 
     local renders = 0
     -- Counts component renders while raw-clock updates animate its child.

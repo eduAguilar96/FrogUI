@@ -232,6 +232,7 @@ local function writtenProperties(recipe, out)
         if recipe.x ~= 0 then out.x = out.x or "add" end
         if recipe.y ~= 0 then out.y = out.y or "add" end
         if recipe.rotation ~= 0 then out.rotation = out.rotation or "add" end
+        if recipe.scale ~= 0 then out.scale = out.scale or "add" end
     elseif kind == "sequence" or kind == "parallel" then
         for _, child in ipairs(recipe.recipes) do writtenProperties(child, out) end
     elseif kind == "loop" or kind == "with_clock" then
@@ -335,12 +336,16 @@ sampleInto = function(analysis, elapsed, base, out, scratch, depth)
     elseif kind == "shake" then
         if recipe.duration > 0 and elapsed < recipe.duration then
             local progress = math.max(0, elapsed) / recipe.duration
-            local envelope = (1 - progress) * (1 - progress)
+            local envelope = recipe.damping
+                and math.exp(-recipe.damping * math.max(0, elapsed))
+                or (1 - progress) * (1 - progress)
             local phase = math.max(0, elapsed) * recipe.frequency * math.pi * 2
             values.x = values.x + math.sin(phase) * recipe.x * envelope
             values.y = values.y + math.sin(phase * 1.17 + 1.3) * recipe.y * envelope
             values.rotation = values.rotation
                 + math.sin(phase * 0.83 + 2.1) * recipe.rotation * envelope
+            values.scale = values.scale
+                + math.sin(phase) * recipe.scale * envelope
         end
     elseif kind == "sequence" then
         local remaining = math.max(0, elapsed)

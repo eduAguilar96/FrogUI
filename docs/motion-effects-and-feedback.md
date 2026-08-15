@@ -10,6 +10,11 @@ and pivot without changing layout. Explicit clocks allow the consumer to state
 pause and playback-speed policy. Reduced motion settles visual recipes while
 preserving required terminal completion.
 
+`Frog.shake` adds finite translation, rotation, or uniform-scale oscillation.
+Its ordinary envelope eases to rest over `duration`; supplying `damping` uses
+an exponential `exp(-damping * time)` envelope for authored spring-like
+responses whose exact frequency and residual energy matter.
+
 EffectLayer is a non-interactive plane for PopupText, Projectile, Flipbook,
 ParticleBurst, or bounded Canvas leaves. Effects use stable keys, explicit
 clocks, committed refs or layer-local points, and terminal callbacks. A particle

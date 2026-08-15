@@ -103,10 +103,10 @@ function juice.shake(spec)
     spec = spec or {}
     assert(type(spec) == "table", "Frog.shake expects a table")
     onlyFields(spec, {
-        x = true, y = true, rotation = true,
-        duration = true, frequency = true,
+        x = true, y = true, rotation = true, scale = true,
+        duration = true, frequency = true, damping = true,
     }, "Frog.shake")
-    for _, name in ipairs({ "x", "y", "rotation" }) do
+    for _, name in ipairs({ "x", "y", "rotation", "scale" }) do
         assert(spec[name] == nil or finite(spec[name]),
             "Frog.shake " .. name .. " must be finite")
     end
@@ -114,8 +114,11 @@ function juice.shake(spec)
         x = spec.x or 0,
         y = spec.y or 0,
         rotation = spec.rotation or 0,
+        scale = spec.scale or 0,
         duration = positive(spec.duration or 0.15, "Frog.shake duration", true),
         frequency = positive(spec.frequency or 24, "Frog.shake frequency"),
+        damping = spec.damping == nil and nil
+            or positive(spec.damping, "Frog.shake damping"),
     })
 end
 
