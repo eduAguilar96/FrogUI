@@ -1468,8 +1468,10 @@ local function nodeEntry(node, depth, visibleBounds)
         }
     elseif node.type == "RadialDial" then
         local visual = Interaction.radialPresentation(node)
+        -- Visual orbit/dead-zone diagnostics remain circular even when the
+        -- owning pointer surface explicitly exposes rectangular bounds.
+        local circle = inspectionCircle(node)
         if node.props.hitArea ~= "bounds" then
-            local circle = inspectionCircle(node)
             entry.inspectionShape = {
                 type = "circle",
                 center = deepCopy(circle.center),

@@ -51,7 +51,7 @@ local DIAGNOSTIC_PROP_FAMILIES = {
         onScrollEnd = true, onDismiss = true, onDrop = true,
         onDragStart = true, onDragEnd = true, onSwipe = true,
         disabled = true, selected = true, shortcut = true, value = true,
-        values = true, axis = true, scrollPosition = true,
+        values = true, hitArea = true, axis = true, scrollPosition = true,
         snapInterval = true, dismiss = true, allowChrome = true,
         payload = true, preview = true, accepts = true, address = true,
         ref = true,

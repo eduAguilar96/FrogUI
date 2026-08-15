@@ -549,8 +549,44 @@ local function candidateComparisonAttribution()
     faultHost:unmount()
 end
 
+-- Proves RadialDial's pointer-shape policy participates in the interaction
+-- comparison family without pretending that it changes layout or paint.
+local function radialHitAreaAttribution()
+    local function description(hitArea)
+        return Frog.RadialDial {
+            width = 80,
+            height = 80,
+            trackRadius = 20,
+            hitArea = hitArea,
+            value = 1,
+            values = { 1, 2 },
+            onChange = function() end,
+            Frog.Box { key = "one", width = 20, height = 20 },
+            Frog.Box { key = "two", width = 20, height = 20 },
+        }
+    end
+    local host = support.host {
+        width = 120, height = 120, diagnostics = true,
+    }
+    host:mount(description("circle"))
+    host:clearDiagnostics()
+    host:render(description("bounds"))
+    host:update(0)
+    host:draw({})
+    local comparison = assert(
+        onlyTrace(host).candidateComparisons[1],
+        "RadialDial hit-area rebuild omitted candidate comparison")
+    assert(comparison.changed.interaction == 1
+            and comparison.changed.layout == 0
+            and comparison.changed.paint == 0
+            and comparison.changed.retained == 0,
+        "RadialDial hitArea escaped its diagnostic interaction family")
+    host:unmount()
+end
+
 function check.run()
     candidateComparisonAttribution()
+    radialHitAreaAttribution()
     transformAndRefAttribution()
     local host = support.host {
         width = 120,

@@ -22,6 +22,9 @@ in beta.
 
 ### Changed
 
+- RadialDial `hitArea` changes now participate in opt-in diagnostic interaction
+  attribution instead of failing the public-prop classification gate, while
+  its visual orbit metadata remains available in rectangular hit-area mode.
 - RadialDial now tolerates incidental angular touch jitter before promoting a
   left/right tap into a drag preview.
 - Rapid controlled RadialDial steps now accumulate while the wheel is settling;
