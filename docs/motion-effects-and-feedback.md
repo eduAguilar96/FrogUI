@@ -13,7 +13,9 @@ preserving required terminal completion.
 `Frog.shake` adds finite translation, rotation, or uniform-scale oscillation.
 Its ordinary envelope eases to rest over `duration`; supplying `damping` uses
 an exponential `exp(-damping * time)` envelope for authored spring-like
-responses whose exact frequency and residual energy matter.
+responses whose exact frequency and residual energy matter. Set
+`coherent = true` when every declared channel must follow that same wave;
+ordinary shakes offset vertical and rotation phases to avoid rigid movement.
 
 EffectLayer is a non-interactive plane for PopupText, Projectile, Flipbook,
 ParticleBurst, or bounded Canvas leaves. Effects use stable keys, explicit

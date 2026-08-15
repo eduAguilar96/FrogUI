@@ -907,6 +907,8 @@ Frog.spring = Juice.spring
 ---@field frequency? number Positive cycles per second; defaults to 24.
 ---@field damping? number Positive exponential damping coefficient. When
 --- omitted, the shake uses its ordinary finite quadratic envelope.
+---@field coherent? boolean Use one phase for every authored channel. By
+--- default vertical and rotation channels use offsets to avoid rigid motion.
 ---@type fun(spec?:FrogShakeSpec):table
 Frog.shake = Juice.shake
 Frog.sound = Juice.sound

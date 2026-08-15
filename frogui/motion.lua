@@ -340,10 +340,14 @@ sampleInto = function(analysis, elapsed, base, out, scratch, depth)
                 and math.exp(-recipe.damping * math.max(0, elapsed))
                 or (1 - progress) * (1 - progress)
             local phase = math.max(0, elapsed) * recipe.frequency * math.pi * 2
+            local yPhase = recipe.coherent and phase
+                or phase * 1.17 + 1.3
+            local rotationPhase = recipe.coherent and phase
+                or phase * 0.83 + 2.1
             values.x = values.x + math.sin(phase) * recipe.x * envelope
-            values.y = values.y + math.sin(phase * 1.17 + 1.3) * recipe.y * envelope
+            values.y = values.y + math.sin(yPhase) * recipe.y * envelope
             values.rotation = values.rotation
-                + math.sin(phase * 0.83 + 2.1) * recipe.rotation * envelope
+                + math.sin(rotationPhase) * recipe.rotation * envelope
             values.scale = values.scale
                 + math.sin(phase) * recipe.scale * envelope
         end

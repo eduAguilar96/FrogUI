@@ -335,10 +335,12 @@ local function deterministicClockAndNoRerender()
         juice = { pulse = { key = 1, recipe = Frog.withClock(dampedClock,
             Frog.shake {
                 x = 3,
+                rotation = 0.07,
                 scale = 0.10,
                 duration = 0.5,
                 frequency = 10,
                 damping = 7,
+                coherent = true,
             }) } },
         Frog.Box { width = 20, height = 20 },
     })
@@ -349,6 +351,8 @@ local function deterministicClockAndNoRerender()
     local envelope = math.exp(-7 * peakTime)
     support.near(dampedNode.presentation.x, 3 * envelope,
         "exponentially damped shake translation")
+    support.near(dampedNode.presentation.rotation, 0.07 * envelope,
+        "coherent damped shake rotation")
     support.near(dampedNode.presentation.scale, 1 + 0.10 * envelope,
         "exponentially damped shake scale")
     damped:unmount()

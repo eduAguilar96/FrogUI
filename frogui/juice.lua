@@ -104,11 +104,17 @@ function juice.shake(spec)
     assert(type(spec) == "table", "Frog.shake expects a table")
     onlyFields(spec, {
         x = true, y = true, rotation = true, scale = true,
-        duration = true, frequency = true, damping = true,
+        duration = true, frequency = true, damping = true, coherent = true,
     }, "Frog.shake")
     for _, name in ipairs({ "x", "y", "rotation", "scale" }) do
         assert(spec[name] == nil or finite(spec[name]),
             "Frog.shake " .. name .. " must be finite")
+    end
+    assert(spec.coherent == nil or type(spec.coherent) == "boolean",
+        "Frog.shake coherent must be a boolean")
+    local damping
+    if spec.damping ~= nil then
+        damping = positive(spec.damping, "Frog.shake damping")
     end
     return recipe("shake", {
         x = spec.x or 0,
@@ -117,8 +123,8 @@ function juice.shake(spec)
         scale = spec.scale or 0,
         duration = positive(spec.duration or 0.15, "Frog.shake duration", true),
         frequency = positive(spec.frequency or 24, "Frog.shake frequency"),
-        damping = spec.damping == nil and nil
-            or positive(spec.damping, "Frog.shake damping"),
+        damping = damping,
+        coherent = spec.coherent == true,
     })
 end
 

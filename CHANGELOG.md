@@ -11,8 +11,9 @@ in beta.
 - Brightness-preserving `recolor` recipes for Projectile, Flipbook, and
   asset-backed ParticleBurst effects, with an authored multiplicative-tint
   fallback when the device cannot compile the built-in shader.
-- Optional scale amplitude and exponential damping for `Frog.shake`, allowing
-  exact finite spring-like feedback without application frame callbacks.
+- Optional scale amplitude, exponential damping, and coherent-channel sampling
+  for `Frog.shake`, allowing exact finite spring-like feedback without
+  application frame callbacks.
 
 ### Changed
 
