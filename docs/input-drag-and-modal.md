@@ -12,7 +12,9 @@ status. Domain validation and persistence remain in the consumer callback.
 
 Scroll, HorizontalSwipe, RadialDial, presses, and drag participate in explicit
 gesture arbitration. Once a gesture claims a pointer, ownership does not jump
-to another primitive.
+to another primitive. RadialDial treats small angular touch jitter as a tap;
+the left and right halves step backward and forward until a deliberate turn
+crosses its code-owned drag boundary.
 
 Modal creates a root input-isolated surface. `dismiss` is `back`, `outside`,
 `both`, or `none`; only the top modal receives input. Closing restores focus to

@@ -14,6 +14,8 @@ in beta.
 
 ### Changed
 
+- RadialDial now tolerates incidental angular touch jitter before promoting a
+  left/right tap into a drag preview.
 - Quiet ParticleBurst reconciliation now shares unchanged particle catalogs
   transactionally instead of deep-copying them.
 - Resolved-tree finalization no longer creates empty fallback collections for

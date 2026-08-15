@@ -41,7 +41,10 @@ local HORIZONTAL_SWIPE = {
 -- RadialDial owns angular preview internally. Callers provide only controlled
 -- values and receive one settled numeric value after release/key activation.
 local RADIAL_DIAL = {
-    dragRadians = 0.10,
+    -- Touch taps often report a few pixels of angular drift. Keep that
+    -- incidental movement in the tapped half; a deliberate wheel turn must
+    -- cross this larger angular boundary before it becomes a drag preview.
+    dragRadians = 0.20,
     deadZoneRatio = 0.12,
     settleSpeed = 10,
     bounceAmplitude = 0.05,

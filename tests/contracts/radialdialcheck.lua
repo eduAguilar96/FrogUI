@@ -8,7 +8,7 @@ local check = {}
 local VALUES = { 0.5, 1, 2 }
 local POLICY = Interaction.radialDialPolicy()
 
-assert(POLICY.dragRadians == 0.10 and POLICY.settleSpeed == 10,
+assert(POLICY.dragRadians == 0.20 and POLICY.settleSpeed == 10,
     "RadialDial drifted from its code-owned feel policy")
 
 -- Renders one fixed option face so checks can observe upright orbit geometry.
@@ -304,14 +304,14 @@ local function branchCrossing()
     local log = {}
     local host, dial = mounted(log)
     local x, y, radius = dialGeometry(dial)
-    local first, second = 3.08, -3.08
+    local first, second = 2.95, -3.05
     host:pointerDown(x + math.cos(first) * radius * 0.7,
         y + math.sin(first) * radius * 0.7, "touch", 1)
     host:pointerMove(x + math.cos(second) * radius * 0.7,
         y + math.sin(second) * radius * 0.7, "touch")
     local session = host:inspectionTree().interaction.session
     assert(session.radialPhase == "preview"
-            and session.radialAccumulated > 0.1
+            and session.radialAccumulated > 0.2
             and session.radialAccumulated < 0.3,
         "atan2 branch crossing jumped or reversed the preview")
     host:pointerUp(x + math.cos(second) * radius * 0.7,
@@ -351,20 +351,31 @@ local function terminalPointerSemantics()
     assert(#log == 1 and log[1] == 2,
         "vertical-diameter tap lost the shipped forward half")
 
+    host:pointerDown(x + radius * 0.6, y, "touch", 1)
+    host:pointerMove(x + math.cos(0.15) * radius * 0.6,
+        y + math.sin(0.15) * radius * 0.6, "touch")
+    local jitteredTap = host:inspectionTree().interaction.session
+    assert(jitteredTap.radialPhase == "armed",
+        "incidental touch jitter became a radial drag")
+    host:pointerUp(x + math.cos(0.15) * radius * 0.6,
+        y + math.sin(0.15) * radius * 0.6, "touch", 1)
+    assert(#log == 2 and log[2] == 2,
+        "right-half tap with touch jitter did not advance one value")
+
     host:pointerDown(x - radius * 0.5, y, "touch", 1)
     host:pointerMove(x + math.cos(math.pi - 0.05) * radius * 0.5,
         y + math.sin(math.pi - 0.05) * radius * 0.5, "touch")
     host:pointerUp(x + radius * 0.5, y, "touch", 1)
-    assert(#log == 2 and log[2] == 0.5,
+    assert(#log == 3 and log[3] == 0.5,
         "tap direction did not retain the pointer-down half")
 
     host:pointerDown(x + radius * 0.6, y, "touch", 1)
-    host:pointerMove(x + math.cos(0.2) * radius * 0.6,
-        y + math.sin(0.2) * radius * 0.6, "touch")
+    host:pointerMove(x + math.cos(0.25) * radius * 0.6,
+        y + math.sin(0.25) * radius * 0.6, "touch")
     local samePreview = host:inspectionTree().interaction.session
-    host:pointerUp(x + math.cos(0.2) * radius * 0.6,
-        y + math.sin(0.2) * radius * 0.6, "touch", 1)
-    assert(#log == 3 and log[3] == 1,
+    host:pointerUp(x + math.cos(0.25) * radius * 0.6,
+        y + math.sin(0.25) * radius * 0.6, "touch", 1)
+    assert(#log == 4 and log[4] == 1,
         "same-value drag did not emit exactly one terminal onChange: "
             .. table.concat(log, ",") .. " preview="
             .. tostring(samePreview.radialPreviewIndex) .. " angle="
